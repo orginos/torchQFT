@@ -10,13 +10,8 @@ import numpy as np
 import torch as tr
 import phi4  as p
 
-class phi4_rg(p.phi4):
-    def action(self,phi):
-        dd = phi - self.cF 
-        return super().action(phi) + 0.5*self.kappa*tr.einsum('bxy,bxy->b',dd,dd)
-    
-    def force(self,phi):
-        return super().force(phi)-self.kappa*(phi-self.cF)
+#implements Renormalization Group transformations
+class phi4_rg_trans():
 
     #averages the field inside a 2x2 block
     def block(self,phi):
@@ -31,13 +26,28 @@ class phi4_rg(p.phi4):
         syF = tr.zeros(self.Bs,self.V2[0],self.V[1],dtype=self.dtype).scatter_(2,self.indY,phi2).scatter_(2,self.oindY,phi2)
         sF = tr.zeros(self.Bs,self.V[0],self.V[1],dtype=self.dtype).scatter_(1,self.indX,syF).scatter_(1,self.oindX,syF)
         return  sF
-    
-    
-    def __init__(self,V,l,m,k,cF,batch_size=1,device="cpu",dtype=tr.float32):
-            super().__init__(V,l,m,batch_size,device,dtype)
 
+    #fills a fine lattice from a coarse with gaussian noise inside a block
+    def noisy_refine(self,phi2):
+        gnoise=tr.randn_like(phi2)
+        syF = tr.zeros(self.Bs,self.V2[0],self.V[1],dtype=self.dtype).scatter_(2,self.indY,phi2).scatter_(2,self.oindY,gnoise)
+        # I need new  noise  shape to be used in the next stage
+        # yes I am replacing gausian random numbers with new ones!
+        # noise is just noise...
+        gnoise  = tr.randn_like(syF)      
+        sF = tr.zeros(self.Bs,self.V[0],self.V[1],dtype=self.dtype).scatter_(1,self.indX,syF).scatter_(1,self.oindX,gnoise)
+        return  sF
+    
+    #blocking factor is always 2
+    def __init__(self,V,batch_size=1,device="cpu",dtype=tr.float32):
+        
+            self.Bs = batch_size
+            self.device = device
+            self.dtype = dtype
+            
             #project the local coarse field to the fine lattice
             self.V2 =  (int(V[0]/2), int(V[1]/2))
+            self.V = V
             V2 = self.V2
 
             X=np.arange(0,V[0],2)
@@ -58,12 +68,6 @@ class phi4_rg(p.phi4):
             fooY = np.repeat(fooY[np.newaxis,:,:],self.Bs,axis=0)
             self.oindY = tr.tensor(fooY)
 
-            self.cF = self.refine(cF) 
-            if(cF.shape[0] != self.Bs) or (cF.shape[1] != V2[0]) or (cF.shape[2] != V2[1]):
-                print("The shape of the coarse field does not match")
-                print("Expected ", self.Bs, self.V2)
-                print("Got      ", cF.shape)
-            self.kappa = k
 
 
 def main():
@@ -72,48 +76,31 @@ def main():
     
     device = "cuda" if tr.cuda.is_available() else "cpu"
     print(f"Using {device} device")
-    L=128
+    L=256
     batch_size=1
     lam =0.1
     mass= 0.1
-    kappa=2
+    o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
     o2 = p.phi4([int(L/2),int(L/2)],lam,mass,batch_size=batch_size)
     cF = o2.hotStart()
     
-    o = phi4_rg([L,L],lam,mass,kappa,cF,batch_size=batch_size)
+    rg = phi4_rg_trans([L,L],batch_size=batch_size)
 
     phi=o.hotStart()
     plt.imshow(phi[0,:,:], cmap='hot', interpolation='nearest')
     plt.show()
 
-    phi2 = o.block(phi)
+    phi2 = rg.block(phi)
     plt.imshow(phi2[0,:,:], cmap='hot', interpolation='nearest')
     plt.show()
 
-    rphi = o.refine(phi2)
+    rphi = rg.refine(phi2)
     plt.imshow(rphi[0,:,:], cmap='hot', interpolation='nearest')
     plt.show()
-    
-    tic=time.perf_counter()
-    Niter=10000
-    for k in range(Niter):
-        o.action(phi)
-    toc=time.perf_counter()
-    print(f"action time {(toc - tic)*1.0e6/Niter:0.4f} micro-seconds")
 
-    tic=time.perf_counter()
-    for k in range(Niter):
-        o.force(phi)
-    toc=time.perf_counter()
-    print(f"force time {(toc - tic)*1.0e6/Niter:0.4f} micro-seconds")    
-
-    P = o.refreshP()
-
-    tic=time.perf_counter()
-    for k in range(Niter):
-        o.kinetic(phi)
-    toc=time.perf_counter()
-    print(f"kinetic time {(toc - tic)*1.0e6/Niter:0.4f} micro-seconds")    
+    rphi = rg.noisy_refine(phi2)
+    plt.imshow(rphi[0,:,:], cmap='hot', interpolation='nearest')
+    plt.show()
 
 if __name__ == "__main__":
    main()
