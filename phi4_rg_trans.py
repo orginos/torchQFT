@@ -69,7 +69,52 @@ class phi4_rg_trans():
             self.oindY = tr.tensor(fooY)
 
 
+#implements RG transformations using masks
+class phi4_masked_rg():
+    #blocking factor is always 2
+    def __init__(self,V,batch_size=1,device="cpu",dtype=tr.float32):
+        
+            self.Bs = batch_size
+            self.device = device
+            self.dtype = dtype
+            self.V=V
+            #project the local coarse field to the fine lattice
+            self.V2 =  (int(V[0]/2), int(V[1]/2))
+            self.V = V
+            V2 = self.V2
+            
+            X=np.arange(0,V[0],2)
+            Y=np.arange(0,V[1],2)
+            tt = tr.zeros(self.Bs,V[0],V[1],dtype=tr.bool)
+            ttX = tt.clone()
+            ttY = tt.clone()
+            ttY[:,:,Y] = True
+            ttX[:,X,:] = True
+            self.cmask = tr.logical_and(ttX,ttY)
+            self.fmask = tr.logical_not(self.cmask)
+            self.fine_shape = (self.Bs,V[0],V[1])
+            self.coarse_shape = (self.Bs,V2[0],V2[1])
+            self.coarse_size  = np.prod(self.coarse_shape)
+            self.fine_size    = np.prod(self.fine_shape)
 
+    #picks the even points only
+    def coarsen(self,phi):
+        return tr.reshape(tr.masked_select(phi,self.cmask),self.coarse_shape)
+
+    def fine_zeros(self,phi2):
+        rphi = tr.zeros(self.fine_shape)
+        rphi[self.cmask]=phi2.view(self.coarse_size)
+        return rphi
+
+    #replaces the coarse points in a fine field phi by the coarse field phi2
+    def fine_replace(self,phi2,phi):
+        iphi = phi.clone()
+        iphi[self.cmask]=phi2.view(self.coarse_size)
+        return iphi
+    
+
+
+            
 def main():
     import time
     import matplotlib.pyplot as plt

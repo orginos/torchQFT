@@ -34,6 +34,7 @@ rphi[mask]=phi2.view(Nb*lat2[0]*lat2[1])
 
 iphi = tr.where(mask,rphi,phi)
 
+print("The difference after interpolation is: ", tr.sum(tr.abs(iphi-phi)).item())
 for k in range(Nb):
     fig, axs = plt.subplots(2, 2)
     axs[0, 0].pcolormesh(phi[k,:,:],cmap='hot')
