@@ -29,7 +29,10 @@ class Identity(nn.Module):
     def log_prob(self,x):
         z, logp = self.f(x)
         return self.prior.log_prob(z) + logp 
-        
+
+    def forward(self,z):
+        return self.g(z)
+    
     def sample(self, batchSize): 
         z = self.prior.sample((batchSize, 1))
         x = self.g(z)
@@ -37,13 +40,14 @@ class Identity(nn.Module):
 
     
 class RealNVP(nn.Module):
-    def __init__(self, nets, nett, mask, prior):
+    def __init__(self, nets, nett, mask, prior,data_dims=(1)):
         super(RealNVP, self).__init__()
         self.prior = prior
         self.mask = nn.Parameter(mask, requires_grad=False)
         self.t = tr.nn.ModuleList([nett() for _ in range(len(mask))])
         self.s = tr.nn.ModuleList([nets() for _ in range(len(mask))])
-    
+        self.data_dims=data_dims
+        
     # this is the forward start from noise target
     def g(self, z):
         x = z
@@ -62,8 +66,11 @@ class RealNVP(nn.Module):
             s = self.s[i](z_) * (1-self.mask[i])
             t = self.t[i](z_) * (1-self.mask[i])
             z = (1 - self.mask[i]) * (z - t) * tr.exp(-s) + z_
-            log_det_J -= s.sum(dim=1)
+            log_det_J -= s.sum(dim=self.data_dims)
         return z, log_det_J
+
+    def forward(self,z):
+        return self.g(z)
     
     def log_prob(self,x):
         z, logp = self.f(x)
@@ -75,6 +82,79 @@ class RealNVP(nn.Module):
         x = self.g(z)
         return x
 
+# This is a convolutional Flow Layer which takes in a bijector
+# it applies it to 2x2 block shifts the field and
+# applies the second instance of the bijector to the shifted field
+# then it shifts back (which may not be needed but do it for sanity)
+# it allows to repeat the process arbitrary number of steps
+# the default is 1
+class ConvFlowLayer(nn.Module):
+    def __init__(self,size,bijector,Nsteps=1):
+        super(ConvFlowLayer, self).__init__()
+        self.Nsteps=Nsteps
+        self.bj = tr.nn.ModuleList([bijector() for _ in range(2*Nsteps)])
+        # for now the kernel is kept 2x2 and stride is 2 so it only works on lattices with
+        # a power of 2 dimensions
+        fold_params = dict(kernel_size=(2,2), dilation=1, padding=0, stride=(2,2))
+        self.unfold = nn.Unfold(**fold_params)
+        self.fold = nn.Fold(size,**fold_params)
+        
+    # noise to fields
+    def forward(self,z):
+        uf = self.unfold(z.view(z.shape[0],1,z.shape[1],z.shape[2])).transpose(2,1)
+        for k in range(self.Nsteps):
+            sf = self.unfold(tr.roll(self.fold(self.bj[2*k  ].g(uf).transpose(2,1)),dims=(2,3),shifts=(-1,-1))).transpose(2,1)
+            uf = self.unfold(tr.roll(self.fold(self.bj[2*k+1].g(sf).transpose(2,1)),dims=(2,3),shifts=( 1, 1))).transpose(2,1)
+        x = self.fold(uf.transpose(2,1)).squeeze()
+        return x
+
+    # fields to noise
+    def backward(self,x):
+        log_det_J=x.new_zeros(x.shape[0])
+        #HERE IS WHERE WE HAVE FUN!
+        # add the extra dimension for unfolding
+        z = x.view(x.shape[0],1,x.shape[1],x.shape[2])
+        for k in reversed(range(self.Nsteps)):
+            #shift  and unfold
+            sz = self.unfold(tr.roll(z,dims=(2,3),shifts=(-1,-1))).transpose(2,1)
+            #unfold and flow 
+            ff,J = self.bj[2*k+1].f(sz)
+            log_det_J += J
+            #fold shift unfold
+            sz = self.unfold(tr.roll(self.fold(ff.transpose(2,1)),dims=(2,3),shifts=(1,1))).transpose(2,1)
+            # flow backwards
+            ff,J = self.bj[2*k].f(sz)
+            log_det_J += J 
+            #fold
+            z = self.fold(ff.transpose(2,1))
+            
+        z = z.squeeze()
+        return z,log_det_J
+
+    def log_prob(self,x):
+        z, logp = self.backward(x)
+        return self.prior.log_prob(z) + logp 
+
+    def sample(self, batchSize): 
+        z = self.prior.sample((batchSize, 1))
+        x = self.forward(z)
+        return x
+
+#prepares RealNVP for the Convolutional Flow Layer
+def FlowBijector(Nlayers=3):
+    mm = np.array([1,0,0,1])
+    tV = mm.size
+    nets = lambda: nn.Sequential(nn.Linear(tV, 256), nn.LeakyReLU(), nn.Linear(256, 256), nn.LeakyReLU(), nn.Linear(256, tV), nn.Tanh())
+    nett = lambda: nn.Sequential(nn.Linear(tV, 256), nn.LeakyReLU(), nn.Linear(256, 256), nn.LeakyReLU(), nn.Linear(256, tV))
+
+    # the number of masks determines layers
+    #Nlayers = 3
+    masks = tr.from_numpy(np.array([mm, 1-mm] * Nlayers).astype(np.float32))
+    normal = distributions.Normal(tr.zeros(tV),tr.ones(tV))
+    prior= distributions.Independent(normal, 1)
+    return  RealNVP(nets, nett, masks, prior, data_dims=(1,2))
+
+
 # this is an invertible RG transformation
 # it preseves the residual fine degrees of freedom
 class RGlayer(nn.Module):
@@ -83,7 +163,7 @@ class RGlayer(nn.Module):
         if(transformation_type=="select"):
             mask_c = [[1.0,0.0],[0.0,0.0]]
             mask_r = [[1.0,0.0],[0.0,0.0]]
-        if(transformation_type=="average"):
+        elif(transformation_type=="average"):
             mask_c = [[0.25,0.25],[0.25,0.25]]
             mask_r = [[1.00,1.00],[1.00,1.00]]
         else:
@@ -245,9 +325,49 @@ def test_RGlayer():
     print(phi[0,:,:])
     print(phi2[0,:,:])
     print(rphi[0,:,:])
-    rev_check = (tr.abs(rphi-phi)/V).mean()
+    rev_check = (tr.abs(rphi-phi)).mean()
+    print("Should be zero if reversible: ",rev_check.detach().numpy())
+
+def test_ConvFlowLayer():
+    import time
+    import matplotlib.pyplot as plt
+    
+    device = "cuda" if tr.cuda.is_available() else "cpu"
+    print(f"Using {device} device")
+    
+    L=32
+    V=L*L
+    batch_size=4
+    lam =0.5
+    mass= -0.2
+    o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
+
+    phi = o.hotStart()
+
+    #print(FlowBijector())
+    #print("OK")
+    cf = ConvFlowLayer([L,L],FlowBijector)
+    #print("OK2")
+    
+    fphi = cf(phi)
+    rphi,J = cf.backward(fphi)
+
+    print("The Jacobian is: ", J.detach().numpy())
+
+    rev_check = (tr.abs(rphi-phi)).mean()
     print("Should be zero if reversible: ",rev_check.detach().numpy())
     
+    #print(fphi.shape)
+
+    plt.pcolormesh(phi[0,:,:],cmap='hot')
+    plt.show()
+    
+    plt.pcolormesh(fphi.detach()[0,:,:],cmap='hot')
+    plt.show()
+
+
+    plt.pcolormesh(rphi.detach()[0,:,:],cmap='hot')
+    plt.show()
     
 def main():
     import argparse
@@ -266,7 +386,9 @@ def main():
     if(args.t=="rg"):
         print("Testing RG Layer")
         test_RGlayer()
-        
+    if(args.t=="cflow"):
+        print("Testing Convolutional Flow Layer")
+        test_ConvFlowLayer()
     else:
         print("Nothing to test")
 
