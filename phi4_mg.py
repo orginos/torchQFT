@@ -98,6 +98,9 @@ class ConvFlowLayer(nn.Module):
         fold_params = dict(kernel_size=(2,2), dilation=1, padding=0, stride=(2,2))
         self.unfold = nn.Unfold(**fold_params)
         self.fold = nn.Fold(size,**fold_params)
+        # this could be an arbitrary class with a sample method
+        # self.prior=prior
+        # I see no need for sampling from a prior for this layer
         
     # noise to fields
     def forward(self,z):
@@ -133,12 +136,14 @@ class ConvFlowLayer(nn.Module):
 
     def log_prob(self,x):
         z, logp = self.backward(x)
-        return self.prior.log_prob(z) + logp 
+        #return self.prior.log_prob(z) + logp
+        return logp # we do not have a prior distribution for this layer 
 
-    def sample(self, batchSize): 
-        z = self.prior.sample((batchSize, 1))
-        x = self.forward(z)
-        return x
+# no need for sampling for this layer
+#    def sample(self, batchSize): 
+#        z = self.prior.sample((batchSize, 1))
+#        x = self.forward(z)
+#        return x
 
 #prepares RealNVP for the Convolutional Flow Layer
 def FlowBijector(Nlayers=3):
@@ -353,7 +358,9 @@ def test_ConvFlowLayer():
     rphi,J = cf.backward(fphi)
 
     print("The Jacobian is: ", J.detach().numpy())
-
+    ttJ = cf.log_prob(fphi)
+    print("The Jacobian is: ", ttJ.detach().numpy())
+    
     rev_check = (tr.abs(rphi-phi)).mean()
     print("Should be zero if reversible: ",rev_check.detach().numpy())
     
