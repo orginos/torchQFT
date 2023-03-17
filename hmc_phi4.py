@@ -8,7 +8,13 @@ import update as u
 import matplotlib.pyplot as plt
 
 device = "cuda" if tr.cuda.is_available() else "cpu"
+if(device=="cpu"):
+    device = "mps" if tr.backends.mps.is_available() else "cpu"
+# OK I will always use CPU for now
+device = "cpu"
+device = tr.device(device)
 print(f"Using {device} device")
+
     
 def jackknife(d):
     # d is the list containing data
