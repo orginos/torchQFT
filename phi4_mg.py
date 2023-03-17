@@ -75,24 +75,42 @@ class RealNVP(nn.Module):
         x = self.g(z)
         return x
 
+# this is an invertible RG transformation
+# it preseves the residual fine degrees of freedom
 class RGlayer(nn.Module):
-    def __init__(self):
+    def __init__(self,transformation_type="select"):
         super(RGlayer, self).__init__()
+        if(transformation_type=="select"):
+            mask_c = [[1.0,0.0],[0.0,0.0]]
+            mask_r = [[1.0,0.0],[0.0,0.0]]
+        if(transformation_type=="average"):
+            mask_c = [[0.25,0.25],[0.25,0.25]]
+            mask_r = [[1.00,1.00],[1.00,1.00]]
+        else:
+            print("Uknown RG blocking transformation. Using default.")
+            mask_c = [[1.0,0.0],[0.0,0.0]]
+            mask_r = [[1.0,0.0],[0.0,0.0]]
+                  
+        
         self.restrict = nn.Conv2d(in_channels=1, out_channels=1, kernel_size=(2,2),stride=2,bias=False)
-        self.restrict.weight = tr.nn.Parameter(tr.tensor([[[[1.0,0.0],[0.0,0.0]]]]),requires_grad=False)
+        self.restrict.weight = tr.nn.Parameter(tr.tensor([[mask_c]]),requires_grad=False)
 
         self.prolong = nn.ConvTranspose2d(in_channels=1,out_channels=1,kernel_size=(2,2),stride=2,bias=False)
-        self.prolong.weight = tr.nn.Parameter(tr.tensor([[[[1.0,0.0],[0.0,0.0]]]]),requires_grad=False)
+        self.prolong.weight = tr.nn.Parameter(tr.tensor([[mask_r]]),requires_grad=False)
 
         
     def coarsen(self,f):
         ff = f.view(f.shape[0],1,f.shape[1],f.shape[2])
-        return self.restrict(ff).squeeze()
+        c = self.restrict(ff)
+        r = ff-self.prolong(c)
+        return c.squeeze(),r.squeeze()
     
-    def refine(self,c):
+    def refine(self,c,r):
         cc = c.view(c.shape[0],1,c.shape[1],c.shape[2])
-        return self.prolong(cc).squeeze()
-    
+        rr = r.view(c.shape[0],1,r.shape[1],r.shape[2])
+        return (self.prolong(cc)+rr).squeeze()
+
+
 def test_realNVP():
     import time
     import matplotlib.pyplot as plt
@@ -193,11 +211,13 @@ def test_RGlayer():
     lam =0.5
     mass= -0.2
     o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
-    rg = RGlayer()
 
     phi = o.hotStart()
-    phi2 = rg.coarsen(phi)
-    rphi = rg.refine(phi2)
+
+    print("Testing the select rule")
+    rg = RGlayer()
+    phi2,ff = rg.coarsen(phi)
+    rphi = rg.refine(phi2,ff)
     
     plt.pcolormesh(phi[0,:,:],cmap='hot')
     plt.show()
@@ -208,6 +228,26 @@ def test_RGlayer():
     print(phi[0,:,:])
     print(phi2[0,:,:])
     print(rphi[0,:,:])
+    rev_check = (tr.abs(rphi-phi)/V).mean()
+    print("Should be zero if reversible: ",rev_check.detach().numpy())
+
+    print("\n*****\nTesting the average rule")
+    rg = RGlayer("average")
+    phi2,ff = rg.coarsen(phi)
+    rphi = rg.refine(phi2,ff)
+    
+    plt.pcolormesh(phi[0,:,:],cmap='hot')
+    plt.show()
+    plt.pcolormesh(phi2[0,:,:],cmap='hot')
+    plt.show()
+    plt.pcolormesh(rphi[0,:,:],cmap='hot')
+    plt.show()
+    print(phi[0,:,:])
+    print(phi2[0,:,:])
+    print(rphi[0,:,:])
+    rev_check = (tr.abs(rphi-phi)/V).mean()
+    print("Should be zero if reversible: ",rev_check.detach().numpy())
+    
     
 def main():
     import argparse
