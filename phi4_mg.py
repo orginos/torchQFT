@@ -176,6 +176,8 @@ class RGlayer(nn.Module):
             mask_c = [[1.0,0.0],[0.0,0.0]]
             mask_r = [[1.0,0.0],[0.0,0.0]]
                   
+        # We need this for debuging
+        self.type = transformation_type
         
         self.restrict = nn.Conv2d(in_channels=1, out_channels=1, kernel_size=(2,2),stride=2,bias=False)
         self.restrict.weight = tr.nn.Parameter(tr.tensor([[mask_c]]),requires_grad=False)
@@ -196,10 +198,89 @@ class RGlayer(nn.Module):
         return (self.prolong(cc)+rr).squeeze()
 
 
+#works only with power of 2 sizes
+# and the lattice has to be square...
 class MGflow(nn.Module):
-     def __init__(self,flow,rg,):
-         super(MGflow, self).__init__()
-         self.flow = flow
+    def __init__(self,size,bijector,rg,prior):
+        super(MGflow, self).__init__()
+        self.prior=prior
+        self.rg=rg
+        self.size = size
+        minSize = min(size)
+        print("Initializing MGflow module wiht size: ",minSize)
+        self.depth = int(np.log(minSize)/np.log(2))
+        print("Using depth: ", self.depth)
+        print("Using rg type: ",rg.type)
+        sizes = []
+        for k in range(self.depth):
+            sizes.append([int(size[i]/(2**k)) for i in range(len(size))])
+            print("(depth, size): ", k, sizes[-1])
+            
+            
+        # the module list are ordered from fine to coarse
+        self.cflow=tr.nn.ModuleList([ConvFlowLayer(sizes[k],bijector) for k in range(self.depth)])
+
+    #noise to fields
+    def forward(self,z):
+        x = z
+        
+        # can I use lists and still expect autgrad to work?
+        fines = []
+        #take the noise to the coarsest level
+        for k in range(self.depth-1):
+            c,f =self.rg.coarsen(x)
+            #print(c.shape,f.shape)
+            x=c
+            fines.append(f)
+        #print("Number of fine levels: ", len(fines))
+        # now reverse order to get back to fine
+        # x should now be coarsest possible
+        #print("Size of x: ", x.shape)
+        for k in range(self.depth-1,0,-1):
+            #print(k)
+            fx=self.cflow[k](x)
+            x=self.rg.refine(fx,fines[k-1])
+        fx = self.cflow[0](x)
+        #print("Size of fx at the end:",fx.shape)
+        
+        return fx
+
+    #fields to noise
+    def backward(self,x):
+        log_det_J=x.new_zeros(x.shape[0])
+
+        # can I use lists and still expect autgrad to work?
+        fines = []
+        for k in range(self.depth-1):
+            #print(k,"shape(x)",x.shape)
+            fx,J = self.cflow[k].backward(x)
+            log_det_J += J
+            cx,ff = self.rg.coarsen(fx)
+            fines.append(ff)
+            x=cx
+        #print("end","shape(x)",x.shape)
+        #for k in range(len(fines)):
+            #print(k,"shape of fines",fines[k].shape)
+        fx,J = self.cflow[self.depth-1].backward(x)
+        log_det_J += J
+        #move the noise to the finest level
+        for k in range(self.depth-2,-1,-1):
+            #print(k,"sizes", fx.shape,fines[k].shape)
+            z=self.rg.refine(fx,fines[k])
+            fx=z  
+        
+        return z,log_det_J
+
+    def log_prob(self,x):
+        z, logp = self.backward(x)
+        #print("In log prob z.shape: ", z.shape)
+        return self.prior.log_prob(z.flatten(start_dim=1)) + logp
+
+    def sample(self, batchSize): 
+        z = self.prior.sample((batchSize, 1)).reshape(batchSize,self.size[0],self.size[1])
+        x = self.forward(z)
+        return x
+
 
 def test_realNVPjacobian():
     import time
@@ -486,6 +567,93 @@ def test_ConvFlowLayer():
 
     plt.pcolormesh(rphi.detach()[0,:,:],cmap='hot')
     plt.show()
+
+def test_MGflow():
+    import time
+    import matplotlib.pyplot as plt
+    
+    device = "cuda" if tr.cuda.is_available() else "cpu"
+    print(f"Using {device} device")
+    
+    L=32
+
+    V=L*L
+    batch_size=4
+    lam =0.5
+    mass= -0.2
+    o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
+
+    phi = o.hotStart()
+
+    #set up a prior
+    normal = distributions.Normal(tr.zeros(V),tr.ones(V))
+    prior= distributions.Independent(normal, 1)
+    
+    mg = MGflow([L,L],FlowBijector,RGlayer("average"),prior)
+    #print("The MG module: ",mg)
+    x = mg(phi)
+    #print(x)
+    z,J = mg.backward(x)
+
+    print("Test reversibility (must be zero): ",(z-phi).abs().mean().detach().numpy())
+
+    z = mg.sample(batch_size)
+    print(z.shape,x.shape)
+    J = mg.log_prob(x)
+    print("the logprobs are: ",J.detach().numpy())
+
+
+def test_MGflowJacobian():
+    import time
+    import matplotlib.pyplot as plt
+    
+    device = "cuda" if tr.cuda.is_available() else "cpu"
+    print(f"Using {device} device")
+    
+    L=16
+
+    V=L*L
+    batch_size=4
+    lam =0.5
+    mass= -0.2
+    o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
+
+    phi = o.hotStart()
+
+    #set up a prior
+    normal = distributions.Normal(tr.zeros(V),tr.ones(V))
+    prior= distributions.Independent(normal, 1)
+    
+    mg = MGflow([L,L],FlowBijector,RGlayer("average"),prior)
+    #print("The MG module: ",mg)
+    x = mg(phi)
+    #print(x)
+    z,J = mg.backward(x)
+
+    print("Test reversibility (must be zero): ",(z-phi).abs().mean().detach().numpy())
+
+    print("The Jacobian is: ", J.detach().numpy())
+
+    def jwrap(x):
+        z,_=mg.backward(x)
+        return z
+
+    torchJacM = tr.autograd.functional.jacobian(jwrap,x)
+    print("Autograd jacobian matrix shape:",torchJacM.shape)
+    torchJacM = torchJacM.reshape(batch_size,V,batch_size,V)
+    print("Autograd jacobian matrix reshaped:",torchJacM.shape)
+    log_dets = []
+    diffs = []
+    for k in range(batch_size):
+        foo = torchJacM[k,:,k,:].squeeze()
+        ldet  = np.log(foo.det().numpy())
+        log_dets.append(ldet)
+        diffs.append(np.abs(ldet - J[k].detach().numpy())/V)
+
+    print("log(Jacobians): ",log_dets)
+    print("Differences   : ",diffs)
+    
+
     
 def main():
     import argparse
@@ -513,7 +681,14 @@ def main():
     elif(args.t=="cflowjac"):
         print("Testing Convolutional Flow Jacobian")
         test_ConvFlowLayerJacobian()
-        
+
+    elif(args.t=="mgflow"):
+        print("Testing MGflow")
+        test_MGflow()
+
+    elif(args.t=="mgflowjac"):
+        print("Testing MGflow Jacobian")
+        test_MGflowJacobian()
     else:
         print("Nothing to test")
 
