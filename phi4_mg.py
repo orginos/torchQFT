@@ -400,6 +400,50 @@ def test_RGlayer():
     rev_check = (tr.abs(rphi-phi)).mean()
     print("Should be zero if reversible: ",rev_check.detach().numpy())
 
+def test_ConvFlowLayerJacobian():
+    import time
+    import matplotlib.pyplot as plt
+    
+    device = "cuda" if tr.cuda.is_available() else "cpu"
+    print(f"Using {device} device")
+    
+    L=8
+    V=L*L
+    batch_size=4
+    lam =0.5
+    mass= -0.2
+    o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
+
+    phi = o.hotStart()
+
+    #print(FlowBijector())
+    #print("OK")
+    cf = ConvFlowLayer([L,L],FlowBijector)
+    fphi = cf(phi)
+    rphi,J = cf.backward(fphi)
+
+    print("The Jacobian is: ", J.detach().numpy())
+    def jwrap(x):
+        z,_=cf.backward(x)
+        return z
+
+    x=fphi
+    print("Shape of x: ",x.shape)
+    torchJacM = tr.autograd.functional.jacobian(jwrap,x)
+    print("Autograd jacobian matrix shape:",torchJacM.shape)
+    torchJacM = torchJacM.reshape(batch_size,V,batch_size,V)
+    print("Autograd jacobian matrix reshaped:",torchJacM.shape)
+    log_dets = []
+    diffs = []
+    for k in range(batch_size):
+        foo = torchJacM[k,:,k,:].squeeze()
+        ldet  = np.log(foo.det().numpy())
+        log_dets.append(ldet)
+        diffs.append(np.abs(ldet - J[k].detach().numpy())/V)
+
+    print("log(Jacobians): ",log_dets)
+    print("Differences   : ",diffs)
+    
 def test_ConvFlowLayer():
     import time
     import matplotlib.pyplot as plt
@@ -466,6 +510,10 @@ def main():
     elif(args.t=="realNVPjac"):
         print("Testing RealNVP Jacobian")
         test_realNVPjacobian()
+    elif(args.t=="cflowjac"):
+        print("Testing Convolutional Flow Jacobian")
+        test_ConvFlowLayerJacobian()
+        
     else:
         print("Nothing to test")
 
