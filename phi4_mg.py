@@ -196,6 +196,73 @@ class RGlayer(nn.Module):
         return (self.prolong(cc)+rr).squeeze()
 
 
+class MGflow(nn.Module):
+     def __init__(self,flow,rg,):
+         super(MGflow, self).__init__()
+         self.flow = flow
+
+def test_realNVPjacobian():
+    import time
+    import matplotlib.pyplot as plt
+    
+
+    device = "cuda" if tr.cuda.is_available() else "cpu"
+    print(f"Using {device} device")
+    
+    L=8
+    V=L*L
+    batch_size=4
+    lam =0.5
+    mass= -0.2
+    X = np.array(np.arange(L))[:,np.newaxis]
+    Y = np.array(np.arange(L))[np.newaxis,:]
+    X = np.repeat(X,L,axis=1)
+    Y = np.repeat(Y,L,axis=0)
+    mm = (X+Y)%2 # even odd mask
+    mm = mm.reshape(V)
+    nets = lambda: nn.Sequential(nn.Linear(V, 256), nn.LeakyReLU(), nn.Linear(256, 256), nn.LeakyReLU(), nn.Linear(256, V), nn.Tanh())
+    nett = lambda: nn.Sequential(nn.Linear(V, 256), nn.LeakyReLU(), nn.Linear(256, 256), nn.LeakyReLU(), nn.Linear(256, V))
+    # the number of masks determines layers
+    Nlayers = 3
+    masks = tr.from_numpy(np.array([mm, 1-mm] * Nlayers).astype(np.float32))
+    normal = distributions.Normal(tr.zeros(V),tr.ones(V))
+    prior= distributions.Independent(normal, 1)
+    flow = RealNVP(nets, nett, masks, prior)
+
+    z = prior.sample((batch_size, 1)).squeeze()
+    x = flow.g(z)
+    #print(x)
+    zz,J = flow.f(x)
+    print("Diff: ",(zz-z).abs().mean())
+    print("RealNVP jacobian: ",J.detach().numpy())
+    def jwrap(x):
+        z,j=flow.f(x)
+        return z
+    
+    print("Shape of x: ",x.shape)
+    torchJacM = tr.autograd.functional.jacobian(jwrap,x)
+    print("Autograd jacobian matrix shape:",torchJacM.shape)
+    log_dets = []
+    diffs = []
+    for k in range(batch_size):
+        foo = torchJacM[k,:,k,:].squeeze()
+        ldet  = np.log(foo.det().numpy())
+        log_dets.append(ldet)
+        diffs.append(np.abs(ldet - J[k].detach().numpy())/V)
+
+    print("log(Jacobians): ",log_dets)
+    print("Differences   : ",diffs)
+                     
+                     
+
+    
+    #print("log(Jacobian) :", )
+    #foo = torchJacM[1,:,1,:].squeeze()
+    #print("Jacobian matrix: ", foo)
+    #print("log(Jacobian) :", np.log(foo.det().numpy()))
+    
+    
+    
 def test_realNVP():
     import time
     import matplotlib.pyplot as plt
@@ -387,15 +454,18 @@ def main():
     if(args.t=='realNVP'):
         print("Testing realNVP")
         test_realNVP()
-    if(args.t=='id'):
+    elif(args.t=='id'):
         print("Testing Identity")
         test_Identity()
-    if(args.t=="rg"):
+    elif(args.t=="rg"):
         print("Testing RG Layer")
         test_RGlayer()
-    if(args.t=="cflow"):
+    elif(args.t=="cflow"):
         print("Testing Convolutional Flow Layer")
         test_ConvFlowLayer()
+    elif(args.t=="realNVPjac"):
+        print("Testing RealNVP Jacobian")
+        test_realNVPjacobian()
     else:
         print("Nothing to test")
 
