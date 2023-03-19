@@ -668,7 +668,7 @@ def test_MGflow_train(load_flag=False,file="mg-model.dict"):
     L=16
 
     V=L*L
-    batch_size=64
+    batch_size=16
     lam =0.5
     mass= -0.2
     o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
