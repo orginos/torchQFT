@@ -277,10 +277,14 @@ class MGflow(nn.Module):
         return self.prior.log_prob(z.flatten(start_dim=1)) + logp
 
     def sample(self, batchSize): 
-        z = self.prior.sample((batchSize, 1)).reshape(batchSize,self.size[0],self.size[1])
+        #z = self.prior.sample((batchSize, 1)).reshape(batchSize,self.size[0],self.size[1])
+        z = self.prior_sample(batchSize)
         x = self.forward(z)
         return x
 
+    # generate a sample from the prior
+    def prior_sample(self,batch_size):
+        return self.prior.sample((batch_size,1)).reshape(batch_size,self.size[0],self.size[1])
 
 def test_realNVPjacobian():
     import time
@@ -654,6 +658,77 @@ def test_MGflowJacobian():
     print("Differences   : ",diffs)
     
 
+def test_MGflow_train(load_flag=False,file="mg-model.dict"):
+    import time
+    import matplotlib.pyplot as plt
+    
+    device = "cuda" if tr.cuda.is_available() else "cpu"
+    print(f"Using {device} device")
+    
+    L=16
+
+    V=L*L
+    batch_size=64
+    lam =0.5
+    mass= -0.2
+    o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
+
+    phi = o.hotStart()
+
+    #set up a prior
+    normal = distributions.Normal(tr.zeros(V),tr.ones(V))
+    prior= distributions.Independent(normal, 1)
+    
+    mg = MGflow([L,L],FlowBijector,RGlayer("average"),prior)
+    #print("The flow Model: ", mg)
+
+    if(load_flag):
+        mg.load_state_dict(tr.load(file))
+        mg.eval()
+        
+    c=0
+    for tt in mg.parameters():
+        #print(tt.shape)
+        c+=tt.numel()
+
+    print("parameter count: ",c)
+    
+    optimizer = tr.optim.Adam([p for p in mg.parameters() if p.requires_grad==True], lr=1e-4)
+
+    loss_history = []
+    for t in range(1001):   
+        #with torch.no_grad():
+        #z = prior.sample((batch_size,1)).squeeze().reshape(batch_size,L,L)
+        z = mg.prior_sample(batch_size)
+        #print(z.shape)
+        x = mg(z) # generate a sample
+        loss = (mg.log_prob(x)+o.action(x)).mean() # KL divergence (or not?)
+        optimizer.zero_grad()
+        loss.backward(retain_graph=True)
+        optimizer.step()
+        loss_history.append(loss.detach().numpy())
+        #print(loss_history[-1])
+        if t % 50 == 0:
+            #print(z.shape)
+            print('iter %s:' % t, 'loss = %.3f' % loss)
+
+    x=mg.sample(10*batch_size)
+    diff = o.action(x)+mg.log_prob(x)
+    print("max  action diff: ", tr.max(diff.abs()).detach().numpy())
+    print("mean action diff: ", diff.mean().detach().numpy())
+    print("std  action diff: ", diff.std().detach().numpy())
+    plt.plot(np.arange(len(loss_history)),loss_history)
+    plt.xlabel("epoch")
+    plt.ylabel("KL-divergence")
+    title = "L="+str(L)+"-batch="+str(batch_size)
+    plt.title("Training history of MG model "+title)
+    #plt.show()
+    title = "L"+str(L)+"-batch"+str(batch_size)
+    plt.savefig("mg_train_"+title+".pdf")
+    #save the model
+    if(not load_flag):
+        file = "phi4_"+str(L)+"_m"+str(mass)+"_l"+str(lam)+".dict"
+    tr.save(mg.state_dict(), file)
     
 def main():
     import argparse
@@ -661,6 +736,7 @@ def main():
     
     parser = argparse.ArgumentParser()
     parser.add_argument('-t', default='realNVP')
+    parser.add_argument('-l', default='no-load')
     
     args = parser.parse_args()
     if(args.t=='realNVP'):
@@ -689,6 +765,14 @@ def main():
     elif(args.t=="mgflowjac"):
         print("Testing MGflow Jacobian")
         test_MGflowJacobian()
+
+    elif(args.t=="mgflowTrain"):
+        print("Testing MGflow training")
+        if(not args.l=="no-load"):
+            test_MGflow_train(True,args.l)
+        else:
+            test_MGflow_train()
+        
     else:
         print("Nothing to test")
 
