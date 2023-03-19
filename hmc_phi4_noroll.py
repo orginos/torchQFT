@@ -2,7 +2,7 @@
 import time
 import numpy as np
 import torch as tr
-import phi4 as s
+import phi4_noroll as s
 import integrators as i
 import update as u
 
@@ -50,8 +50,7 @@ sg = s.phi4(lat,lam,mas,device=device)
 phi = sg.hotStart()
 mn2 = i.minnorm2(sg.force,sg.evolveQ,7,1.0)
  
-print(phi.shape,Vol,tr.mean(phi),tr.std(phi))
-
+print(phi.shape,Vol,tr.mean(phi).to('cpu').numpy(),tr.std(phi).to('cpu').numpy())
 
 hmc = u.hmc(T=sg,I=mn2,verbose=False)
 
@@ -60,17 +59,22 @@ phi = hmc.evolve(phi,Nwarm)
 toc=time.perf_counter()
 print(f"time {(toc - tic)*1.0e6/Nwarm:0.4f} micro-seconds per HMC trajecrory")
 
+
 lC2p = []
 lchi_m = []
 E = []
 av_phi = []
 phase=tr.tensor(np.exp(1j*np.indices(tuple(lat))[0]*2*np.pi/lat[0]))
+#phase_r = tr.real(phase).to(device)
+#phase_i = tr.imag(phase).to(device)
+#,device=device)
+#hmc = u.hmc(T=sg,I=mn2,verbose=False)
 for k in range(Nmeas):
     E.append(sg.action(phi).item()/Vol)
     av_sigma = tr.mean(phi.view(sg.Bs,Vol),axis=1)
     av_phi.append(av_sigma.item())
     chi_m = av_sigma*av_sigma*Vol
-    p1_av_sig = tr.mean(phi.view(sg.Bs,Vol)*phase.view(1,Vol),axis=1)
+    p1_av_sig = tr.mean(phi.view(sg.Bs,Vol).to('cpu')*phase.view(1,Vol),axis=1)
     C2p = tr.real(tr.conj(p1_av_sig)*p1_av_sig)*Vol 
     print("k= ",k,"(av_phi,chi_m, c2p, E) ", av_sigma.tolist(),chi_m.tolist(),C2p.tolist(),E[-1].tolist())
     lC2p.append(C2p.item())
