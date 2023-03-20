@@ -146,11 +146,11 @@ class ConvFlowLayer(nn.Module):
 #        return x
 
 #prepares RealNVP for the Convolutional Flow Layer
-def FlowBijector(Nlayers=3):
+def FlowBijector(Nlayers=3,width=256):
     mm = np.array([1,0,0,1])
     tV = mm.size
-    nets = lambda: nn.Sequential(nn.Linear(tV, 256), nn.LeakyReLU(), nn.Linear(256, 256), nn.LeakyReLU(), nn.Linear(256, tV), nn.Tanh())
-    nett = lambda: nn.Sequential(nn.Linear(tV, 256), nn.LeakyReLU(), nn.Linear(256, 256), nn.LeakyReLU(), nn.Linear(256, tV))
+    nets = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV), nn.Tanh())
+    nett = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV))
 
     # the number of masks determines layers
     #Nlayers = 3
@@ -158,7 +158,6 @@ def FlowBijector(Nlayers=3):
     normal = distributions.Normal(tr.zeros(tV),tr.ones(tV))
     prior= distributions.Independent(normal, 1)
     return  RealNVP(nets, nett, masks, prior, data_dims=(1,2))
-
 
 # this is an invertible RG transformation
 # it preseves the residual fine degrees of freedom
@@ -678,8 +677,10 @@ def test_MGflow_train(load_flag=False,file="mg-model.dict"):
     #set up a prior
     normal = distributions.Normal(tr.zeros(V),tr.ones(V))
     prior= distributions.Independent(normal, 1)
+
+    Bijector = lambda: FlowBijector(Nlayers=1,width=128)
     
-    mg = MGflow([L,L],FlowBijector,RGlayer("average"),prior)
+    mg = MGflow([L,L],Bijector,RGlayer("average"),prior)
     #print("The flow Model: ", mg)
 
     if(load_flag):
