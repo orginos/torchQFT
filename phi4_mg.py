@@ -667,7 +667,8 @@ def test_MGflow_train(load_flag=False,file="mg-model.dict"):
     L=16
 
     V=L*L
-    batch_size=16
+    batch_size=8
+    super_batch_size = 8
     lam =0.5
     mass= -0.2
     o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
@@ -701,9 +702,14 @@ def test_MGflow_train(load_flag=False,file="mg-model.dict"):
         #with torch.no_grad():
         #z = prior.sample((batch_size,1)).squeeze().reshape(batch_size,L,L)
         z = mg.prior_sample(batch_size)
-        #print(z.shape)
         x = mg(z) # generate a sample
-        loss = (mg.log_prob(x)+o.action(x)).mean() # KL divergence (or not?)
+        tloss = (mg.log_prob(x)+o.action(x))
+        for b in range(1,super_batch_size):
+            z = mg.prior_sample(batch_size)
+            x = mg(z) # generate a sample
+            tloss += (mg.log_prob(x)+o.action(x)) # KL divergence (or not?)
+        loss =tloss.mean()/super_batch_size
+
         optimizer.zero_grad()
         loss.backward(retain_graph=True)
         optimizer.step()
