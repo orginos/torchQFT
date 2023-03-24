@@ -44,7 +44,7 @@ normal = distributions.Normal(tr.zeros(V),tr.ones(V))
 prior= distributions.Independent(normal, 1)
 
 width=256
-Nlayers=3
+Nlayers=1
 bij = lambda: m.FlowBijector(Nlayers=Nlayers,width=width)
 mg = m.MGflow([L,L],bij,m.RGlayer("average"),prior)
 #print("The flow Model: ", mg)
@@ -72,12 +72,12 @@ for t in range(101):
     
     z = mg.prior_sample(batch_size)
     x = mg(z) # generate a sample
-    tloss = (mg.log_prob(x)+o.action(x)) # KL divergence (or not?)
+    tloss = (mg.log_prob(x)+o.action(x)).mean() # KL divergence (or not?)
     for b in range(1,super_batch_size):
         z = mg.prior_sample(batch_size)
         x = mg(z) # generate a sample
-        tloss += (mg.log_prob(x)+o.action(x)) # KL divergence (or not?)
-    loss =tloss.mean()/super_batch_size
+        tloss += (mg.log_prob(x)+o.action(x)).mean() # KL divergence (or not?)
+    loss =tloss/super_batch_size
         
     optimizer.zero_grad()
     loss.backward(retain_graph=True)
@@ -88,7 +88,7 @@ for t in range(101):
         #print(z.shape)
         print('iter %s:' % t, 'loss = %.3f' % loss)
 
-x=mg.sample(32)
+x=mg.sample(1024)
 diff = (o.action(x)+mg.log_prob(x)).detach()
 m_diff = diff.mean()
 diff -= m_diff
