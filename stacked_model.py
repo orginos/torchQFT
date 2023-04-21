@@ -60,6 +60,38 @@ class SuperModel(nn.Module):
 
     def diff(self,x):
         return self.log_prob(x)+self.target(x)
+
+
+class triviality():
+    def __init__(self,mm,batch_size=1,device="cpu",dtype=tr.float32): 
+        self.model = mm
+        self.Bs=batch_size
+        self.device=device
+        self.dtype=dtype
+
+    
+    def action(self,z):
+        x=self.model.forward(z)
+        _,J = self.model.backward(x)
+        return self.model.target(x) + J
+        #return self.model.log_prob(x) + self.model.target(x)
+
+    #approximate the force by just a quadratic potential
+    #if trivialization is exact for phi^2 this is exact
+    def force(self,z):
+        return -z
+
+    def refreshP(self):
+        P = tr.normal(0.0,1.0,[self.Bs,self.model.size[0],self.model.size[1]],dtype=self.dtype,device=self.device)
+        return P
+
+    def evolveQ(self,dt,P,Q):
+        return Q + dt*P
+    
+    def kinetic(self,P):
+        return tr.sum(P*P,dim=(1,2))/2.0
+
+    
     
 def trainSM( SuperM, levels=[], epochs=100,batch_size=16,super_batch_size=1,learning_rate=1.0e-4):
     tic = time.perf_counter()
@@ -184,6 +216,75 @@ def test_reversibility():
     print("Should be zero: ",dd/(x.shape[0]*x.shape[1]*x.shape[2]))
     print(f"Time {(toc - tic):0.4f} seconds")
 
+def test_hmc(file,depth=1):
+    import time
+    
+    device = "cuda" if tr.cuda.is_available() else "cpu"
+    print(f"Using {device} device")
+    
+    L=16
+    batch_size=32
+    V=L*L
+    lam =1.0
+    mass= -0.2
+    o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
+    phi = o.hotStart()
+    #set up a prior
+    normal = distributions.Normal(tr.zeros(V,device=device),tr.ones(V,device=device))
+    prior= distributions.Independent(normal, 1)
+
+    width=16
+    Nlayers=1
+    bij = lambda: m.FlowBijector(Nlayers=Nlayers,width=width)
+    mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior)
+    models = []
+    print("Initializing ",depth," stages")
+    for d in range(depth):
+        models.append(mg())
+        
+    sm = SuperModel(models,target =o.action )
+
+    c=0
+    for tt in sm.parameters():
+        #print(tt.shape)
+        if tt.requires_grad==True :
+            c+=tt.numel()
+
+
+    tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_st_"+str(depth)
+    sm.load_state_dict(tr.load(file))
+    sm.eval()
+
+    validate(batch_size,tag,sm)
+    triv = triviality(sm,batch_size=batch_size)
+    z = sm.prior_sample(batch_size)
+    #m_action = triv.action(z)
+    #p_action = - sm.prior.log_prob(z.flatten(start_dim=1))
+    #diff = m_action - p_action
+    #print(m_action)
+    #print(diff - diff.mean())
+
+    
+    mn2 = i.minnorm2(triv.force,triv.evolveQ,6,1.0)
+    
+    hmc = u.hmc(T=triv,I=mn2,verbose=False)
+    Nwarm=10
+    Nskip=2
+    Nmeas=1000
+    tic=time.perf_counter()
+    z = hmc.evolve(z,Nwarm)
+    toc=time.perf_counter()
+    print(f"time {(toc - tic)/Nwarm:0.4f} seconds per HMC trajecrory")
+    print("Acceptance rate: ",hmc.calc_Acceptance())
+
+    for k in range(Nmeas):
+        av_z = tr.mean(z,dim=(1,2))
+        print(k," av_z",av_z.mean().detach().numpy(), " std_z: ",av_z.std().detach().numpy()," full std: ",z.std().detach().numpy())
+        tic=time.perf_counter()
+        z = hmc.evolve(z,Nskip)
+        toc=time.perf_counter()
+        print(f"time {(toc - tic)/Nwarm:0.4f} seconds per HMC trajecrory","| Acceptance rate: ",hmc.calc_Acceptance())
+    
 def test_train(depth=1,epochs=100,load_flag=False,file="model.dict"):
     import time
     
@@ -191,7 +292,7 @@ def test_train(depth=1,epochs=100,load_flag=False,file="model.dict"):
     print(f"Using {device} device")
 
     L=16
-    batch_size=32
+    batch_size=128
     V=L*L
     lam =1.0
     mass= -0.2
@@ -255,6 +356,8 @@ def main():
             test_train(args.d,args.e,True,args.l)
         else:
             test_train(args.d,args.e)
+    elif(args.t=="hmc"):
+        test_hmc(args.l,args.d)
     else:
         print("Nothing to test")
 
