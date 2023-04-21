@@ -27,6 +27,8 @@ parser.add_argument('-L', type=int,default=16)
 parser.add_argument('-m', type=float,default=-0.5)
 parser.add_argument('-g', type=float,default=1.0)
 parser.add_argument('-b', type=int,default=4)
+parser.add_argument('-nb',type=int,default=4) # number different batch sizes to use
+parser.add_argument('-lr',type=float,default=1e-4)
 
 args = parser.parse_args()
 
@@ -81,11 +83,12 @@ if(load_flag):
     sm.eval()
 
     
-for b in [4,8,16,32]:
-    loss_hist=trainSM(sm,levels=[], epochs=epochs,batch_size=b,super_batch_size=1)
-    tt = tag+"_b"+str(b)
-    plot_loss(loss_hist,tt)
-    validate(1024,tt,sm)
+for b in batch_size*(2**np.arange(args.nb)):
+     print("Running with batch_size = ",b, " and learning rate= ",args.lr)
+     loss_hist=trainSM(sm,levels=[], epochs=epochs,batch_size=b,super_batch_size=1,learning_rate=args.lr)
+     tt = tag+"_b"+str(b)
+     plot_loss(loss_hist,tt)
+     validate(1024,tt,sm)
 
 if(not load_flag):
     file = "sm_phi4_"+str(L)+"_m"+str(mass)+"_l"+str(lam)+"_st_"+str(depth)+".dict"
