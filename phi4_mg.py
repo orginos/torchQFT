@@ -159,6 +159,22 @@ def FlowBijector(Nlayers=3,width=256):
     prior= distributions.Independent(normal, 1)
     return  RealNVP(nets, nett, masks, prior, data_dims=(1,2))
 
+
+#utility class that allows to fix bijectors between layers
+class BijectorFactory():
+     def __init__(self, bj1,bj2):
+          self.counter=-1
+          self.bj1 = bj1
+          self.bj2 = bj2
+     def bij(self):
+          self.counter+=1 
+          if (self.counter % 2 == 0):
+               print("Adding Bijector 1")
+               return self.bj1
+          else:
+               print("Adding Bijector 2")
+               return self.bj2
+
 # this is an invertible RG transformation
 # it preseves the residual fine degrees of freedom
 class RGlayer(nn.Module):

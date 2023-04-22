@@ -20,15 +20,17 @@ from stacked_model import *
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-f', default='no-load')
-parser.add_argument('-d', type=int,default=1)
-parser.add_argument('-e', type=int,default=1000)
-parser.add_argument('-L', type=int,default=16)
-parser.add_argument('-m', type=float,default=-0.5)
-parser.add_argument('-g', type=float,default=1.0)
-parser.add_argument('-b', type=int,default=4)
-parser.add_argument('-nb',type=int,default=4) # number different batch sizes to use
-parser.add_argument('-lr',type=float,default=1e-4)
+parser.add_argument('-f' , default='no-load')
+parser.add_argument('-d' , type=int  , default=1   )
+parser.add_argument('-e' , type=int  , default=1000)
+parser.add_argument('-L' , type=int  , default=16  )
+parser.add_argument('-m' , type=float, default=-0.5)
+parser.add_argument('-g' , type=float, default=1.0 )
+parser.add_argument('-b' , type=int  , default=4   )
+parser.add_argument('-nb', type=int  , default=4   ) # number batch sizes to use
+parser.add_argument('-lr', type=float, default=1e-4)
+parser.add_argument('-w' , type=int  , default=16  )
+parser.add_argument('-nl', type=int  , default=1   )
 
 args = parser.parse_args()
 
@@ -58,8 +60,8 @@ phi = o.hotStart()
 normal = distributions.Normal(tr.zeros(V,device=device),tr.ones(V,device=device))
 prior= distributions.Independent(normal, 1)
 
-width=16
-Nlayers=1
+width=args.w
+Nlayers=args.nl
 bij = lambda: m.FlowBijector(Nlayers=Nlayers,width=width)
 mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior)
 models = []
@@ -77,7 +79,7 @@ for tt in sm.parameters():
         c+=tt.numel()
 print("parameter count: ",c)
 
-tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_st_"+str(depth)
+tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_w_"+str(width)+"_l_"+str(Nlayers)+"_st_"+str(depth)
 if(load_flag):
     sm.load_state_dict(tr.load(file))
     sm.eval()
@@ -91,6 +93,6 @@ for b in batch_size*(2**np.arange(args.nb)):
      validate(1024,tt,sm)
 
 if(not load_flag):
-    file = "sm_phi4_"+str(L)+"_m"+str(mass)+"_l"+str(lam)+"_st_"+str(depth)+".dict"
+    file = "sm_phi4_"+tag+".dict"
 tr.save(sm.state_dict(), file)
    

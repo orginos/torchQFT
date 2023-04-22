@@ -20,15 +20,14 @@ from stacked_model import *
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-f' , default='no-load')
-parser.add_argument('-d' , type=int  , default=1   )
-parser.add_argument('-L' , type=int  , default=16  )
-parser.add_argument('-m' , type=float, default=-0.5)
-parser.add_argument('-g' , type=float, default=1.0 )
-parser.add_argument('-b' , type=int  , default=128 )
-parser.add_argument('-w' , type=int  , default=16  )
-parser.add_argument('-nl', type=int  , default=1   )
-
+parser.add_argument('-f' ,             default='no-load')
+parser.add_argument('-d' , type=int,   default=1    )
+parser.add_argument('-L' , type=int,   default=16   )
+parser.add_argument('-m' , type=float, default=-0.5 )
+parser.add_argument('-g' , type=float, default=1.0  )
+parser.add_argument('-b' , type=int,   default=128  )
+parser.add_argument('-w' , type=int,   default=16   )
+parser.add_argument('-nl', type=int,   default=2    )
 
 args = parser.parse_args()
 
@@ -59,8 +58,12 @@ prior= distributions.Independent(normal, 1)
 
 width=args.w
 Nlayers=args.nl
-bij = lambda: m.FlowBijector(Nlayers=Nlayers,width=width)
-mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior)
+fixed_Bijector1 = m.FlowBijector(Nlayers=Nlayers,width=width)
+fixed_Bijector2 = m.FlowBijector(Nlayers=Nlayers,width=width)
+
+bij = m.BijectorFactory(fixed_Bijector1,fixed_Bijector2)
+
+mg = lambda : m.MGflow([L,L],bij.bij,m.RGlayer("average"),prior)
 models = []
 
 print("Initializing ",depth," stages")

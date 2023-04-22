@@ -20,15 +20,17 @@ from stacked_model import *
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-f', default='no-load')
-parser.add_argument('-d', type=int,default=1)
-parser.add_argument('-e', type=int,default=1000)
-parser.add_argument('-L', type=int,default=16)
-parser.add_argument('-m', type=float,default=-0.5)
-parser.add_argument('-g', type=float,default=1.0)
-parser.add_argument('-b', type=int,default=4)
-parser.add_argument('-nb',type=int,default=4) # number different batch sizes to use
-parser.add_argument('-lr',type=float,default=1e-4)
+parser.add_argument('-f' ,             default='no-load')
+parser.add_argument('-d' , type=int,   default=1    )
+parser.add_argument('-e' , type=int,   default=1000 )
+parser.add_argument('-L' , type=int,   default=16   )
+parser.add_argument('-m' , type=float, default=-0.5 )
+parser.add_argument('-g' , type=float, default=1.0  )
+parser.add_argument('-b' , type=int,   default=4    )
+parser.add_argument('-nb', type=int,   default=4    ) # number different batch sizes to use
+parser.add_argument('-lr', type=float, default=1e-4 )
+parser.add_argument('-w' , type=int,   default=16   )
+parser.add_argument('-nl', type=int,   default=2    )
 
 args = parser.parse_args()
 
@@ -58,27 +60,12 @@ phi = o.hotStart()
 normal = distributions.Normal(tr.zeros(V,device=device),tr.ones(V,device=device))
 prior= distributions.Independent(normal, 1)
 
-width=16
-Nlayers=2
+width=args.w
+Nlayers=args.nl
 fixed_Bijector1 = m.FlowBijector(Nlayers=Nlayers,width=width)
 fixed_Bijector2 = m.FlowBijector(Nlayers=Nlayers,width=width)
 
-class BijectorFactory():
-     def __init__(self, bj1,bj2):
-          self.counter=-1
-          self.bj1 = bj1
-          self.bj2 = bj2
-     def bij(self):
-          self.counter+=1 
-          if (self.counter % 2 == 0):
-               print("Adding Bijector 1")
-               return self.bj1
-          else:
-               print("Adding Bijector 2")
-               return self.bj2
-
-bij = BijectorFactory(fixed_Bijector1,fixed_Bijector2)
-     
+bij = m.BijectorFactory(fixed_Bijector1,fixed_Bijector2)
 
 mg = lambda : m.MGflow([L,L],bij.bij,m.RGlayer("average"),prior)
 models = []
@@ -96,7 +83,7 @@ for tt in sm.parameters():
         c+=tt.numel()
 print("parameter count: ",c)
 
-tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_st_"+str(depth)+"_fbj"
+tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_w_"+str(width)+"_l_"+str(Nlayers)+"_st_"+str(depth)+"_fbj"
 if(load_flag):
     sm.load_state_dict(tr.load(file))
     sm.eval()
