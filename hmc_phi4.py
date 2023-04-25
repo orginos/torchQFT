@@ -38,14 +38,17 @@ def correlation_length(L,ChiM,C2p):
      return 1/(2*np.sin(np.pi/L))*np.sqrt(ChiM/C2p -1)
     
 lat = [256,256]
-lam = 1.0
+lam = 0.5
 mas = -0.205
 Nwarm = 1000
 Nmeas = 1000
 Nskip = 10
+batch_size = 4
+
 Vol = np.prod(lat)
 
-sg = s.phi4(lat,lam,mas,device=device)
+
+sg = s.phi4(lat,lam,mas,batch_size=batch_size,device=device)
 
 phi = sg.hotStart()
 mn2 = i.minnorm2(sg.force,sg.evolveQ,7,1.0)
@@ -66,15 +69,15 @@ E = []
 av_phi = []
 phase=tr.tensor(np.exp(1j*np.indices(tuple(lat))[0]*2*np.pi/lat[0]))
 for k in range(Nmeas):
-    E.append(sg.action(phi).item()/Vol)
+    E.extend(sg.action(phi)/Vol)
     av_sigma = tr.mean(phi.view(sg.Bs,Vol),axis=1)
-    av_phi.append(av_sigma.item())
+    av_phi.extend(av_sigma)
     chi_m = av_sigma*av_sigma*Vol
     p1_av_sig = tr.mean(phi.view(sg.Bs,Vol)*phase.view(1,Vol),axis=1)
     C2p = tr.real(tr.conj(p1_av_sig)*p1_av_sig)*Vol 
     print("k= ",k,"(av_phi,chi_m, c2p, E) ", av_sigma.tolist(),chi_m.tolist(),C2p.tolist(),E[-1].tolist())
-    lC2p.append(C2p.item())
-    lchi_m.append(chi_m.item())
+    lC2p.extend(C2p)
+    lchi_m.extend(chi_m)
     phi = hmc.evolve(phi,Nskip)
 
 
