@@ -36,14 +36,17 @@ def average(d):
 
 def correlation_length(L,ChiM,C2p):
      return 1/(2*np.sin(np.pi/L))*np.sqrt(ChiM/C2p -1)
-    
-lat = [256,256]
+
+L=256
+lat = [L,L]
+# This set of params is very very close to critical.
 lam = 0.5
 mas = -0.205
+#
 Nwarm = 1000
 Nmeas = 1000
 Nskip = 10
-batch_size = 4
+batch_size = 32
 
 Vol = np.prod(lat)
 
@@ -69,13 +72,15 @@ E = []
 av_phi = []
 phase=tr.tensor(np.exp(1j*np.indices(tuple(lat))[0]*2*np.pi/lat[0]))
 for k in range(Nmeas):
-    E.extend(sg.action(phi)/Vol)
+    ttE = sg.action(phi)/Vol
+    E.extend(ttE)
     av_sigma = tr.mean(phi.view(sg.Bs,Vol),axis=1)
     av_phi.extend(av_sigma)
     chi_m = av_sigma*av_sigma*Vol
     p1_av_sig = tr.mean(phi.view(sg.Bs,Vol)*phase.view(1,Vol),axis=1)
-    C2p = tr.real(tr.conj(p1_av_sig)*p1_av_sig)*Vol 
-    print("k= ",k,"(av_phi,chi_m, c2p, E) ", av_sigma.tolist(),chi_m.tolist(),C2p.tolist(),E[-1].tolist())
+    C2p = tr.real(tr.conj(p1_av_sig)*p1_av_sig)*Vol
+    if(k%10==0):
+        print("k= ",k,"(av_phi,chi_m, c2p, E) ", av_sigma.mean().numpy(),chi_m.mean().numpy(),C2p.mean().numpy(),ttE.mean().numpy())
     lC2p.extend(C2p)
     lchi_m.extend(chi_m)
     phi = hmc.evolve(phi,Nskip)
