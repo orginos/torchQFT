@@ -2,6 +2,7 @@ import torch as tr
 import O3 as s
 import integrators as i
 import update as u
+import numpy as np
 
 import matplotlib.pyplot as plt
 
@@ -23,7 +24,7 @@ class O3flow():
     def Z(self,t,sigma): # flow generator
         h = tr.zeros_like(sigma)
         for mu in range(2,self.Nd+2):
-              h =h + tr.roll(sigma,shifts=-1,dims=mu)) + tr.roll(sigma,shifts=1,dims=mu))
+              h =h + tr.roll(sigma,shifts=-1,dims=mu) + tr.roll(sigma,shifts=1,dims=mu)
         F =  tr.einsum('bixy,bjxy->bijxy',h,sigma) -  tr.einsum('bixy,bjxy->bijxy',sigma,h)
          
         return -self.C[0]*F
@@ -36,7 +37,7 @@ class O3flow():
         self.device=device
         self.dtype=dtype
         self.Bs=batch_size # batch size
-
+        self.N =3 
 
     def hotStart(self):
         sigma=tr.normal(0.0,1.0,
@@ -46,6 +47,9 @@ class O3flow():
         # I need to cut the corners to get a uniformly random vector
         n=self.dot(sigma,sigma).view(self.Bs,1,self.V[0],self.V[1])
         return sigma/tr.sqrt(n)
+
+    def dot(self,s1,s2):
+        return tr.einsum('bsxy,bsxy->bxy',s1,s2)
     
 # multiplies an O(3) matrix to a vector
 def GxV(R,Q):

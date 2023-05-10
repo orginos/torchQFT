@@ -14,10 +14,10 @@ import torch as tr
 
 # Finds value of y for a given x using step size h 
 # and initial value y0 at x0. 
-def rungeKutta(x0, y0, x, h,dydx): 
+def rungeKutta(x0, y0, x, n,dydx): 
     # Count number of iterations using step size or 
     # step height h 
-    n = (int)((x - x0)/h)  
+    h = (x - x0)/n  
     # Iterate for number of iterations 
     y = y0 
     for i in range(1, n + 1):
@@ -69,6 +69,7 @@ def rungeKuttaCompact(x0, y0, x, Nint,Z,evoY):
     return Y
 
 
+# NOT WORKING IN TORCH
 # General Explicit Runge-Kutta Munthe-Kaas algorithm  implemented
 # with a class that takes in the a, b, c constants defining the method
 # Z is a function Z(x,y) where x is the "time" and y is the dependent variable
@@ -86,16 +87,20 @@ class RungeKutta():
         self.Bern_o_k_fact = [ 1.0/12.0,-1.0/720,1.0/30240.0,-1.0/12909600 ]
         
         self.NexpoTaylor = NexpoTaylor
-        
+
+        #print(b.shape)
         self.s = b.shape[0] # the number of stages of the RK method
         self.q = q # the order of the RK method
         self.a =a
         self.b =b
-        self.c = np.empty_like(b)
+        self.c = tr.empty_like(b)
         # this is the definition of c for RK methods
-        for i in range(len(b)):
-             self.c[i] = np.sum(a[i,:])
-             
+        #for i in range(len(b)):
+        #     self.c[i] = tr.sum(a[i,:])
+        self.c = tr.sum(a,dim=1)
+        #print(a,self.c)
+        
+        
     # Horner scheme for Lie algebra element exponentiation
     # and applied on y
     # ie. exp(u)*y
@@ -128,14 +133,18 @@ class RungeKutta():
         zero = 0.0*self.Z(0.0,y)# just get the zero lie algebra element ...
         xx=x0
         #print(zero)
+        #k = tr.zeros([self.s])
         for l in range(0, Nint):
             v = zero
             for i in range(self.s):
                 u=zero
+                print(i,self.s)
                 for j in range(i):
+                    print(k.shape,h,u.shape)
                     u = u + h *self.a[i,j]*k[j]
                 kk = self.Z(xx+h*self.c[i],self.expo(u,y))
                 k = self.dexpinv(u,kk)
+                print(kk.shape)
                 #print(i,self.dexpinv(u,kk))
                 v = v + h*self.b[i]*k
             y=self.expo(v,y)
@@ -146,11 +155,40 @@ class RungeKutta():
 class lieGroupRK4(RungeKutta):
     def __init__(self,GxG,GxV,Z,NexpoTaylor=10):
         q=4
-        a = np.array([[0. , 0. , 0., 0.],
+        a = tr.tensor([[0. , 0. , 0., 0.],
                       [0.5, 0. , 0., 0.],
                       [0. , 0.5, 0., 0.],
                       [0. , 0. , 1., 0.]])
-        b = np.array([1.0/6,1.0/3,1.0/3,1.0/6])   
+        b = tr.tensor([1.0/6,1.0/3,1.0/3,1.0/6])   
         RungeKutta.__init__(self,a,b,q,GxG,GxV,Z,NexpoTaylor=10)
+
+
+def test_rk():
+    import phi4 as s
+    import numpy as np
+    
+    L=32
+    batch_size=2
+    lam =1.9
+    mass= -0.5
+    o = s.phi4([L,L],lam,mass,batch_size=batch_size)
+
+    phi0 = o.hotStart()
+
+    print("Initial action: ", o.action(phi0).numpy())
+    dydx = lambda x,y: o.force(y)
+    ndydx = lambda x,y: -o.force(y)
+    for n in np.arange(10,101):
+        phi1 = rungeKutta(0, phi0, 1.0, n ,dydx)
+        fa = o.action(phi1).numpy()
+        iphi0 = rungeKutta(0, phi1, 1.0, n ,ndydx)
+        ia = o.action(iphi0).numpy()
+        print("Nsteps = ",n," Final action: ", fa, " Reversed action: ",ia)
+
+ 
+
+if __name__ == "__main__":
+   test_rk()
+    
 
 
