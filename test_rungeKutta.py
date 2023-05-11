@@ -18,7 +18,7 @@ class O3flow():
         # I will explicitelly make the code 2d
         for mu in range(2,self.Nd+2):
             A = A - tr.einsum('bsxy,bsxy->b',sigma,tr.roll(sigma,shifts=-1,dims=mu))
-        return self.C[0]*A
+        return (self.C[0]+self.C[1]*t*t)*A
 
     # Z is the gradient (not the negative gradient) of the flow action
     def Z(self,t,sigma): # flow generator
@@ -27,7 +27,7 @@ class O3flow():
               h =h + tr.roll(sigma,shifts=-1,dims=mu) + tr.roll(sigma,shifts=1,dims=mu)
         F =  tr.einsum('bixy,bjxy->bijxy',h,sigma) -  tr.einsum('bixy,bjxy->bijxy',sigma,h)
          
-        return -self.C[0]*F
+        return -(self.C[0]+self.C[1]*t*t)*F
         
     def __init__(self,C,V,batch_size=1,device="cpu",dtype=tr.float32):
         self.C = C # the coefficients
@@ -62,7 +62,7 @@ def GxG(R,Q):
     
 lat=[16,16]
 
-o = O3flow(tr.tensor([1.0]),lat,2)
+o = O3flow(tr.tensor([-1.0,1.5]),lat,2)
 
 # normalize the spins
 
@@ -76,13 +76,19 @@ rk4 = rk.lieGroupRK4(GxG,GxV,o.Z)
 N0 = 10
 h0 = 1.0/N0
 gf_sigma0 = rk4.integrate(0.0, sigma, 1.0, N0)
-act0=o3f.S(1.0,gf_sigma0)
+act0=o.S(1.0,gf_sigma0)
 print("Final action: ",h0,act0)
 
-N0 = 10000
+N0 = 100
 h0 = 1.0/N0
 gf_sigma0 = rk4.integrate(0.0, sigma, 1.0, N0)
-act0=o3f.S(1.0,gf_sigma0)
+act0=o.S(1.0,gf_sigma0)
+print("Final action: ",h0,act0)
+
+N0 = 1000
+h0 = 1.0/N0
+gf_sigma0 = rk4.integrate(0.0, sigma, 1.0, N0)
+act0=o.S(1.0,gf_sigma0)
 print("Final action: ",h0,act0)
 
 #sg = s.O3(G,1.0)

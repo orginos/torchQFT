@@ -136,17 +136,16 @@ class RungeKutta():
         #k = tr.zeros([self.s])
         for l in range(0, Nint):
             v = zero
+            k=[None]*self.s
             for i in range(self.s):
                 u=zero
-                print(i,self.s)
                 for j in range(i):
-                    print(k.shape,h,u.shape)
+                    #print(k[j].shape,h,u.shape)
                     u = u + h *self.a[i,j]*k[j]
                 kk = self.Z(xx+h*self.c[i],self.expo(u,y))
-                k = self.dexpinv(u,kk)
-                print(kk.shape)
+                k[i] = self.dexpinv(u,kk)
                 #print(i,self.dexpinv(u,kk))
-                v = v + h*self.b[i]*k
+                v = v + h*self.b[i]*k[i]
             y=self.expo(v,y)
             xx += h # advance the time    
         return y
