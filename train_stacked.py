@@ -31,6 +31,7 @@ parser.add_argument('-nb', type=int  , default=4   ) # number batch sizes to use
 parser.add_argument('-lr', type=float, default=1e-4)
 parser.add_argument('-w' , type=int  , default=16  )
 parser.add_argument('-nl', type=int  , default=1   )
+parser.add_argument('-sb', type=int  , default=1   )
 
 args = parser.parse_args()
 
@@ -87,10 +88,11 @@ if(load_flag):
     
 for b in batch_size*(2**np.arange(args.nb)):
      print("Running with batch_size = ",b, " and learning rate= ",args.lr)
-     loss_hist=trainSM(sm,levels=[], epochs=epochs,batch_size=b,super_batch_size=1,learning_rate=args.lr)
-     tt = tag+"_b"+str(b)
+     loss_hist=trainSM(sm,levels=[], epochs=epochs,batch_size=b,super_batch_size=args.sb,learning_rate=args.lr)
+     batch_size = b*args.sb
+     tt = tag+"_b"+str(batch_size)
      plot_loss(loss_hist,tt)
-     validate(1024,tt,sm)
+     validate(b,10*args.sb,tt,sm)
 
 if(not load_flag):
     file = "sm_phi4_"+tag+".dict"

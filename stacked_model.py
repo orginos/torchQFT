@@ -107,24 +107,17 @@ def trainSM( SuperM, levels=[], epochs=100,batch_size=16,super_batch_size=1,lear
     #tic=time.perf_counter()
     pbar = tqdm(range(epochs))
     for t in pbar:   
-        z = SuperM.prior_sample(batch_size)
-        x = SuperM(z) # generate a sample
-        tloss = SuperM.loss(x) #(SuperM.log_prob(x)+o.action(x)).mean() # KL divergence (or not?)
-        for b in range(1,super_batch_size):
+        loss = 0.0
+        optimizer.zero_grad()
+        for b in range(0,super_batch_size):
             z = SuperM.prior_sample(batch_size)
             x = SuperM(z) # generate a sample
-            tloss += SuperM.loss(x)#(sm.log_prob(x)+o.action(x)).mean() # KL divergence (or not?)
-        loss =tloss/super_batch_size    
-        optimizer.zero_grad()
-        loss.backward(retain_graph=True)
+            tloss = SuperM.loss(x)/super_batch_size
+            tloss.backward()
+            loss+=tloss
         optimizer.step()
         loss_history.append(loss.detach().numpy())
         pbar.set_postfix({'loss': loss.detach().numpy()})
-        #print(loss_history[-1])
-        #if t % 10 == 0:
-        #    toc=time.perf_counter()
-        #    print('iter %s:' % t, 'loss = %.3f' % loss,'time = %.3f' % (toc-tic),'seconds')
-        #    tic=time.perf_counter()
     toc = time.perf_counter()
     print(f"Time {(toc - tic):0.4f} seconds")
     return loss_history
@@ -139,10 +132,15 @@ def plot_loss(lh,title):
     plt.savefig("sm_tr_"+title+".pdf")
     plt.close()
 
-def validate(batch_size,title,mm):
+def validate(batch_size,super_batch_size,title,mm):
+
     x=mm.sample(batch_size)
     diff = mm.diff(x).detach()
-    m_diff = diff.mean()
+    for b in range(0,super_batch_size):
+        x=mm.sample(batch_size)
+        diff = tr.cat((diff,mm.diff(x).detach()),0)
+                      
+    m_diff = diff.mean()     
     diff -= m_diff
     print("max  action diff: ", tr.max(diff.abs()).numpy())
     print("min  action diff: ", tr.min(diff.abs()).numpy())
