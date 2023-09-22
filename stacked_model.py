@@ -136,7 +136,7 @@ def validate(batch_size,super_batch_size,title,mm):
 
     x=mm.sample(batch_size)
     diff = mm.diff(x).detach()
-    for b in range(0,super_batch_size):
+    for b in range(1,super_batch_size):
         x=mm.sample(batch_size)
         diff = tr.cat((diff,mm.diff(x).detach()),0)
                       
