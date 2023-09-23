@@ -222,7 +222,7 @@ class MGflow(nn.Module):
         self.rg=rg
         self.size = size
         minSize = min(size)
-        print("Initializing MGflow module wiht size: ",minSize)
+        print("Initializing MGflow module with size: ",minSize)
         self.depth = int(np.log(minSize)/np.log(2))
         print("Using depth: ", self.depth)
         print("Using rg type: ",rg.type)
