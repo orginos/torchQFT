@@ -7,20 +7,11 @@ import phi4_mg as m
 import phi4 as p
 import integrators as i
 import update as u
-
 import time
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-import time
 
-class MyDataParallel(nn.DataParallel):
-    def __getattr__(self, name):
-        try:
-            return super().__getattr__(name)
-        except AttributeError:
-            return getattr(self.module, name)
-        
 class SuperModel(nn.Module):
     def __init__(self,models,target):
         super(SuperModel, self).__init__()
@@ -29,44 +20,47 @@ class SuperModel(nn.Module):
         self.No = len(models)
         self.prior = models[0].prior # keep the first model's prior as the prior
         self.target=target # the is the target negative log(probability) otherwise known as the action
-        
+
+
     #noise to fields
     def forward(self,z):
-        #print("\tIn Model: forward", z.shape)
         x=z
         for k in range(len(self.models)):
             x=self.models[k].forward(x)
         return x
     
+
     #fields to noise
     def backward(self,x):
-        #print("\tIn Model: backward", x.shape)
-
         log_det_J=x.new_zeros(x.shape[0])
         z=x
         for k in range(len(self.models)-1,-1,-1):
             z,J=self.models[k].backward(z)
             log_det_J+=J
-        
         return z,log_det_J
             
+
     def log_prob(self,x):
         z, logp = self.backward(x)
         #print("In log prob z.shape: ", z.shape)
         return self.prior.log_prob(z.flatten(start_dim=1)) + logp     
         
-    def sample(self, batchSize):
+
+    def sample(self, batchSize): 
         #z = self.prior.sample((batchSize, 1)).reshape(batchSize,self.size[0],self.size[1])
         z = self.prior_sample(batchSize)
         x = self.forward(z)
         return x
 
+
     # generate a sample from the prior
     def prior_sample(self,batch_size):
         return self.prior.sample((batch_size,1)).reshape(batch_size,self.size[0],self.size[1])
 
+
     def loss(self,x):
         return (self.log_prob(x)+self.target(x)).mean()
+
 
     def diff(self,x):
         return self.log_prob(x)+self.target(x)
@@ -86,23 +80,26 @@ class triviality():
         return self.model.target(x) + J
         #return self.model.log_prob(x) + self.model.target(x)
 
+
     #approximate the force by just a quadratic potential
     #if trivialization is exact for phi^2 this is exact
     def force(self,z):
         return -z
 
+
     def refreshP(self):
         P = tr.normal(0.0,1.0,[self.Bs,self.model.size[0],self.model.size[1]],dtype=self.dtype,device=self.device)
         return P
 
+
     def evolveQ(self,dt,P,Q):
         return Q + dt*P
     
+
     def kinetic(self,P):
         return tr.sum(P*P,dim=(1,2))/2.0
 
-    
-    
+
 def trainSM( SuperM, levels=[], epochs=100,batch_size=16,super_batch_size=1,learning_rate=1.0e-4):
     tic = time.perf_counter()
     params = []
@@ -116,13 +113,13 @@ def trainSM( SuperM, levels=[], epochs=100,batch_size=16,super_batch_size=1,lear
     loss_history = []
     #tic=time.perf_counter()
     pbar = tqdm(range(epochs))
-    for t in pbar:
+    for t in pbar:   
         loss = 0.0
         optimizer.zero_grad()
         for b in range(0,super_batch_size):
-            z = SuperM.prior_sample(batch_size)
+            z = SuperM.module.prior_sample(batch_size)
             x = SuperM(z) # generate a sample
-            tloss = SuperM.loss(x)/super_batch_size
+            tloss = SuperM.module.loss(x)/super_batch_size
             tloss.backward()
             loss+=tloss
         optimizer.step()
@@ -131,6 +128,7 @@ def trainSM( SuperM, levels=[], epochs=100,batch_size=16,super_batch_size=1,lear
     toc = time.perf_counter()
     print(f"Time {(toc - tic):0.4f} seconds")
     return loss_history
+
 
 def plot_loss(lh,title):
     plt.plot(np.arange(len(lh)),lh)
@@ -141,16 +139,17 @@ def plot_loss(lh,title):
     plt.savefig("sm_tr_"+title+".pdf")
     plt.close()
 
+
 def validate(batch_size,super_batch_size,title,mm):
     x=mm.sample(batch_size)
-    diff = mm.diff(x).detach().cpu()
+    diff = mm.diff(x).detach()
     for b in range(1,super_batch_size):
         x=mm.sample(batch_size)
-        diff = tr.cat((diff,mm.diff(x).detach().cpu()),0)
-
-    #m_diff = diff.mean()
-    m_diff = diff.cpu().mean()
+        diff = tr.cat((diff,mm.diff(x).detach()),0)           
+    m_diff = diff.mean()
+    m_diff=m_diff.cpu()     
     diff -= m_diff
+    diff = diff.cpu()
     print("max  action diff: ", tr.max(diff.abs()).numpy())
     print("min  action diff: ", tr.min(diff.abs()).numpy())
     print("mean action diff: ", m_diff.detach().numpy())
@@ -176,10 +175,10 @@ def validate(batch_size,super_batch_size,title,mm):
     #plt.show()
     plt.close()
 
+
 def test_reversibility():
     device = "cuda" if tr.cuda.is_available() else "cpu"
     print(f"Using {device} device")
-    
     L=16
     batch_size=32
     V=L*L
@@ -188,23 +187,19 @@ def test_reversibility():
     o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
     phi = o.hotStart()
     #set up a prior
-    normal = distributions.Normal(tr.zeros(V).to(device),tr.ones(V).to(device))
+    normal = distributions.Normal(tr.zeros(V,device=device),tr.ones(V,device=device))
     prior= distributions.Independent(normal, 1)
-
     width=16
     Nlayers=1
     bij = lambda: m.FlowBijector(Nlayers=Nlayers,width=width)
     mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior)
     sm = SuperModel([mg(),mg()],target =o.action )
-    sm=sm.to(device)
     c=0
     for tt in sm.parameters():
         #print(tt.shape)
         if tt.requires_grad==True :
             c+=tt.numel()
-      
     print("parameter count: ",c)
-
     tic = time.perf_counter()
     x=sm.sample(128)
     z,J=sm.backward(x)
@@ -213,7 +208,6 @@ def test_reversibility():
     toc=time.perf_counter()
     print("Should be zero: ",dd/(x.shape[0]*x.shape[1]*x.shape[2]))
     print(f"Time {(toc - tic):0.4f} seconds")
-
     tic = time.perf_counter()
     z = sm.prior_sample(128)
     x=sm.forward(z)
@@ -223,11 +217,12 @@ def test_reversibility():
     print("Should be zero: ",dd/(x.shape[0]*x.shape[1]*x.shape[2]))
     print(f"Time {(toc - tic):0.4f} seconds")
 
+
 def test_hmc(file,depth=1):
     import time
-    
-    #device = "cuda" if tr.cuda.is_available() else "cpu"
-    #print(f"Using {device} device")
+
+    device = "cuda" if tr.cuda.is_available() else "cpu"
+    print(f"Using {device} device")
     
     L=16
     batch_size=32
@@ -292,11 +287,12 @@ def test_hmc(file,depth=1):
         toc=time.perf_counter()
         print(f"time {(toc - tic)/Nwarm:0.4f} seconds per HMC trajecrory","| Acceptance rate: ",hmc.calc_Acceptance())
     
+
 def test_train(depth=1,epochs=100,load_flag=False,file="model.dict"):
     import time
     
-    #device = "cuda" if tr.cuda.is_available() else "cpu"
-    #print(f"Using {device} device")
+    device = "cuda" if tr.cuda.is_available() else "cpu"
+    print(f"Using {device} device")
 
     L=16
     batch_size=128
@@ -343,6 +339,7 @@ def test_train(depth=1,epochs=100,load_flag=False,file="model.dict"):
         file = "sm_phi4_"+str(L)+"_m"+str(mass)+"_l"+str(lam)+"_st_"+str(depth)+".dict"
     tr.save(sm.state_dict(), file)
    
+
 def main():
     import argparse
     import sys
@@ -370,4 +367,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
