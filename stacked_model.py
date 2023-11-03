@@ -154,6 +154,9 @@ def validate(batch_size,super_batch_size,title,mm):
     print("mean re-weighting factor: " , w.mean().numpy())
     print("std  re-weighting factor: " , w.std().numpy())
 
+    ESS = (foo.mean())**2/(foo*foo).mean()
+    print("ESS                     : " , ESS.numpy())
+
     logbins = np.logspace(np.log10(1e-3),np.log10(1e3),int(w.shape[0]/10))
     _=plt.hist(w,bins=logbins)
     plt.xscale('log')
