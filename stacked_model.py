@@ -1,3 +1,4 @@
+from importlib.machinery import SourceFileLoader
 import numpy as np
 import torch as tr
 import torch.nn as nn
@@ -10,6 +11,8 @@ import update as u
 import time
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import os
+import torch.distributed as dist
 
 
 class SuperModel(nn.Module):
@@ -100,78 +103,285 @@ class triviality():
         return tr.sum(P*P,dim=(1,2))/2.0
 
 
-def trainSM( SuperM, levels=[], epochs=100,batch_size=16,super_batch_size=1,learning_rate=1.0e-4):
+def trainSM(SuperM, tag, path, txt_training_validation_steps, levels=[], rank=0, epochs=100, batch_size=16, super_batch_size=1, learning_rate=1.0e-4, save_every=100):
+
+    #print("rank", rank)
     tic = time.perf_counter()
     params = []
+
     if levels==[] :
         params = [p for p in SuperM.parameters() if p.requires_grad==True]
     else:
         for l in levels:
             params.extend([p for p in SuperM.models[l].parameters() if p.requires_grad==True])
     print("Number of parameters to train is: ",len(params))
+    
     optimizer = tr.optim.Adam(params, lr=learning_rate)
-    loss_history = []
+    
+    loss_training_history = []
+    std_training_history = []
+    mean_training_history = []
+    ess_training_history = []
+
+    loss_validation_history = []
+    std_validation_history = []
+    mean_validation_history = []
+    ess_validation_history = []
+
     #tic=time.perf_counter()
+    
+    #diff=0
+    
     pbar = tqdm(range(epochs))
-    for t in pbar:   
+
+    for t in pbar:
+        
         loss = 0.0
+        loss_validation=0.0
         optimizer.zero_grad()
+
         for b in range(0,super_batch_size):
+            
             z = SuperM.module.prior_sample(batch_size)
-            x = SuperM(z) # generate a sample
+            x = SuperM(z) 
+            #print("Training_set_size:",x.numel())
+
             tloss = SuperM.module.loss(x)/super_batch_size
             tloss.backward()
             loss+=tloss
+
+            x_validation=SuperM.module.sample(batch_size)
+            #print("Validation_set_size:",x_validation.numel())
+            vloss = SuperM.module.loss(x_validation)/super_batch_size
+            vloss.backward()
+            loss_validation+=vloss
+
+        dist.all_reduce(loss)
+        dist.all_reduce(loss_validation)
+
         optimizer.step()
-        loss_history.append(loss.cpu().detach().numpy())
-        pbar.set_postfix({'loss': loss.cpu().detach().numpy()})
+
+        loss_training_history.append(loss.cpu().detach().numpy())
+        loss_validation_history.append(loss_validation.cpu().detach().numpy())
+
+        diff_training = SuperM.module.diff(x).detach()
+        diff_validation = SuperM.module.diff(x_validation).detach()
+
+        if rank==0:
+
+            PATH = path+"sm_phi4_"+tag+"_checkpoint_"+str(t)+".pt"
+            pbar.set_postfix({'training_loss': loss.cpu().detach().numpy(), ' | validation_loss': loss_validation.cpu().detach().numpy()})
+            #pbar.set_postfix({'loss': loss.cpu().detach().numpy()})
+
+            m_diff_training = diff_training.mean()
+            m_diff_training = m_diff_training.cpu()     
+            diff_training -= m_diff_training
+            diff_training = diff_training.cpu()
+            foo_training = tr.exp(-diff_training)
+            w_training = foo_training/tr.mean(foo_training)
+            ess_training = (foo_training.mean())**2/(foo_training*foo_training).mean()
+            mean_training_minus_std = m_diff_training.detach().numpy()-diff_training.std().numpy()
+            mean_training_plus_std = m_diff_training.detach().numpy()+diff_training.std().numpy()
+            ''' 
+            print("training_max_action_diff: ", tr.max(diff_training.abs()).numpy())
+            print("training_min_action_diff: ", tr.min(diff_training.abs()).numpy())
+            print("training_mean_action_diff: ", m_diff_training.detach().numpy())
+            print("training_std_action_diff: ", diff_training.std().numpy())
+            print("training_mean_re_weighting_factor: ", w_training.mean().numpy())
+            print("training_std_re_weighting_factor: ", w_training.std().numpy())
+            print("training_ess: ", ess_training.numpy(),"\n")
+            '''
+
+            m_diff_validation = diff_validation.mean()
+            m_diff_validation = m_diff_validation.cpu()     
+            diff_validation -= m_diff_validation
+            diff_validation = diff_validation.cpu()
+            foo_validation = tr.exp(-diff_validation)
+            w_validation = foo_validation/tr.mean(foo_validation)
+            ess_validation = (foo_validation.mean())**2/(foo_validation*foo_validation).mean()
+            mean_validation_minus_std=m_diff_validation.detach().numpy()-diff_validation.std().numpy()
+            mean_validation_plus_std=m_diff_validation.detach().numpy()+diff_validation.std().numpy()
+            '''
+            print("validation_max_action_diff: ", tr.max(diff_validation.abs()).numpy())
+            print("validation_min_action_diff: ", tr.min(diff_validation.abs()).numpy())
+            print("validation_mean_action_diff: ", m_diff_validation.detach().numpy())
+            print("validation_std_action_diff: ", diff_validation.std().numpy())
+            print("validation_mean_re_weighting_factor: ", w_validation.mean().numpy())
+            print("validation_std_re_weighting_factor: ", w_validation.std().numpy())
+            print("validation_ess: ", ess_validation.numpy())
+            '''
+            
+            txt_training_validation_steps.write(str(t)+"\t"+str(tr.max(diff_training.abs()).numpy())+"\t"+str(tr.min(diff_training.abs()).numpy())+"\t"+str(m_diff_training.detach().numpy())+"\t"+str(diff_training.std().numpy())+"\t"+str(w_training.mean().numpy())+"\t"+str(w_training.std().numpy())+"\t"+str(mean_training_minus_std)+"\t"+str(mean_training_plus_std)+"\t"+str(loss.cpu().detach().numpy())+"\t"+str(ess_training.numpy())+"\t"+str(tr.max(diff_validation.abs()).numpy())+"\t"+str(tr.min(diff_validation.abs()).numpy())+"\t"+str(m_diff_validation.detach().numpy())+"\t"+str(diff_validation.std().numpy())+"\t"+str(w_validation.mean().numpy())+"\t"+str(w_validation.std().numpy())+"\t"+str(mean_validation_minus_std)+"\t"+str(mean_validation_plus_std)+"\t"+str(loss.cpu().detach().numpy())+"\t"+str(ess_validation.numpy())+"\n")
+            txt_training_validation_steps.flush()
+            os.fsync(txt_training_validation_steps.fileno())
+            
+            mean_training_history.append(m_diff_training.detach().numpy())
+            std_training_history.append(diff_training.std().numpy())
+            ess_training_history.append(ess_training.numpy())
+            
+            mean_validation_history.append(m_diff_validation.detach().numpy())
+            std_validation_history.append(diff_validation.std().numpy())
+            ess_validation_history.append(ess_validation.numpy())
+
+            if t % save_every == 0:
+                tr.save(SuperM.module.state_dict(), PATH)
+
+                #tr.save({'epoch':epochs,'model_state_dict':SuperM.module.state_dict(),'optimizer_state_dict':optimizer.state_dict(),'loss':loss,},PATH)
+
+    if rank==0:
+
+        m_diff_training = diff_training.mean()
+        m_diff_training = m_diff_training.cpu()     
+        diff_training -= m_diff_training
+        diff_training = diff_training.cpu()
+        foo_training = tr.exp(-diff_training)
+        w_training = foo_training/tr.mean(foo_training)
+        ess_training = (foo_training.mean())**2/(foo_training*foo_training).mean()
+        mean_training_minus_std = m_diff_training.detach().numpy()-diff_training.std().numpy()
+        mean_training_plus_std = m_diff_training.detach().numpy()+diff_training.std().numpy()
+        print("training_max_action_diff:", tr.max(diff_training.abs()).numpy())
+        print("training_min_action_diff:", tr.min(diff_training.abs()).numpy())
+        print("training_mean_action_diff:", m_diff_training.detach().numpy())
+        print("training_std_action_diff:", diff_training.std().numpy())
+        print("training_mean_re_weighting_factor:", w_training.mean().numpy())
+        print("training_std_re_weighting_factor:", w_training.std().numpy())
+        print("training_ess:", ess_training.numpy(),"\n")
+
+        m_diff_validation = diff_validation.mean()
+        m_diff_validation = m_diff_validation.cpu()     
+        diff_validation -= m_diff_validation
+        diff_validation = diff_validation.cpu()
+        foo_validation = tr.exp(-diff_validation)
+        w_validation = foo_validation/tr.mean(foo_validation)
+        ess_validation = (foo_validation.mean())**2/(foo_validation*foo_validation).mean()
+        mean_validation_minus_std=m_diff_validation.detach().numpy()-diff_validation.std().numpy()
+        mean_validation_plus_std=m_diff_validation.detach().numpy()+diff_validation.std().numpy()
+        print("validation_max_action_diff:", tr.max(diff_validation.abs()).numpy())
+        print("validation_min_action_diff:", tr.min(diff_validation.abs()).numpy())
+        print("validation_mean_action_diff:", m_diff_validation.detach().numpy())
+        print("validation_std_action_diff:", diff_validation.std().numpy())
+        print("validation_mean_re_weighting_factor:", w_validation.mean().numpy())
+        print("validation_std_re_weighting_factor:", w_validation.std().numpy())
+        print("validation_ess: ", ess_validation.numpy())
+
+        txt_training_validation_steps.write(str(t+1)+"\t"+str(tr.max(diff_training.abs()).numpy())+"\t"+str(tr.min(diff_training.abs()).numpy())+"\t"+str(m_diff_training.detach().numpy())+"\t"+str(diff_training.std().numpy())+"\t"+str(w_training.mean().numpy())+"\t"+str(w_training.std().numpy())+"\t"+str(mean_training_minus_std)+"\t"+str(mean_training_plus_std)+"\t"+str(loss.cpu().detach().numpy())+"\t"+str(ess_training.numpy())+"\t"+str(tr.max(diff_validation.abs()).numpy())+"\t"+str(tr.min(diff_validation.abs()).numpy())+"\t"+str(m_diff_validation.detach().numpy())+"\t"+str(diff_validation.std().numpy())+"\t"+str(w_validation.mean().numpy())+"\t"+str(w_validation.std().numpy())+"\t"+str(mean_validation_minus_std)+"\t"+str(mean_validation_plus_std)+"\t"+str(loss.cpu().detach().numpy())+"\t"+str(ess_validation.numpy())+"\n")
+        txt_training_validation_steps.flush()
+        os.fsync(txt_training_validation_steps.fileno())
+
+        mean_training_history.append(m_diff_training.detach().numpy())
+        std_training_history.append(diff_training.std().numpy())
+        ess_training_history.append(ess_training.numpy())
+        
+        mean_validation_history.append(m_diff_validation.detach().numpy())
+        std_validation_history.append(diff_validation.std().numpy())
+        ess_validation_history.append(ess_validation.numpy())
+
     toc = time.perf_counter()
-    print(f"Time {(toc - tic):0.4f} seconds")
-    return loss_history
+    print(f"Time {(toc - tic):0.4f} seconds","\n")
+
+    return loss_training_history, loss_validation_history, std_training_history, std_validation_history, ess_training_history, ess_validation_history, optimizer, loss, loss_validation
+    #return loss_training_history, std_training_history, mean_training_history, ess_training_history, optimizer, loss
 
 
-def plot_loss(lh,title):
-    plt.plot(np.arange(len(lh)),lh)
+def plot_loss(lh,vh,title, path):
+    plt.plot(np.arange(len(lh)),lh,label='Training')
+    plt.plot(np.arange(len(vh)),vh,label='Validation')
     plt.xlabel("epoch")
     plt.ylabel("KL-divergence")
-    plt.title("Training history of MG super model ")
+    plt.title("Training-Validation KL-diverge history of MG super model")
+    plt.legend(fancybox=True, loc='best', prop={'size': 7}, framealpha=1)
     #plt.show()
-    plt.savefig("sm_tr_"+title+".pdf")
+    plt.savefig(path+"sm_training_validation_KL_"+title+".pdf", dpi=300)
     plt.close()
 
 
-def validate(batch_size,super_batch_size,title,mm):
+def plot_std(stdh,stdvh,title,save_every, path):
+    x_training=np.arange(len(stdh))
+    #x_training=x_training*save_every
+    y_training=stdh
+    y_validation=stdvh
+    plt.plot(x_training,y_training, label='Training')
+    plt.plot(x_training,y_validation, label='Validation')
+    plt.xlabel("epoch")
+    plt.ylabel("std")
+    plt.title("Training-Validation STD history of MG super model")
+    plt.legend(fancybox=True, loc='best', prop={'size': 7}, framealpha=1)
+    plt.savefig(path+"sm_training_validation_STD_"+title+".pdf", dpi=300)
+    plt.close()
+
+    plt.yscale('log')
+    plt.plot(x_training,y_training, label='Training')
+    plt.plot(x_training,y_validation, label='Validation')
+    plt.xlabel("epoch")
+    plt.ylabel("std")
+    plt.title("Training-Validation Log-std history of MG super model")
+    plt.legend(fancybox=True, loc='best', prop={'size': 7}, framealpha=1)
+    plt.savefig(path+"sm_training_validation_LOG_STD_"+title+".pdf", dpi=300)
+    plt.close()
+
+
+def plot_ess(essh,essvh,title,save_every, path):
+    x_training=np.arange(len(essh))
+    #x_training=x_training*save_every
+    y_training=essh
+    y_validation=essvh
+    plt.plot(x_training,y_training, label='Training')
+    plt.plot(x_training,y_validation, label='Validation')
+    plt.xlabel("epoch")
+    plt.ylabel("ess")
+    plt.title("Training-Validation ESS history of MG super model")
+    plt.legend(fancybox=True, loc='best', prop={'size': 7}, framealpha=1)
+    plt.savefig(path+"sm_training_validation_ESS_"+title+".pdf", dpi=300)
+    plt.close()
+
+
+def testing(batch_size,super_batch_size,title,mm,epochs, path):
+    
+    txt_testing_steps = open(path+"sm_phi4_"+title+"_testing_steps.txt", "w")
+    txt_testing_steps.write("Epochs\tMax_Action_Diff\tMin_Action_Diff\tMean_Action_Diff\tStd_Action_Diff\tMean_ReWeighting_Factor\tStd_ReWeighting_Factor\tMean_Minus_Std\tMean_Plus_Std\tLoss_KL_diverge\tLoss_Ess\n")
+    
     x=mm.sample(batch_size)
+    print("Test_set_size:",x.numel())
+     #torch.Size([3,5]).numel() 
     diff = mm.diff(x).detach()
+    
     for b in range(1,super_batch_size):
         x=mm.sample(batch_size)
         diff = tr.cat((diff,mm.diff(x).detach()),0)           
+    
     m_diff = diff.mean()
     m_diff=m_diff.cpu()     
     diff -= m_diff
     diff = diff.cpu()
-    print("max  action diff: ", tr.max(diff.abs()).numpy())
-    print("min  action diff: ", tr.min(diff.abs()).numpy())
-    print("mean action diff: ", m_diff.detach().numpy())
-    print("std  action diff: ", diff.std().numpy())
-    #compute the reweighting factor
     foo = tr.exp(-diff)
-    #print(foo)
     w = foo/tr.mean(foo)
+    ess = (foo.mean())**2/(foo*foo).mean()
+    mean_test_minus_std=m_diff.detach().numpy()-diff.std().numpy()
+    mean_test_plus_std=m_diff.detach().numpy()+diff.std().numpy()
 
-    print("mean re-weighting factor: " , w.mean().numpy())
-    print("std  re-weighting factor: " , w.std().numpy())
+    print("test_max_action_diff:", tr.max(diff.abs()).numpy())
+    print("test_min_action_diff:", tr.min(diff.abs()).numpy())
+    print("test_mean_action_diff:", m_diff.detach().numpy())
+    print("test_std_action_diff:", diff.std().numpy())
+    print("test_mean_re_weighting_factor:", w.mean().numpy())
+    print("test_std_re_weighting_factor:", w.std().numpy())
+    print("test_ess:", ess.numpy())
+
+    txt_testing_steps.write(str(epochs)+"\t"+str(tr.max(diff.abs()).numpy())+"\t"+str(tr.min(diff.abs()).numpy())+"\t"+str(m_diff.detach().numpy())+"\t"+str(diff.std().numpy())+"\t"+str(w.mean().numpy())+"\t"+str(w.std().numpy())+"\t"+str(mean_test_minus_std)+"\t"+str(mean_test_plus_std)+"\t"+str(ess.numpy())+"\n")
+    txt_testing_steps.flush()
+    os.fsync(txt_testing_steps.fileno())
 
     logbins = np.logspace(np.log10(1e-3),np.log10(1e3),int(w.shape[0]/10))
     _=plt.hist(w,bins=logbins)
     plt.xscale('log')
-    plt.title('Reweighting factor')
-    plt.savefig("sm_rw_"+title+".pdf")
+    plt.title('Test set reweighting factor')
+    plt.savefig(path+"sm_testing_RW_"+title+".pdf", dpi=300)
     #plt.show()
     plt.close()
+
     _=plt.hist(diff.detach(),bins=int(w.shape[0]/10))
-    plt.title('ΔS distribution')
-    plt.savefig("sm_ds_"+title+".pdf")
+    plt.title('Test set ΔS distribution')
+    plt.savefig(path+"sm_testing_DS_"+title+".pdf", dpi=300)
     #plt.show()
     plt.close()
 
@@ -252,7 +462,6 @@ def test_hmc(file,depth=1):
         if tt.requires_grad==True :
             c+=tt.numel()
 
-
     tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_st_"+str(depth)
     sm.load_state_dict(tr.load(file))
     sm.eval()
@@ -266,7 +475,6 @@ def test_hmc(file,depth=1):
     #print(m_action)
     #print(diff - diff.mean())
 
-    
     mn2 = i.minnorm2(triv.force,triv.evolveQ,6,1.0)
     
     hmc = u.hmc(T=triv,I=mn2,verbose=False)
@@ -321,7 +529,6 @@ def test_train(depth=1,epochs=100,load_flag=False,file="model.dict"):
         #print(tt.shape)
         if tt.requires_grad==True :
             c+=tt.numel()
-
 
     tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_st_"+str(depth)
     if(load_flag):
