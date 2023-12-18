@@ -15,8 +15,6 @@
 #CUDA_VISIBLE_DEVICES=0 python3 -m torch.distributed.run --nnodes=1 --nproc_per_node=1 --master_port 29400 train_stacked.py
 #CUDA_VISIBLE_DEVICES=1 python3 -m torch.distributed.run --nnodes=1 --nproc_per_node=1 --master_port 29401 train_stacked.py
 
-
-
 #If the GPUs not recognized, run
 #sudo rmmod nvidia_uvm
 #sudo modprobe nvidia_uvm
