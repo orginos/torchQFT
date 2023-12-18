@@ -7,9 +7,15 @@
 #Run specific GPUs and save the results to a txt
 #CUDA_VISIBLE_DEVICES=0,1,2,3 nohup python3 -m torch.distributed.run --nnodes=3 --nproc_per_node=1 train_stacked.py > SaveRun.txt &
 
+#Run multi-gpus different nodes for different scripts
+#CUDA_VISIBLE_DEVICES=1,3 python3 -m torch.distributed.run --nproc_per_node=2 --world_size 2 --master_port 29400 train_stacked.py
+#CUDA_VISIBLE_DEVICES=4,5 python3 -m torch.distributed.run --nproc_per_node=2 --world_size 2 --master_port 29401 train_stacked.py
+
 #Run multi-gpus same node for different scripts
-#CUDA_VISIBLE_DEVICES=1,3 WORLD_SIZE=2 MASTER_PORT=44144 python -m torch.distributed.launch --nproc_per_node=2 train.py
-#CUDA_VISIBLE_DEVICES=4,5 WORLD_SIZE=2 MASTER_PORT=44145 python -m torch.distributed.launch --nproc_per_node=2 train.py
+#CUDA_VISIBLE_DEVICES=0 python3 -m torch.distributed.run --nnodes=1 --nproc_per_node=1 --master_port 29400 train_stacked.py
+#CUDA_VISIBLE_DEVICES=1 python3 -m torch.distributed.run --nnodes=1 --nproc_per_node=1 --master_port 29401 train_stacked.py
+
+
 
 #If the GPUs not recognized, run
 #sudo rmmod nvidia_uvm
