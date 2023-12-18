@@ -4,7 +4,14 @@
 #Run&Load command
 #python3 -m torch.distributed.run --standalone --nproc_per_node=8 train_stacked.py -f sm_phi4_32_m-0.5_l1.9_w_8_l_2_st_1.dict -e 1000
 
-#run
+#Run specific GPUs and save the results to a txt
+#CUDA_VISIBLE_DEVICES=0,1,2,3 nohup python3 -m torch.distributed.run --nnodes=3 --nproc_per_node=1 train_stacked.py > SaveRun.txt &
+
+#Run multi-gpus same node for different scripts
+#CUDA_VISIBLE_DEVICES=1,3 WORLD_SIZE=2 MASTER_PORT=44144 python -m torch.distributed.launch --nproc_per_node=2 train.py
+#CUDA_VISIBLE_DEVICES=4,5 WORLD_SIZE=2 MASTER_PORT=44145 python -m torch.distributed.launch --nproc_per_node=2 train.py
+
+#If the GPUs not recognized, run
 #sudo rmmod nvidia_uvm
 #sudo modprobe nvidia_uvm
 #which helps Ubuntu system after it was suspended.
@@ -122,7 +129,8 @@ for tt in sm.parameters():
 print("parameter count: ",c)
 
 
-tag = "L_"+str(L)+"_m"+str(mass)+"_l"+str(lam)+"_w_"+str(width)+"_l_"+str(number_of_layers)+"_st_"+str(depth)
+#tag = "L_"+str(L)+"_m"+str(mass)+"_l"+str(lam)+"_w_"+str(width)+"_l_"+str(number_of_layers)+"_st_"+str(depth)
+tag = "L"+str(L)+"_m"+str(mass)+"_l"+str(lam)+"_w"+str(width)+"_nl"+str(number_of_layers)+"_st"+str(depth)+"_bs"+str(batch_size)+"_sb"+str(super_batch)+"_e"+str(epochs)+"_se"+str(save_every)+"_lr"+str(learning_rate)
 
 path = 'sm_phi4_'+tag+'/'
 try:  
