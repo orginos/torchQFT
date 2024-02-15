@@ -103,8 +103,8 @@ class triviality():
         return tr.sum(P*P,dim=(1,2))/2.0
 
 
-def trainSM(SuperM, tag, path, txt_training_validation_steps, levels=[], rank=0, epochs=100, batch_size=16, super_batch_size=1, learning_rate=1.0e-4, save_every=100):
-
+def trainSM(SuperM, tag, path, txt_training_validation_steps, levels=[], rank=0, epochs=100, last_epoch=0, batch_size=16, super_batch_size=1, learning_rate=1.0e-4, save_every=100):
+    
     #print("rank", rank)
     tic = time.perf_counter()
     params = []
@@ -169,7 +169,9 @@ def trainSM(SuperM, tag, path, txt_training_validation_steps, levels=[], rank=0,
 
         if rank==0:
 
-            PATH = path+"sm_phi4_"+tag+"_checkpoint_"+str(t)+".pt"
+            #PATH = path+"sm_phi4_"+tag+"_checkpoint_"+str(t)+".pt"
+            PATH = path+"sm_phi4_"+tag+".pt"
+
             pbar.set_postfix({'training_loss': loss.cpu().detach().numpy(), ' | validation_loss': loss_validation.cpu().detach().numpy()})
             #pbar.set_postfix({'loss': loss.cpu().detach().numpy()})
 
@@ -211,7 +213,7 @@ def trainSM(SuperM, tag, path, txt_training_validation_steps, levels=[], rank=0,
             print("validation_ess: ", ess_validation.numpy())
             '''
             
-            txt_training_validation_steps.write(str(t)+"\t"+str(tr.max(diff_training.abs()).numpy())+"\t"+str(tr.min(diff_training.abs()).numpy())+"\t"+str(m_diff_training.detach().numpy())+"\t"+str(diff_training.std().numpy())+"\t"+str(w_training.mean().numpy())+"\t"+str(w_training.std().numpy())+"\t"+str(mean_training_minus_std)+"\t"+str(mean_training_plus_std)+"\t"+str(loss.cpu().detach().numpy())+"\t"+str(ess_training.numpy())+"\t"+str(tr.max(diff_validation.abs()).numpy())+"\t"+str(tr.min(diff_validation.abs()).numpy())+"\t"+str(m_diff_validation.detach().numpy())+"\t"+str(diff_validation.std().numpy())+"\t"+str(w_validation.mean().numpy())+"\t"+str(w_validation.std().numpy())+"\t"+str(mean_validation_minus_std)+"\t"+str(mean_validation_plus_std)+"\t"+str(loss.cpu().detach().numpy())+"\t"+str(ess_validation.numpy())+"\n")
+            txt_training_validation_steps.write(str(t+last_epoch)+"\t"+str(tr.max(diff_training.abs()).numpy())+"\t"+str(tr.min(diff_training.abs()).numpy())+"\t"+str(m_diff_training.detach().numpy())+"\t"+str(diff_training.std().numpy())+"\t"+str(w_training.mean().numpy())+"\t"+str(w_training.std().numpy())+"\t"+str(mean_training_minus_std)+"\t"+str(mean_training_plus_std)+"\t"+str(loss.cpu().detach().numpy())+"\t"+str(ess_training.numpy())+"\t"+str(tr.max(diff_validation.abs()).numpy())+"\t"+str(tr.min(diff_validation.abs()).numpy())+"\t"+str(m_diff_validation.detach().numpy())+"\t"+str(diff_validation.std().numpy())+"\t"+str(w_validation.mean().numpy())+"\t"+str(w_validation.std().numpy())+"\t"+str(mean_validation_minus_std)+"\t"+str(mean_validation_plus_std)+"\t"+str(loss.cpu().detach().numpy())+"\t"+str(ess_validation.numpy())+"\n")
             txt_training_validation_steps.flush()
             os.fsync(txt_training_validation_steps.fileno())
             
@@ -223,12 +225,12 @@ def trainSM(SuperM, tag, path, txt_training_validation_steps, levels=[], rank=0,
             std_validation_history.append(diff_validation.std().numpy())
             ess_validation_history.append(ess_validation.numpy())
 
-            if t % save_every == 0:
-                tr.save(SuperM.module.state_dict(), PATH)
 
                 #tr.save({'epoch':epochs,'model_state_dict':SuperM.module.state_dict(),'optimizer_state_dict':optimizer.state_dict(),'loss':loss,},PATH)
 
     if rank==0:
+        
+        tr.save(SuperM.module.state_dict(), PATH)
 
         m_diff_training = diff_training.mean()
         m_diff_training = m_diff_training.cpu()     
@@ -264,7 +266,7 @@ def trainSM(SuperM, tag, path, txt_training_validation_steps, levels=[], rank=0,
         print("validation_std_re_weighting_factor:", w_validation.std().numpy())
         print("validation_ess: ", ess_validation.numpy())
 
-        txt_training_validation_steps.write(str(t+1)+"\t"+str(tr.max(diff_training.abs()).numpy())+"\t"+str(tr.min(diff_training.abs()).numpy())+"\t"+str(m_diff_training.detach().numpy())+"\t"+str(diff_training.std().numpy())+"\t"+str(w_training.mean().numpy())+"\t"+str(w_training.std().numpy())+"\t"+str(mean_training_minus_std)+"\t"+str(mean_training_plus_std)+"\t"+str(loss.cpu().detach().numpy())+"\t"+str(ess_training.numpy())+"\t"+str(tr.max(diff_validation.abs()).numpy())+"\t"+str(tr.min(diff_validation.abs()).numpy())+"\t"+str(m_diff_validation.detach().numpy())+"\t"+str(diff_validation.std().numpy())+"\t"+str(w_validation.mean().numpy())+"\t"+str(w_validation.std().numpy())+"\t"+str(mean_validation_minus_std)+"\t"+str(mean_validation_plus_std)+"\t"+str(loss.cpu().detach().numpy())+"\t"+str(ess_validation.numpy())+"\n")
+        #txt_training_validation_steps.write(str(t+1)+"\t"+str(tr.max(diff_training.abs()).numpy())+"\t"+str(tr.min(diff_training.abs()).numpy())+"\t"+str(m_diff_training.detach().numpy())+"\t"+str(diff_training.std().numpy())+"\t"+str(w_training.mean().numpy())+"\t"+str(w_training.std().numpy())+"\t"+str(mean_training_minus_std)+"\t"+str(mean_training_plus_std)+"\t"+str(loss.cpu().detach().numpy())+"\t"+str(ess_training.numpy())+"\t"+str(tr.max(diff_validation.abs()).numpy())+"\t"+str(tr.min(diff_validation.abs()).numpy())+"\t"+str(m_diff_validation.detach().numpy())+"\t"+str(diff_validation.std().numpy())+"\t"+str(w_validation.mean().numpy())+"\t"+str(w_validation.std().numpy())+"\t"+str(mean_validation_minus_std)+"\t"+str(mean_validation_plus_std)+"\t"+str(loss.cpu().detach().numpy())+"\t"+str(ess_validation.numpy())+"\n")
         txt_training_validation_steps.flush()
         os.fsync(txt_training_validation_steps.fileno())
 
