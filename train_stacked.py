@@ -46,7 +46,7 @@ parser.add_argument('-w' , type=int  , default=8   )
 parser.add_argument('-nl', type=int  , default=2   )
 parser.add_argument('-sb', type=int  , default=16  )
 parser.add_argument('-se', type=int  , default=100 )
-parser.add_argument('-le', type=int  , default=0 )
+#parser.add_argument('-le', type=int  , default=0 )
 
 args = parser.parse_args()
 
@@ -87,7 +87,8 @@ width=args.w
 number_of_layers=args.nl
 super_batch=args.sb
 save_every=args.se
-last_epoch=args.le
+#last_epoch=args.le
+
 
 V=L*L
 o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
@@ -135,9 +136,20 @@ except OSError as error:
     print(error)   
 
 
+last_epoch=0
+
 if(load_flag):
-    sm.module.load_state_dict(tr.load(file))
+    checkpoint = tr.load(file)
+    sm.module.load_state_dict(checkpoint['model_state_dict'])
+    optimizer_state=checkpoint['optimizer_state_dict']
+    #optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    last_epoch = checkpoint['epoch']
+    loss = checkpoint['loss']
+    #sm.module.load_state_dict(tr.load(file))
     sm.eval()
+else:
+    optimizer_state=None
+
 
 #documentTraining.write(str(device_id)+"\t"+str(epochs)+"\t"+str(saveEvery)+"\t"+str(lattice)+"\t"+str(lam)+"\t"+str(mass)+"\t"+str(depth)+"\t"+str(width)+"\t"+str(nLayers)+"\t"+str(batchSize)+"\t"+str(learningRate)+"\t"+str(c))
 #txt_training = open("MG_flow_training_per_Epoch.txt", "w")
@@ -151,14 +163,14 @@ else:
     txt_training_validation_steps = open(path+"/sm_phi4_"+tag+"_training_validation_steps.txt", "a")
     txt_training_validation_steps.write("Epoch\tTraining_Max_Action_Diff\tTraining_Min_Action_Diff\tTraining_Mean_Action_Diff\tTraining_Std_Action_Diff\tTraining_Mean_Re_Weighting_Factor\tTraining_Std_Re_Weighting_Factor\tTraining_Mean_Minus_Std\tTraining_Mean_Plus_Std\tTraining_Loss_KL_diverge\tTraining_Loss_Ess\tValidation_Max_Action_Diff\tValidation_Min_Action_Diff\tValidation_Mean_Action_Diff\tValidation_Std_Action_Diff\tValidation_Mean_Re_Weighting_Factor\tValidation_Std_Re_Weighting_Factor\tValidation_Mean_Minus_Std\tValidation_Mean_Plus_Std\tValidation_Loss_KL_diverge\tValidation_Loss_Ess\n")
 
-
 for b in batch_size*(2**np.arange(number_of_batches)):
     
      print("Running with batch_size = ", b, " and learning rate= ", learning_rate)
      #loss_hist, std_hist, mean_hist, ess_hist, optimizer, loss = trainSM(sm, tag, txt_training_steps, levels=[], epochs=epochs, batch_size=b, super_batch_size= super_batch, learning_rate=learning_rate, save_every=save_every)
-     loss_training_history, loss_validation_history, std_training_history, std_validation_history, ess_training_history, ess_validation_history,  optimizer, training_loss, validation_loss = trainSM(sm, tag, path, txt_training_validation_steps, levels=[], rank=rank, epochs=epochs, last_epoch=last_epoch,batch_size=b, super_batch_size= super_batch, learning_rate=learning_rate, save_every=save_every)
+     loss_training_history, loss_validation_history, std_training_history, std_validation_history, ess_training_history, ess_validation_history,  optimizer, training_loss, validation_loss = trainSM(sm, tag, path, txt_training_validation_steps, levels=[], rank=rank, epochs=epochs, last_epoch=last_epoch,batch_size=b, super_batch_size= super_batch, learning_rate=learning_rate, save_every=save_every, optimizer_state=optimizer_state)
      batch_size = (b*super_batch)
-    
+
+     last_epoch+=epochs
 
      #if (rank==0):
         #tt = tag+"_b"+str(batch_size)
@@ -175,14 +187,7 @@ if(not load_flag):
 
 
 if rank==0:
-    tr.save(sm.module.state_dict(), file)
-    ''' 
-    tr.save({
-        'epoch':epochs,
-        'model_state_dict':sm.module.state_dict(),
-        'optimizer_state_dict':optimizer.state_dict(),
-        'loss':training_loss,
-        },file)
-    '''
+    #tr.save(sm.module.state_dict(), file)
+    tr.save({'epoch':last_epoch, 'model_state_dict':sm.module.state_dict(), 'optimizer_state_dict':optimizer.state_dict(),'loss':training_loss},file)
 
 dist.destroy_process_group()
