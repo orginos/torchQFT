@@ -127,7 +127,7 @@ print("parameter count: ",c)
 
 
 #tag = "L"+str(L)+"_m"+str(mass)+"_l"+str(lam)+"_w"+str(width)+"_nl"+str(number_of_layers)+"_st"+str(depth)+"_bs"+str(batch_size)+"_sb"+str(super_batch)+"_e"+str(epochs)+"_se"+str(save_every)+"_lr"+str(learning_rate)
-tag = "L"+str(L)+"_m"+str(mass)+"_l"+str(lam)+"_w"+str(width)+"_nl"+str(number_of_layers)
+tag = "L"+str(L)+"_d"+str(depth)+"_m"+str(mass)+"_l"+str(lam)+"_w"+str(width)+"_nl"+str(number_of_layers)
 
 path = 'sm_phi4_'+tag+'/'
 try:  
