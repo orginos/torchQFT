@@ -116,7 +116,8 @@ for d in range(depth):
 
 
 sm = SuperModel(models,target=o.action).to(device_id)
-sm = DDP(sm, device_ids=[device_id])
+if cmd == 'train':
+    sm = DDP(sm, device_ids=[device_id])
 
 
 c=0
@@ -201,9 +202,9 @@ else:
     prior= distributions.Independent(normal, 1)
 
     tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_st_"+str(depth)
-    validate(batch_size,tag,sm)
-    triv = triviality(sm,batch_size=batch_size)
-    z = sm.prior_sample(batch_size)
+    validate(batch_size,tag,sm.module)
+    triv = triviality(sm.module,batch_size=batch_size)
+    z = sm.module.prior_sample(batch_size)
     mn2 = i.minnorm2(triv.force,triv.evolveQ,6,1.0)
     
     hmc = u.hmc(T=triv,I=mn2,verbose=False)
