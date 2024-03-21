@@ -33,6 +33,7 @@ import os.path
 
 
 parser = argparse.ArgumentParser()
+parser.add_argument('-t' , default='train')
 parser.add_argument('-f' , default='no-load')
 parser.add_argument('-d' , type=int  , default=1   )
 parser.add_argument('-e' , type=int  , default=1000)
@@ -88,6 +89,7 @@ number_of_layers=args.nl
 super_batch=args.sb
 save_every=args.se
 last_epoch=args.le
+cmd=args.t
 
 V=L*L
 o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
@@ -151,38 +153,69 @@ else:
     txt_training_validation_steps = open(path+"/sm_phi4_"+tag+"_training_validation_steps.txt", "a")
     txt_training_validation_steps.write("Epoch\tTraining_Max_Action_Diff\tTraining_Min_Action_Diff\tTraining_Mean_Action_Diff\tTraining_Std_Action_Diff\tTraining_Mean_Re_Weighting_Factor\tTraining_Std_Re_Weighting_Factor\tTraining_Mean_Minus_Std\tTraining_Mean_Plus_Std\tTraining_Loss_KL_diverge\tTraining_Loss_Ess\tValidation_Max_Action_Diff\tValidation_Min_Action_Diff\tValidation_Mean_Action_Diff\tValidation_Std_Action_Diff\tValidation_Mean_Re_Weighting_Factor\tValidation_Std_Re_Weighting_Factor\tValidation_Mean_Minus_Std\tValidation_Mean_Plus_Std\tValidation_Loss_KL_diverge\tValidation_Loss_Ess\n")
 
+if cmd == "train":
+     for b in batch_size*(2**np.arange(number_of_batches)):
+         
+          print("Running with batch_size = ", b, " and learning rate= ", learning_rate)
+          #loss_hist, std_hist, mean_hist, ess_hist, optimizer, loss = trainSM(sm, tag, txt_training_steps, levels=[], epochs=epochs, batch_size=b, super_batch_size= super_batch, learning_rate=learning_rate, save_every=save_every)
+          loss_training_history, loss_validation_history, std_training_history, std_validation_history, ess_training_history, ess_validation_history,  optimizer, training_loss, validation_loss = trainSM(sm, tag, path, txt_training_validation_steps, levels=[], rank=rank, epochs=epochs, last_epoch=last_epoch,batch_size=b, super_batch_size= super_batch, learning_rate=learning_rate, save_every=save_every)
+          batch_size = (b*super_batch)
+         
+     
+          #if (rank==0):
+             #tt = tag+"_b"+str(batch_size)
+            #tt = tag
+            #plot_loss(loss_training_history, loss_validation_history, tt, path)
+            #plot_std(std_training_history, std_validation_history,tt,save_every, path)
+            #plot_ess(ess_training_history,ess_validation_history,tt,save_every, path)
+            # testing(b,b*super_batch,tt,sm.module,epochs, path)
+     
+     
+     if(not load_flag):
+         #file = "sm_phi4_"+tag+".dict"
+         file = path+"sm_phi4_"+tag+".pt"
+     
+     
+     if rank==0:
+         tr.save(sm.module.state_dict(), file)
+         ''' 
+         tr.save({
+             'epoch':epochs,
+             'model_state_dict':sm.module.state_dict(),
+             'optimizer_state_dict':optimizer.state_dict(),
+             'loss':training_loss,
+             },file)
+         '''
+else:
+    o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
+    phi = o.hotStart()
 
-for b in batch_size*(2**np.arange(number_of_batches)):
+    #set up a prior
+    normal = distributions.Normal(tr.zeros(V,device=device),tr.ones(V,device=device))
+    prior= distributions.Independent(normal, 1)
+
+    tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_st_"+str(depth)
+    validate(batch_size,tag,sm)
+    triv = triviality(sm,batch_size=batch_size)
+    z = sm.prior_sample(batch_size)
+    mn2 = i.minnorm2(triv.force,triv.evolveQ,6,1.0)
     
-     print("Running with batch_size = ", b, " and learning rate= ", learning_rate)
-     #loss_hist, std_hist, mean_hist, ess_hist, optimizer, loss = trainSM(sm, tag, txt_training_steps, levels=[], epochs=epochs, batch_size=b, super_batch_size= super_batch, learning_rate=learning_rate, save_every=save_every)
-     loss_training_history, loss_validation_history, std_training_history, std_validation_history, ess_training_history, ess_validation_history,  optimizer, training_loss, validation_loss = trainSM(sm, tag, path, txt_training_validation_steps, levels=[], rank=rank, epochs=epochs, last_epoch=last_epoch,batch_size=b, super_batch_size= super_batch, learning_rate=learning_rate, save_every=save_every)
-     batch_size = (b*super_batch)
-    
+    hmc = u.hmc(T=triv,I=mn2,verbose=False)
+    Nwarm=10
+    Nskip=2
+    Nmeas=1000
+    tic=time.perf_counter()
+    z = hmc.evolve(z,Nwarm)
+    toc=time.perf_counter()
+    print(f"time {(toc - tic)/Nwarm:0.4f} seconds per HMC trajecrory")
+    print("Acceptance rate: ",hmc.calc_Acceptance())
 
-     #if (rank==0):
-        #tt = tag+"_b"+str(batch_size)
-       #tt = tag
-       #plot_loss(loss_training_history, loss_validation_history, tt, path)
-       #plot_std(std_training_history, std_validation_history,tt,save_every, path)
-       #plot_ess(ess_training_history,ess_validation_history,tt,save_every, path)
-       # testing(b,b*super_batch,tt,sm.module,epochs, path)
-
-
-if(not load_flag):
-    #file = "sm_phi4_"+tag+".dict"
-    file = path+"sm_phi4_"+tag+".pt"
-
-
-if rank==0:
-    tr.save(sm.module.state_dict(), file)
-    ''' 
-    tr.save({
-        'epoch':epochs,
-        'model_state_dict':sm.module.state_dict(),
-        'optimizer_state_dict':optimizer.state_dict(),
-        'loss':training_loss,
-        },file)
-    '''
-
+    for k in range(Nmeas):
+        av_z = tr.mean(z,dim=(1,2))
+        print(k," av_z",av_z.mean().detach().numpy(), " std_z: ",av_z.std().detach().numpy()," full std: ",z.std().detach().numpy())
+        tic=time.perf_counter()
+        z = hmc.evolve(z,Nskip)
+        toc=time.perf_counter()
+        print(f"time {(toc - tic)/Nwarm:0.4f} seconds per HMC trajecrory","| Acceptance rate: ",hmc.calc_Acceptance())
+ 
 dist.destroy_process_group()
