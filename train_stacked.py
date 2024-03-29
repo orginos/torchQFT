@@ -66,6 +66,7 @@ prior= distributions.Independent(normal, 1)
 width=args.w
 Nlayers=args.nl
 bij = lambda: m.FlowBijector(Nlayers=Nlayers,width=width)
+#bij = lambda: m.FlowBijector_3layers(Nlayers=Nlayers,width=width)
 mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior,Nconvs=Nconvs)
 models = []
 

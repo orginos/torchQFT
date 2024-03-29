@@ -159,6 +159,20 @@ def FlowBijector(Nlayers=3,width=256):
     prior= distributions.Independent(normal, 1)
     return  RealNVP(nets, nett, masks, prior, data_dims=(1,2))
 
+#prepares RealNVP for the Convolutional Flow Layer
+def FlowBijector_3layers(Nlayers=3,width=256):
+    mm = np.array([1,0,0,1])
+    tV = mm.size
+    nets = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV), nn.Tanh())
+    nett = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV))
+
+    # the number of masks determines layers
+    #Nlayers = 3
+    masks = tr.from_numpy(np.array([mm, 1-mm] * Nlayers).astype(np.float32))
+    normal = distributions.Normal(tr.zeros(tV),tr.ones(tV))
+    prior= distributions.Independent(normal, 1)
+    return  RealNVP(nets, nett, masks, prior, data_dims=(1,2))
+
 
 #utility class that allows to fix bijectors between layers
 class BijectorFactory():
