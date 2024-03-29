@@ -216,7 +216,7 @@ class RGlayer(nn.Module):
 #works only with power of 2 sizes
 # and the lattice has to be square...
 class MGflow(nn.Module):
-    def __init__(self,size,bijector,rg,prior):
+    def __init__(self,size,bijector,rg,prior,Nconvs=1):
         super(MGflow, self).__init__()
         self.prior=prior
         self.rg=rg
@@ -233,7 +233,7 @@ class MGflow(nn.Module):
             
             
         # the module list are ordered from fine to coarse
-        self.cflow=tr.nn.ModuleList([ConvFlowLayer(sizes[k],bijector) for k in range(self.depth)])
+        self.cflow=tr.nn.ModuleList([ConvFlowLayer(sizes[k],bijector,Nconvs) for k in range(self.depth)])
 
     #noise to fields
     def forward(self,z):

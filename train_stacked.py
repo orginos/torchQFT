@@ -32,6 +32,7 @@ parser.add_argument('-lr', type=float, default=1e-4)
 parser.add_argument('-w' , type=int  , default=16  )
 parser.add_argument('-nl', type=int  , default=1   )
 parser.add_argument('-sb', type=int  , default=1   )
+parser.add_argument('-nc', type=int  , default=1   )
 
 args = parser.parse_args()
 
@@ -49,6 +50,7 @@ depth = args.d
 L=args.L
 batch_size=args.b
 epochs= args.e
+Nconvs = args.nc
 
 V=L*L
 lam =args.g
@@ -64,7 +66,7 @@ prior= distributions.Independent(normal, 1)
 width=args.w
 Nlayers=args.nl
 bij = lambda: m.FlowBijector(Nlayers=Nlayers,width=width)
-mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior)
+mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior,Nconvs=Nconvs)
 models = []
 
 print("Initializing ",depth," stages")
@@ -80,7 +82,7 @@ for tt in sm.parameters():
         c+=tt.numel()
 print("parameter count: ",c)
 
-tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_w_"+str(width)+"_l_"+str(Nlayers)+"_st_"+str(depth)
+tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_w_"+str(width)+"_l_"+str(Nlayers)+"_nc_"+str(Nconvs)+"_st_"+str(depth)
 if(load_flag):
     sm.load_state_dict(tr.load(file))
     sm.eval()
