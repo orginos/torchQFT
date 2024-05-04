@@ -45,6 +45,8 @@ else:
 
 cuda=args.cuda
 device = tr.device("cpu" if cuda<0 else "cuda:"+str(cuda))
+device = tr.device("mps") if tr.backends.mps.is_available() else "cpu"
+
 print(f"Using {device} device")
 ''' 
 device = "cuda" if tr.cuda.is_available() else "cpu"

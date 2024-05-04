@@ -307,6 +307,8 @@ def test_realNVPjacobian():
     
 
     device = "cuda" if tr.cuda.is_available() else "cpu"
+    device = tr.device("mps") if tr.backends.mps.is_available() else "cpu"
+    
     print(f"Using {device} device")
     
     L=8
@@ -368,6 +370,8 @@ def test_realNVP():
     import matplotlib.pyplot as plt
 
     device = "cuda" if tr.cuda.is_available() else "cpu"
+    device = tr.device("mps") if tr.backends.mps.is_available() else "cpu"
+    
     print(f"Using {device} device")
     
     L=4
@@ -424,6 +428,8 @@ def test_Identity():
     import time
     import matplotlib.pyplot as plt
     device = "cuda" if tr.cuda.is_available() else "cpu"
+    device = tr.device("mps") if tr.backends.mps.is_available() else "cpu"
+    
     print(f"Using {device} device")
     
     L=4
@@ -458,6 +464,8 @@ def test_RGlayer():
     import matplotlib.pyplot as plt
     
     device = "cuda" if tr.cuda.is_available() else "cpu"
+    device = tr.device("mps") if tr.backends.mps.is_available() else "cpu"
+    
     print(f"Using {device} device")
     
     #device = "cuda" if tr.cuda.is_available() else "cpu"
@@ -514,6 +522,8 @@ def test_ConvFlowLayerJacobian():
     import time
     import matplotlib.pyplot as plt
     device = "cuda" if tr.cuda.is_available() else "cpu"
+    device = tr.device("mps") if tr.backends.mps.is_available() else "cpu"
+    
     print(f"Using {device} device")
     
     L=8
@@ -560,6 +570,8 @@ def test_ConvFlowLayer():
     import matplotlib.pyplot as plt
     
     device = "cuda" if tr.cuda.is_available() else "cpu"
+    device = tr.device("mps") if tr.backends.mps.is_available() else "cpu"
+    
     print(f"Using {device} device")
     
     L=32
@@ -604,6 +616,8 @@ def test_MGflow():
     import matplotlib.pyplot as plt
     
     device = "cuda" if tr.cuda.is_available() else "cpu"
+    device = tr.device("mps") if tr.backends.mps.is_available() else "cpu"
+    
     print(f"Using {device} device")
     
     L=32
@@ -640,6 +654,8 @@ def test_MGflowJacobian():
     import matplotlib.pyplot as plt
     
     device = "cuda" if tr.cuda.is_available() else "cpu"
+    device = tr.device("mps") if tr.backends.mps.is_available() else "cpu"
+    
     print(f"Using {device} device")
     
     L=16
@@ -692,6 +708,8 @@ def test_MGflow_train(load_flag=False,file="mg-model.dict"):
     import matplotlib.pyplot as plt
     
     device = "cuda" if tr.cuda.is_available() else "cpu"
+    device = tr.device("mps") if tr.backends.mps.is_available() else "cpu"
+    
     print(f"Using {device} device")
     
     L=16

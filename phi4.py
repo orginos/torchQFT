@@ -45,15 +45,16 @@ class phi4():
         return sigma
     
     def __init__(self,V,l,m,batch_size=1,device="cpu",dtype=tr.float32): 
-            self.V = tuple(V) # lattice size
-            self.Vol = np.prod(V)
-            self.Nd = len(V)
-            self.lam = l # the coupling
-            self.mass  = m
-            self.mtil = m + 2*self.Nd
-            self.Bs=batch_size
-            self.device=device
-            self.dtype=dtype
+        self.device=device
+        self.dtype=dtype
+        self.V = tuple(V) # lattice size
+        self.Vol = np.prod(V)
+        self.Nd = len(V)
+        self.lam = l # the coupling
+        self.mass  = m
+        self.mtil = m + 2*self.Nd
+        self.Bs=batch_size
+           
 
 
 
@@ -62,15 +63,17 @@ def main():
     import matplotlib.pyplot as plt
     
     device = "cuda" if tr.cuda.is_available() else "cpu"
+    device = tr.device("mps") if tr.backends.mps.is_available() else "cpu"
+    
     print(f"Using {device} device")
     L=128
     batch_size=1
     lam =0.1
     mass= 0.1
-    o = phi4([L,L],lam,mass,batch_size=batch_size)
-
+    o = phi4([L,L],lam,mass,batch_size=batch_size,device=device)
+    
     phi=o.hotStart()
-    plt.imshow(phi[0,:,:], cmap='hot', interpolation='nearest')
+    plt.imshow(phi.cpu()[0,:,:], cmap='hot', interpolation='nearest')
     plt.show()
 
     tic=time.perf_counter()
