@@ -46,6 +46,7 @@ import torchvision
 #process = psutil.Process()
 
 parser = argparse.ArgumentParser()
+parser.add_argument('-t' , default='train')
 parser.add_argument('-f' , default='no-load', help='select existing model for re-training')
 parser.add_argument('-d' , type=int  , default=1, help='select the depth of MGflow' )
 parser.add_argument('-e' , type=int  , default=1000, help='epochs for training')
@@ -111,6 +112,7 @@ save_every=args.se
 Nconvs = args.nc
 Fbij = args.bj
 beta=args.be
+cmd=args.t
 
 
 V=L*L
@@ -204,40 +206,46 @@ txt_training_validation_steps.write("Epoch\tTraining_Max_Action_Diff\tTraining_M
 
 #print("Memory used {:.0f}".format(process.memory_info().rss/1000000,"MB"))
 
-for b in batch_size*(2**np.arange(number_of_batches)):
-     
-     print("Running with batch_size = ", b, " and learning rate= ", learning_rate)
-     #loss_hist, std_hist, mean_hist, ess_hist, optimizer, loss = trainSM(sm, tag, txt_training_steps, levels=[], epochs=epochs, batch_size=b, super_batch_size= super_batch, learning_rate=learning_rate, save_every=save_every)
-     loss_training_history, loss_validation_history, std_training_history, std_validation_history, ess_training_history, ess_validation_history,  optimizer, training_loss, validation_loss = trainSM(sm, tag, path, txt_training_validation_steps, levels=[], rank=rank, epochs=epochs, batch_size=b, super_batch_size= super_batch, learning_rate=learning_rate, beta=beta,  save_every=save_every, c=c, optimizer_state=optimizer_state)
-     batch_size = (b*super_batch)
-
-     #print("Memory used",psutil.Process(os.getpid()).memory_info().rss / 1000000," MB")
-     if (rank==0):
-        #tt = tag+"_b"+str(batch_size)
-        tt = tag
-        plot_loss(loss_training_history, loss_validation_history, tt, path)
-        plot_std(std_training_history, std_validation_history,tt,save_every, path)
-        plot_ess(ess_training_history,ess_validation_history,tt,save_every, path)
-       #testing(b,b*super_batch,tt,sm.module,epochs, path)
-        
-
-if(not load_flag):
-    #file = "sm_phi4_"+tag+".dict"
-    file = path+"sm_phi4_"+tag+".pt"
-
-
-if rank==0:
-    #tr.save(sm.module.state_dict(), file)
-    tr.save({'epoch':epochs, 'model_state_dict':sm.module.state_dict(), 'optimizer_state_dict':optimizer.state_dict(),'loss':training_loss},file)
-
+if cmd == "train":
+    for b in batch_size*(2**np.arange(number_of_batches)):
+         
+         print("Running with batch_size = ", b, " and learning rate= ", learning_rate)
+         #loss_hist, std_hist, mean_hist, ess_hist, optimizer, loss = trainSM(sm, tag, txt_training_steps, levels=[], epochs=epochs, batch_size=b, super_batch_size= super_batch, learning_rate=learning_rate, save_every=save_every)
+         loss_training_history, loss_validation_history, std_training_history, std_validation_history, ess_training_history, ess_validation_history,  optimizer, training_loss, validation_loss = trainSM(sm, tag, path, txt_training_validation_steps, levels=[], rank=rank, epochs=epochs, batch_size=b, super_batch_size= super_batch, learning_rate=learning_rate, beta=beta,  save_every=save_every, c=c, optimizer_state=optimizer_state)
+         batch_size = (b*super_batch)
     
-    ''' 
-    tr.save({
-        'epoch':epochs,
-        'model_state_dict':sm.module.state_dict(),
-        'optimizer_state_dict':optimizer.state_dict(),
-        'loss':training_loss,
-        },file)
-    '''
+         #print("Memory used",psutil.Process(os.getpid()).memory_info().rss / 1000000," MB")
+         if (rank==0):
+            #tt = tag+"_b"+str(batch_size)
+            tt = tag
+            plot_loss(loss_training_history, loss_validation_history, tt, path)
+            plot_std(std_training_history, std_validation_history,tt,save_every, path)
+            plot_ess(ess_training_history,ess_validation_history,tt,save_every, path)
+           #testing(b,b*super_batch,tt,sm.module,epochs, path)
+            
+    
+    if(not load_flag):
+        #file = "sm_phi4_"+tag+".dict"
+        file = path+"sm_phi4_"+tag+".pt"
+    
+    
+    if rank==0:
+        #tr.save(sm.module.state_dict(), file)
+        tr.save({'epoch':epochs, 'model_state_dict':sm.module.state_dict(), 'optimizer_state_dict':optimizer.state_dict(),'loss':training_loss},file)
+    
+        
+        ''' 
+        tr.save({
+            'epoch':epochs,
+            'model_state_dict':sm.module.state_dict(),
+            'optimizer_state_dict':optimizer.state_dict(),
+            'loss':training_loss,
+            },file)
+        '''
+
+elif cmd == "avg":
+    tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_st_"+str(depth)
+    plot_avg(path + "fig_", L, lam, mass, batch_size, sm.module)
+
 
 dist.destroy_process_group()
