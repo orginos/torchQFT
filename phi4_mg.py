@@ -146,28 +146,56 @@ class ConvFlowLayer(nn.Module):
 #        return x
 
 #prepares RealNVP for the Convolutional Flow Layer
-def FlowBijector(Nlayers=3,width=256):
+#def FlowBijectorOneLayer(Nlayers=1,width=256):
+def FlowBijectorOneLayer(Nlayers=1,width=16):
     mm = np.array([1,0,0,1])
     tV = mm.size
     nets = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV), nn.Tanh())
     nett = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV))
-
-    # the number of masks determines layers
-    #Nlayers = 3
     masks = tr.from_numpy(np.array([mm, 1-mm] * Nlayers).astype(np.float32))
     normal = distributions.Normal(tr.zeros(tV),tr.ones(tV))
     prior= distributions.Independent(normal, 1)
     return  RealNVP(nets, nett, masks, prior, data_dims=(1,2))
 
-#prepares RealNVP for the Convolutional Flow Layer
-def FlowBijector_3layers(Nlayers=3,width=256):
+
+def FlowBijectorTwoLayers(Nlayers=2,width=16):
     mm = np.array([1,0,0,1])
     tV = mm.size
-    nets = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV), nn.Tanh())
+    nets = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV), nn.Tanh())    
     nett = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV))
+    masks = tr.from_numpy(np.array([mm, 1-mm] * Nlayers).astype(np.float32))
+    normal = distributions.Normal(tr.zeros(tV),tr.ones(tV))
+    prior= distributions.Independent(normal, 1)
+    return  RealNVP(nets, nett, masks, prior, data_dims=(1,2))
 
-    # the number of masks determines layers
-    #Nlayers = 3
+
+def FlowBijectorThreeLayers(Nlayers=3,width=16):
+    mm = np.array([1,0,0,1])
+    tV = mm.size
+    nets = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV), nn.Tanh())    
+    nett = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV))
+    masks = tr.from_numpy(np.array([mm, 1-mm] * Nlayers).astype(np.float32))
+    normal = distributions.Normal(tr.zeros(tV),tr.ones(tV))
+    prior= distributions.Independent(normal, 1)
+    return  RealNVP(nets, nett, masks, prior, data_dims=(1,2))
+
+
+def FlowBijectorFourLayers(Nlayers=4,width=16):
+    mm = np.array([1,0,0,1])
+    tV = mm.size
+    nets = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV), nn.Tanh())    
+    nett = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV))
+    masks = tr.from_numpy(np.array([mm, 1-mm] * Nlayers).astype(np.float32))
+    normal = distributions.Normal(tr.zeros(tV),tr.ones(tV))
+    prior= distributions.Independent(normal, 1)
+    return  RealNVP(nets, nett, masks, prior, data_dims=(1,2))
+
+
+def FlowBijectorFiveLayers(Nlayers=5,width=16):
+    mm = np.array([1,0,0,1])
+    tV = mm.size
+    nets = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV), nn.Tanh())    
+    nett = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV))
     masks = tr.from_numpy(np.array([mm, 1-mm] * Nlayers).astype(np.float32))
     normal = distributions.Normal(tr.zeros(tV),tr.ones(tV))
     prior= distributions.Independent(normal, 1)
@@ -230,7 +258,7 @@ class RGlayer(nn.Module):
 #works only with power of 2 sizes
 # and the lattice has to be square...
 class MGflow(nn.Module):
-    def __init__(self,size,bijector,rg,prior,Nconvs=1):
+    def __init__(self,size,bijector,rg,prior, Nconvs=1):
         super(MGflow, self).__init__()
         self.prior=prior
         self.rg=rg
