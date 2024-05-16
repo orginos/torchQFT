@@ -193,6 +193,9 @@ if cmd == "train":
          #tr.save(sm.module.state_dict(), file)
          tr.save({'epoch':last_epoch, 'model_state_dict':sm.module.state_dict(), 'optimizer_state_dict':optimizer.state_dict(),'loss':training_loss},file)
 
+elif cmd == "avg":
+    tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_st_"+str(depth)
+    plot_avg(tag + "_", L, lam, mass, batch_size, sm)
 else:
     o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
     phi = o.hotStart()

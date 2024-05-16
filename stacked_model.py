@@ -291,6 +291,20 @@ def trainSM(SuperM, tag, path, txt_training_validation_steps, levels=[], rank=0,
     #return loss_training_history, std_training_history, mean_training_history, ess_training_history, optimizer, loss
 
 
+def plot_avg(path,L,lam,mass,batch_size, mm):
+    o = p.phi4([L,L],lam,mass,batch_size=batch_size)
+    V=L*L
+    x = o.hotStart()
+    plt.hist(tr.mean(x) * tr.exp(-o.action(x)))
+    plt.xlabel("magnetic moment")
+    plt.ylabel("frequency")
+    plt.savefig(path+"sm_magmom.pdf", dpi=300)
+    x = mm.sample(batch_size)
+    plt.hist((tr.mean(x) * tr.exp(o.action(x)-mm.diff(x))).detach())
+    plt.savefig(path+"sm_magmom0.pdf", dpi=300)
+    plt.xlabel("magnetic moment")
+    plt.ylabel("frequency")
+
 def plot_loss(lh,vh,title, path):
     plt.plot(np.arange(len(lh)),lh,label='Training')
     plt.plot(np.arange(len(vh)),vh,label='Validation')
