@@ -305,41 +305,53 @@ def trainSM(SuperM, tag, path, txt_training_validation_steps, levels=[], rank=0,
     return loss_training_history, loss_validation_history, std_training_history, std_validation_history, ess_training_history, ess_validation_history, optimizer, loss, loss_validation
     #return loss_training_history, std_training_history, mean_training_history, ess_training_history, optimizer, loss
 
-def plot_avg(path,L,lam,mass,batch_size, mm):
+def plot_avg(path,L,lam,mass, batch_size, super_batch_size, mm):
     # magnetic moment = \integral_x mean(x) exp(-S(x)) p(x) dx / \integral_x exp(-S(x)) p(x) dx
     #           \approx [ sum_x mean(x) exp(-S(x)) ] / [ sum_x exp(-S(x)) ], where x drawn with prob p(x)
     #                 = [ sum_x exp(-S(x) - logZ + log(mean(x))) ], where logZ = log [sum_x exp(-S(x)) ]
 
     o = p.phi4([L,L],lam,mass,batch_size=batch_size)
     V=L*L
-    x = o.hotStart().detach()
-    action = o.action(x)
-    logZ = tr.logsumexp(-action, 0)
-    mean = x.mean(dim=(1,2))
-    neg_mean = tr.argwhere(tr.minimum(mean, tr.Tensor([0.0])))
-    pos_mean = tr.argwhere(tr.maximum(mean, tr.Tensor([0.0])))
-    print("pos magnetic moments", -action[pos_mean] - logZ + tr.log(mean[pos_mean]))
-    print("magnetic moment", tr.exp(tr.logsumexp(-action[pos_mean] - logZ + tr.log(mean[pos_mean]), 0)) - tr.exp(tr.logsumexp(-action[neg_mean] - logZ + tr.log(-mean[neg_mean]), 0)))
     fig, ax = plt.subplots(2, 2)
     fig.suptitle('magnetic moment')
-    ax[0,0].hist(tr.squeeze(-action[pos_mean] - logZ + tr.log(mean[pos_mean])), bins=100)
-    ax[0,1].hist(tr.squeeze(-action[neg_mean] - logZ + tr.log(-mean[neg_mean])), bins=100)
+    mm_pos_orig = tr.Tensor([])
+    mm_neg_orig = tr.Tensor([])
+    for b in range(super_batch_size):
+        x = o.hotStart().detach()
+        action = o.action(x)
+        logZ = tr.logsumexp(-action, 0)
+        mean = x.mean(dim=(1,2))
+        neg_mean = tr.argwhere(tr.minimum(mean, tr.Tensor([0.0])))
+        pos_mean = tr.argwhere(tr.maximum(mean, tr.Tensor([0.0])))
+        magnetic_moment += tr.exp(tr.logsumexp(-action[pos_mean] - logZ + tr.log(mean[pos_mean]), 0)) - tr.exp(tr.logsumexp(-action[neg_mean] - logZ + tr.log(-mean[neg_mean]), 0)))
+        mm_pos_orig = tr.cat((mm_pos_orig, tr.squeeze(-action[pos_mean] - logZ + tr.log(mean[pos_mean]))))
+        mm_neg_orig = tr.cat((mm_neg_orig, tr.squeeze(-action[neg_mean] - logZ + tr.log(-mean[neg_mean]))))
+
+    print("magnetic moment", magnetic_moment)
+    ax[0,0].hist(mm_pos_orig, bins=100)
+    ax[0,1].hist(mm_neg_orig, bins=100)
     ax[0,0].set(ylabel="frequency")
 
     # magnetic moment = \integral_x mean(x) exp(-S(x)) p(x) dx / \integral_x exp(-S(x)) p(x) dx
     #           \approx [ sum_x mean(x) exp(-S(x)) ] / [ sum_x exp(-S(x)) ], where x drawn with prob p(x)
     #                 = [ sum_x exp(-S(x) - logZ + log(mean(x))) ], where logZ = log [sum_x exp(-S(x)) ]
 
-    x = mm.sample(batch_size).detach()
-    action = mm.diff(x).detach()
-    logZ = tr.logsumexp(-action, 0)
-    mean = x.mean(dim=(1,2))
-    neg_mean = tr.argwhere(tr.minimum(mean, tr.Tensor([0.0])))
-    pos_mean = tr.argwhere(tr.maximum(mean, tr.Tensor([0.0])))
-    print("pos magnetic moments", -action[pos_mean] - logZ + tr.log(mean[pos_mean]))
-    print("magnetic moment", tr.exp(tr.logsumexp(-action[pos_mean] - logZ + tr.log(mean[pos_mean]), 0)) - tr.exp(tr.logsumexp(-action[neg_mean] - logZ + tr.log(-mean[neg_mean]), 0)))
-    ax[1,0].hist(tr.squeeze(-action[pos_mean] - logZ + tr.log(mean[pos_mean])), bins=100)
-    ax[1,1].hist(tr.squeeze(-action[neg_mean] - logZ + tr.log(-mean[neg_mean])), bins=100)
+    mm_pos_orig = tr.Tensor([])
+    mm_neg_orig = tr.Tensor([])
+    for b in range(super_batch_size):
+        x = mm.sample(batch_size).detach().to(device="cpu")
+        action = mm.diff(x).detach().to(device="cpu")
+        logZ = tr.logsumexp(-action, 0).to(device="cpu")
+        mean = x.mean(dim=(1,2)).to(device="cpu")
+        neg_mean = tr.argwhere(tr.minimum(mean, tr.Tensor([0.0])))
+        pos_mean = tr.argwhere(tr.maximum(mean, tr.Tensor([0.0])))
+        magnetic_moment += tr.exp(tr.logsumexp(-action[pos_mean] - logZ + tr.log(mean[pos_mean]), 0)) - tr.exp(tr.logsumexp(-action[neg_mean] - logZ + tr.log(-mean[neg_mean]), 0)))
+        mm_pos_orig = tr.cat((mm_pos_orig, tr.squeeze(-action[pos_mean] - logZ + tr.log(mean[pos_mean]))))
+        mm_neg_orig = tr.cat((mm_neg_orig, tr.squeeze(-action[neg_mean] - logZ + tr.log(-mean[neg_mean]))))
+
+    print("magnetic moment with model", magnetic_moment)
+    ax[1,0].hist(mm_pos_orig, bins=100)
+    ax[1,1].hist(mm_neg_orig, bins=100)
     ax[1,0].set(ylabel="frequency")
 
     fig.savefig(path+"sm_magmom.pdf", dpi=300)
