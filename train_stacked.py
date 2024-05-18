@@ -20,20 +20,20 @@ from stacked_model import *
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-f' , default='no-load')
-parser.add_argument('-d' , type=int  , default=1   )
-parser.add_argument('-e' , type=int  , default=1000)
-parser.add_argument('-L' , type=int  , default=16  )
-parser.add_argument('-m' , type=float, default=-0.5)
-parser.add_argument('-g' , type=float, default=1.0 )
-parser.add_argument('-b' , type=int  , default=4   )
-parser.add_argument('-nb', type=int  , default=4   ) # number batch sizes to use
-parser.add_argument('-lr', type=float, default=1e-4)
-parser.add_argument('-w' , type=int  , default=16  )
-parser.add_argument('-nl', type=int  , default=1   )
-parser.add_argument('-sb', type=int  , default=1   )
-parser.add_argument('-nc', type=int  , default=1   )
-
+parser.add_argument('-f'  , default='no-load')
+parser.add_argument('-d'  , type=int  , default=1    )
+parser.add_argument('-e'  , type=int  , default=1000 )
+parser.add_argument('-L'  , type=int  , default=16   )
+parser.add_argument('-m'  , type=float, default=-0.5 )
+parser.add_argument('-g'  , type=float, default=1.0  )
+parser.add_argument('-b'  , type=int  , default=4    )
+parser.add_argument('-nb' , type=int  , default=4    ) # number batch sizes to use
+parser.add_argument('-lr' , type=float, default=1e-4 )
+parser.add_argument('-w'  , type=int  , default=16   )
+parser.add_argument('-nl' , type=int  , default=1    )
+parser.add_argument('-sb' , type=int  , default=1    )
+parser.add_argument('-nc' , type=int  , default=1    )
+parser.add_argument('-fbj', type=bool , default=False)
 args = parser.parse_args()
 
 file=args.f
@@ -66,6 +66,12 @@ prior= distributions.Independent(normal, 1)
 width=args.w
 Nlayers=args.nl
 bij = lambda: m.FlowBijector(Nlayers=Nlayers,width=width)
+if(args.fbj):
+     bij_list = []
+     for k in range(2*Nconvs):
+          bij_list.append(m.FlowBijector(Nlayers=Nlayers,width=width))
+     bij = m.BijectorFactory(bij_list).bij
+
 #bij = lambda: m.FlowBijector_3layers(Nlayers=Nlayers,width=width)
 mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior,Nconvs=Nconvs)
 models = []
@@ -84,6 +90,8 @@ for tt in sm.parameters():
 print("parameter count: ",c)
 
 tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_w_"+str(width)+"_l_"+str(Nlayers)+"_nc_"+str(Nconvs)+"_st_"+str(depth)
+if(args.fbj):
+     tag = tag + "_fbj"
 if(load_flag):
     sm.load_state_dict(tr.load(file))
     sm.eval()

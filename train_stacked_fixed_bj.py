@@ -65,7 +65,7 @@ Nlayers=args.nl
 fixed_Bijector1 = m.FlowBijector(Nlayers=Nlayers,width=width)
 fixed_Bijector2 = m.FlowBijector(Nlayers=Nlayers,width=width)
 
-bij = m.BijectorFactory(fixed_Bijector1,fixed_Bijector2)
+bij = m.BijectorFactory([fixed_Bijector1,fixed_Bijector2])
 
 mg = lambda : m.MGflow([L,L],bij.bij,m.RGlayer("average"),prior)
 models = []
@@ -75,12 +75,13 @@ for d in range(depth):
     models.append(mg())
         
 sm = SuperModel(models,target =o.action )
-
+print(sm)
 c=0
 for tt in sm.parameters():
     #print(tt.shape)
     if tt.requires_grad==True :
         c+=tt.numel()
+        #print(tt)
 print("parameter count: ",c)
 
 tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_w_"+str(width)+"_l_"+str(Nlayers)+"_st_"+str(depth)+"_fbj"
@@ -94,7 +95,7 @@ for b in batch_size*(2**np.arange(args.nb)):
      loss_hist=trainSM(sm,levels=[], epochs=epochs,batch_size=b,super_batch_size=1,learning_rate=args.lr)
      tt = tag+"_b"+str(b)
      plot_loss(loss_hist,tt)
-     validate(1024,tt,sm)
+     validate(b,1024,tt,sm)
 
 if(not load_flag):
     file = "sm_phi4_"+tag+".dict"

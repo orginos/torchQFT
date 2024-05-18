@@ -176,18 +176,15 @@ def FlowBijector_3layers(Nlayers=3,width=256):
 
 #utility class that allows to fix bijectors between layers
 class BijectorFactory():
-     def __init__(self, bj1,bj2):
+     def __init__(self, bj_list):
           self.counter=-1
-          self.bj1 = bj1
-          self.bj2 = bj2
+          self.bj_list = bj_list
      def bij(self):
-          self.counter+=1 
-          if (self.counter % 2 == 0):
-               print("Adding Bijector 1")
-               return self.bj1
-          else:
-               print("Adding Bijector 2")
-               return self.bj2
+         self.counter+=1 
+         bj_index = self.counter % len(self.bj_list)
+         print("Adding Bijector ",bj_index)
+         return self.bj_list[bj_index]
+
 
 # this is an invertible RG transformation
 # it preseves the residual fine degrees of freedom
