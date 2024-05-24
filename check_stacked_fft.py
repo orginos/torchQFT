@@ -31,7 +31,9 @@ parser.add_argument('-b' , type=int  , default=128 )
 parser.add_argument('-w' , type=int  , default=16  )
 parser.add_argument('-nl', type=int  , default=1   )
 parser.add_argument('-nm', type=int  , default=1000)
-
+parser.add_argument('-sb' , type=int  , default=1    )
+parser.add_argument('-nc' , type=int  , default=1    )
+parser.add_argument('-fbj', type=bool , default=False)
 
 args = parser.parse_args()
 
@@ -61,8 +63,16 @@ prior= distributions.Independent(normal, 1)
 
 width=args.w
 Nlayers=args.nl
+Nconvs = args.nc
+
 bij = lambda: m.FlowBijector(Nlayers=Nlayers,width=width)
-mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior)
+if(args.fbj):
+     bij_list = []
+     for k in range(2*Nconvs):
+          bij_list.append(m.FlowBijector(Nlayers=Nlayers,width=width))
+     bij = m.BijectorFactory(bij_list).bij
+
+mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior,Nconvs=Nconvs)
 models = []
 
 print("Initializing ",depth," stages")
@@ -81,8 +91,10 @@ print("parameter count: ",c)
 sm.load_state_dict(tr.load(file))
 sm.eval()
 
+tt = "foo_check"
 print("starting model check")
-validate(batch_size,'foo',sm)
+#validate(batch_size,'foo',sm)
+validate(batch_size,10*args.sb,tt,sm)
 
 x = sm.sample(batch_size)
 plt.imshow(x.detach()[0,:,:], cmap='hot', interpolation='nearest')
@@ -96,6 +108,7 @@ print(f"time {(toc - tic)*1.0e6:0.4f} micro-seconds per fft2")
 Nmeas =args.nm
 pbar = tqdm(range(Nmeas))
 c2p = tr.zeros([Nmeas,L,L],dtype=tr.float)
+c2p_norw = tr.zeros([Nmeas,L,L],dtype=tr.float)
 for k in pbar: 
      x=sm.sample(batch_size)
      ds = sm.diff(x).detach()
@@ -104,14 +117,21 @@ for k in pbar:
      w = foo/tr.mean(foo)
      fx = tr.fft.fft2(x).detach()
      c2p[k,:,:] = (tr.real(fx*tr.conj(fx))*w[:,None,None]).mean(dim=0).detach()
+     c2p_norw[k,:,:] = (tr.real(fx*tr.conj(fx))).mean(dim=0).detach()
 
 m_c2p=c2p.mean(dim=0)
 e_c2p=c2p.std(dim=0)/np.sqrt(Nmeas-1)
 
+m_c2p_norw=c2p_norw.mean(dim=0)
+e_c2p_norw=c2p_norw.std(dim=0)/np.sqrt(Nmeas-1)
+
 
 ic2p= 1.0/m_c2p
 ec2p= ic2p*(e_c2p/m_c2p)
+ic2p_norw= 1.0/m_c2p_norw
+ec2p_norw= ic2p_norw*(e_c2p_norw/m_c2p_norw)
 plt.errorbar(np.arange(L),ic2p[:,0],ec2p[:,0],marker='.')
+plt.errorbar(np.arange(L),ic2p_norw[:,0],ec2p_norw[:,0],marker='.')
 plt.show()
 
 p2 = tr.zeros_like(m_c2p)
@@ -127,6 +147,14 @@ y = res.slope*x + res.intercept
 xi = np.sqrt(res.slope/res.intercept)
 e_xi = 1.0/2.0*(res.stderr/res.slope + res.intercept_stderr/res.intercept)*xi
 print("The correlation length: ",xi,"+/-",e_xi)
+
+res_norw=scipy.stats.linregress(p2.view(V),ic2p_norw.view(V))
+x = np.linspace(0,2.0,100)
+y_norw = res_norw.slope*x + res_norw.intercept
+
+xi_norw = np.sqrt(res_norw.slope/res_norw.intercept)
+e_xi_norw = 1.0/2.0*(res_norw.stderr/res_norw.slope + res_norw.intercept_stderr/res_norw.intercept)*xi_norw
+print("The correlation length (no reweighting): ",xi_norw,"+/-",e_xi_norw)
 
 
 slp2,indx = p2.view(V).sort()
