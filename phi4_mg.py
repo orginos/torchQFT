@@ -193,7 +193,7 @@ class RGlayer(nn.Module):
         super(RGlayer, self).__init__()
         if(transformation_type=="select"):
             mask_c = [[1.0,0.0],[0.0,0.0]]
-            mask_r = [[1.0,0.0],[0.0,0.0]]
+            mask_r = [[1.0,1.0],[1.0,1.0]]
         elif(transformation_type=="average"):
             mask_c = [[0.25,0.25],[0.25,0.25]]
             mask_r = [[1.00,1.00],[1.00,1.00]]
