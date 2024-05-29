@@ -63,7 +63,7 @@ def test_RGlayer(file):
     print(f"Using {device} device")
 
     Nwarm =10
-    L=16
+    L=256
     lat=[L,L]
     V=L*L
     batch_size=4
@@ -85,11 +85,35 @@ def test_RGlayer(file):
     plt.show()
 
     RG = RGlayer(transformation_type="average")
+    #RG = RGlayer(transformation_type="select")
     c,r=RG.coarsen(sigma)
     ff=RG.refine(c,r)
     print("Reversibility check: ",tr.norm(sigma-ff).sum()/tr.norm(sigma))
     print("Orthogonality check: ",tr.norm(tr.einsum('brkxy,bskxy->brsxy',r,r) - tr.eye(3).view(1,3,3,1,1)))
 
+    c2img = (c[0].permute((1,2,0))+1.0)/2.0
+    print(c[0].shape,c2img.shape)
+    plt.imshow(c2img, interpolation='nearest')
+    plt.show()
+    
+    
+    fsig2img = (ff[0].permute((1,2,0))+1.0)/2.0
+    print(ff[0].shape,fsig2img.shape)
+    plt.imshow(fsig2img, interpolation='nearest')
+    plt.show()
+
+    
+    fig, axarr = plt.subplots(1,2)
+    
+    axarr[0].imshow(sig2img)
+    axarr[1].imshow(c2img)
+    plt.show()
+
+    fig, axarr = plt.subplots(1,2)
+    axarr[0].imshow(sig2img)
+    axarr[1].imshow(fsig2img)
+    plt.show()
+    
     #print(sigma-ff)
     #save the last field configuration
     tr.save(sigma,'o3_'+str(lat[0])+"_"+str(lat[1])+"_b"+str(beta)+"_bs"+str(o.Bs)+".pt")
