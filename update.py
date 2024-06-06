@@ -47,6 +47,54 @@ class hmc:
                 print(" HMC: ",k," DH= ",DH.tolist()," A/R= ",Acc_flag.tolist()," Pacc= ",av_ar.item())
                     
         return q
+    
+    #Testing DH for one step - verifying HMC
+    def step_DH(self,q):
+        qshape =tuple([q.shape[0]]+[1]*(len(q.shape)-1))
+        q0=q.clone() # copy the q
+        p0 = self.T.refreshP()
+        H0 = self.T.kinetic(p0) + self.T.action(q0)
+        p,q = self.I.integrate(p0,q0)
+        Hf = self.T.kinetic(p) + self.T.action(q)
+        DH = Hf - H0
+        acc_prob=tr.where(DH<0,tr.ones_like(DH),tr.exp(-DH))
+        R=tr.rand_like(acc_prob)
+        Acc_flag = (R<acc_prob)
+        AR = tr.where(Acc_flag,tr.ones_like(DH),tr.zeros_like(DH))
+        self.AcceptReject.extend(AR.tolist())
+        q = tr.where(Acc_flag.view(qshape),q,q0)
+        
+        if(self.verbose):
+            av_ar = tr.mean(AR)
+            print(" HMC: "," DH= ",DH.tolist()," A/R= ",Acc_flag.tolist()," Pacc= ",av_ar.item())
+                
+        return DH
+    
+    #Naive DD evolve - added for numerical methods project
+    def dd_Evolve(self,q, N, xcut):
+        qshape =tuple([q.shape[0]]+[1]*(len(q.shape)-1))
+        for k in range(N):
+            q0=q.clone() # copy the q
+            p0 = self.T.refreshP()
+            H0 = self.T.kinetic(p0) + self.T.action(q0)
+            if(k ==0):
+                p,q = self.I.integrate(p0,q0)
+            else:
+                p,q = self.I.dd_Integrate(p0,q0, xcut)
+            Hf = self.T.kinetic(p) + self.T.action(q)
+            DH = Hf - H0
+            acc_prob=tr.where(DH<0,tr.ones_like(DH),tr.exp(-DH))
+            R=tr.rand_like(acc_prob)
+            Acc_flag = (R<acc_prob)
+            AR = tr.where(Acc_flag,tr.ones_like(DH),tr.zeros_like(DH))
+            self.AcceptReject.extend(AR.tolist())
+            q = tr.where(Acc_flag.view(qshape),q,q0)
+            
+            if(self.verbose):
+                av_ar = tr.mean(AR)
+                print(" HMC: ",k," DH= ",DH.tolist()," A/R= ",Acc_flag.tolist()," Pacc= ",av_ar.item())
+                    
+        return q
 
     
 # NOT YET CONVERTED TO TORCH

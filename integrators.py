@@ -55,6 +55,50 @@ class minnorm2(integrator):
                        
         return p,q
     
+    #For CS Methods project
+    def dd_Integrate(self, p, q, xcut):
+        #For pure gauge theory, evolution is local-
+        #no need to run seperate processes for subdomains
+        #Complete the first pass normally:
+        # p=self.evolveP(self.dt*self.lam,self.force(q),p)
+        # q = self.evolveQ(0.5*self.dt,p,q) #q + 0.5*self.dt*p
+        # #p = p + self.force(q)*self.dt*(1.0-2.0*self.lam)
+        # p=self.evolveP(self.dt*(1.0-2.0*self.lam),self.force(q),p)
+        # q = self.evolveQ(0.5*self.dt,p,q) #q + 0.5*self.dt*p
+        # #p = p + self.force(q)*self.dt*self.lam
+        # p=self.evolveP(self.dt*self.lam,self.force(q),p)
+        q0=q.clone()
+        p0 = p.clone()
+        #Freeze the boundary for the rest of the updates
+        for t in range(0,self.Nmd):
+            #p = p + self.force(q)*self.dt*self.lam
+            p=self.evolveP(self.dt*self.lam,self.force(q),p)
+            #Freeze boundary
+            p[:,xcut, :, :] = p0[:,xcut, :,:]
+            p[:,0, :, :] = p0[:,0, :,:]
+            q = self.evolveQ(0.5*self.dt,p,q) #q + 0.5*self.dt*p
+            #Freeze boundary
+            q[:,xcut, :, :] = q0[:,xcut, :,:]
+            q[:,0, :, :] = q0[:,0, :,:]
+            #p = p + self.force(q)*self.dt*(1.0-2.0*self.lam)
+            p=self.evolveP(self.dt*(1.0-2.0*self.lam),self.force(q),p)
+            #Freeze boundary
+            p[:,xcut, :, :] = p0[:,xcut, :,:]
+            p[:,0, :, :] = p0[:,0, :,:]
+            q = self.evolveQ(0.5*self.dt,p,q) #q + 0.5*self.dt*p
+            #Freeze boundary
+            q[:,xcut, :, :] = q0[:,xcut, :,:]
+            q[:,0, :, :] = q0[:,0, :,:]
+            #p = p + self.force(q)*self.dt*self.lam
+            p=self.evolveP(self.dt*self.lam,self.force(q),p)
+            #Freeze boundary
+            p[:,xcut, :, :] = p0[:,xcut, :,:]
+            p[:,0, :, :] = p0[:,0, :,:]
+
+
+        return p, q
+        
+    
 class minnorm4pf4(integrator):
     def __init__(self,force,evolveQ,Nmd,t,evolveP=simple_evolveP,
                  rho=0.1786178958448091,
