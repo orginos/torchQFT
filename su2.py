@@ -98,6 +98,9 @@ class gauge_field():
         return tr.empty(self.shape,device=self.device,dtype=self.dtype)
     def zero(self):
         return tr.zeros(self.shape,device=self.device,dtype=self.dtype)
+    def zeroCM(self):
+        return tr.zeros(self.shape[0:-1],device=self.device,dtype=self.dtype)
+        
     def cold(self):
         shape = [1,2,2]+len(self.shape[3:])*[1]
         one = tr.eye(2,2,device=self.device,dtype=self.dtype).view(shape)
@@ -115,28 +118,54 @@ class gauge_field():
     def trace_plaquett(self,U,mu,nu):
         P = tr.empty([U.shape[0]]+list(U.shape[3:-1]),dtype=U.dtype)
         P = tr.einsum('bij...,bjl...,bml...,bim...->b',
-                      U[:,:,:,:,:,:,:,mu],
-                      U[:,:,:,:,:,:,:,nu].roll(dims=mu+3,shifts=-1),
-                      U[:,:,:,:,:,:,:,mu].roll(dims=nu+3,shifts=-1).conj(),
-                      U[:,:,:,:,:,:,:,nu].conj())
+                      U[...,mu],
+                      U[...,nu].roll(dims=mu+3,shifts=-1),
+                      U[...,mu].roll(dims=nu+3,shifts=-1).conj(),
+                      U[...,nu].conj())
         return P
 
     def staple(self,U,mu,nu):
         S = tr.einsum('bij...,bjl...,bml...->bim...',
-                      U[:,:,:,:,:,:,:,nu],
-                      U[:,:,:,:,:,:,:,mu].roll(dims=nu+3,shifts=-1),
-                      U[:,:,:,:,:,:,:,nu].roll(dims=mu+3,shifts=-1).conj())
+                      U[...,nu],
+                      U[...,mu].roll(dims=nu+3,shifts=-1),
+                      U[...,nu].roll(dims=mu+3,shifts=-1).conj())
         S+= tr.einsum('bji...,bjl...,blm...->bim...',
-                      U[:,:,:,:,:,:,:,nu].roll(dims=nu+3,shifts=+1).conj(),
-                      U[:,:,:,:,:,:,:,mu].roll(dims=nu+3,shifts=+1),
-                      U[:,:,:,:,:,:,:,nu].roll(dims=(mu+3,nu+3),shifts=(-1,1)))
+                      U[...,nu].roll(dims=nu+3,shifts=+1).conj(),
+                      U[...,mu].roll(dims=nu+3,shifts=+1),
+                      U[...,nu].roll(dims=(mu+3,nu+3),shifts=(-1,1)))
         return S
-        
-    def add_force(self,F,P,mu):
-        F[:,:,:,:,:,:,:,mu] += P
 
+    def multCM(U,V):
+        return tr.einsum('bik...,bkj...->bij...',U,V)
+    def multCMdag(U,V):
+        return tr.einsum('bik...,bjk...->bij...',U,V.conj())
+        
+    def link(U,mu):
+        return U[...,mu]
+         
+    def add_force(self,F,P,mu):
+        F[...,mu] += P
+
+    def plaquett_force(self,U):
+        F = self.empty()
+        for mu in range(self.Nd):
+            S = self.zeroCM()
+            for nu in range(self.Nd):
+                if(nu!=mu):
+                    S += self.staple(U,mu,nu)
+            #self.gf.add_force(F,self.gf.staple(U,mu,nu),mu)
+            F[...,mu] = tr.einsum('bik...,bjk...->bij...',U[...,mu],S.conj())
+        F=0.5*(F-F.transpose(1,2).conj()) # no need to subtract the trace     
+        return F
+        # NEED TO CHECK CORRECTNESS 
+    
     def LieProject(self,F):
         F = 0.5*(F-F.transpose(1,2).conj())
+        trace = 0.5*tr.einsum('bii...->b...',F)
+        print(trace.shape)
+        # subtract the trace
+        F[:,0,0] -= trace
+        F[:,1,1] -= trace
         # if it is used only for force there is no need for trace subtraction as it is automatically traceless because we are in SU(2) 
         # If you use this on a general 2x2 matrix then you need to subtract the trace
         return F 
@@ -161,6 +190,8 @@ class gauge_field_alt():
         return tr.empty(self.shape,device=self.device,dtype=self.dtype)
     def zero(self):
         return tr.zeros(self.shape,device=self.device,dtype=self.dtype)
+    def zeroCM(self):
+        return tr.zeros(self.shape[1:],device=self.device,dtype=self.dtype)
     def cold(self):
         shape = (len(self.shape)-2)*[1] + [2,2]
         #print(shape)
@@ -200,14 +231,37 @@ class gauge_field_alt():
                       U[mu].roll(dims=nu+1,shifts=+1),
                       U[nu].roll(dims=(mu+1,nu+1),shifts=(-1,1)))
         return S
+
+    def link(U,mu):
+        return U[mu]
+
+    def multCM(U,V):
+        return tr.einsum('...ik,...kj->...ij',U,V)
+    def multCMdag(U,V):
+        return tr.einsum('...ik,...jk->...ij',U,V.conj())
         
     def add_force(self,F,P,mu):
         F[mu] += P
 
+    def plaquett_force(self,U):
+        F = self.empty()
+        for mu in range(self.Nd):
+            S = self.zeroCM()
+            for nu in range(self.Nd):
+                if(nu!=mu):
+                    S += self.staple(U,mu,nu)
+            #self.gf.add_force(F,self.gf.staple(U,mu,nu),mu)
+            F[mu] = tr.einsum('...ik,...jk->...ij',U[mu],S.conj())
+        F=0.5*(F-F.transpose(6,7).conj()) # no need to subtract the trace     
+        return F
+        # NEED TO CHECK CORRECTNESS 
+        
     def LieProject(self,F):
         F = 0.5*(F-F.transpose(6,7).conj())
-        # if it is used only for force there is no need for trace subtraction as it is automatically traceless because we are in SU(2) 
-        # If you use this on a general 2x2 matrix then you need to subtract the trace
+        trace = 0.5*tr.einsum('...ii->...',F)
+        # subtract the trace
+        F[...,0,0] -= trace
+        F[...,1,1] -= trace
         return F 
         
 def alt_to_norm(U):
@@ -231,19 +285,7 @@ class SU2():
         return self.beta*A
 
     def force(self,U):
-        F = self.gf.zero()
-        
-        for mu in range(self.gf.Nd):
-            for nu in range(self.gf.Nd):
-                if(nu!=mu):
-                    self.gf.add_force(F,self.gf.staple(U,mu,nu),mu)
-        F=self.gf.LieProject(F)
-        
-        #multiply the beta
-        F = F*(self.beta/float(self.gf.Nc))
-        # NEED TO CHECK CORRECTNESS 
-        
-        return F
+        return self.gf.plaquett_force(U)*(self.beta/float(self.gf.Nc))
     
 def main():
     import matplotlib.pyplot as plt
