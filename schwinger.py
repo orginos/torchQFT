@@ -163,12 +163,13 @@ class schwinger():
 #Gauge theory ****************************************************************************************************************
     #Inputs: self, BxLxLxmu gauge field u 
     #Outputs: Pure gauge action
+    #TODO: Generalize to higher dimension lattices
     def gaugeAction(self, u):
         #plaquette matrix
         pl = u[:,:,:,0]*tr.roll(u[:,:,:,1], shifts=-1, dims=1) \
             * tr.conj(tr.roll(u[:,:,:,0], shifts=-1, dims=2))*tr.conj(u[:,:,:,1]) 
         
-        S = (2/self.lam**2) *(tr.sum(tr.real(tr.ones_like(pl) - pl),dim=(1,2)))
+        S = (1/self.lam**2) *(tr.sum(tr.real(tr.ones_like(pl) - pl),dim=(1,2)))
         return S
 
 
@@ -188,13 +189,14 @@ class schwinger():
         a = tr.zeros_like(u)
 
 
+        #TODO:Generalize to higher dimension lattices
         a[:,:,:,0]  = tr.roll(u[:,:,:,1], shifts=-1, dims=1) * tr.conj(tr.roll(u[:,:,:,0], shifts=-1, dims=2))*tr.conj(u[:,:,:,1]) \
                       + tr.conj(tr.roll(u[:,:,:,1], shifts=(-1,1), dims= (1,2)))*tr.conj(tr.roll(u[:,:,:,0], shifts=1, dims=2)) * tr.roll(u[:,:,:,1], shifts=1, dims=2)
         a[:,:,:,1] = tr.conj(tr.roll(u[:,:,:,0], shifts=(1,-1), dims=(1,2))) * tr.conj(tr.roll(u[:,:,:,1], shifts=1, dims=1)) * tr.roll(u[:,:,:,0], shifts=1, dims=1) \
                      + tr.roll(u[:,:,:,0], shifts=-1, dims=2) * tr.conj(tr.roll(u[:,:,:,1], shifts=-1, dims=1)) * tr.conj(u[:,:,:,0])
         #gauge action contribution
         #Additional negative sign added from Hamilton's eqs.
-        fg = (-1.0)*(-1.0j* (2.0/self.lam**2)/2.0)* (u*a - tr.conj(a)*tr.conj(u))
+        fg = (-1.0)*(-1.0j* (1.0/self.lam**2)/2.0)* (u*a - tr.conj(a)*tr.conj(u))
 
         #TODO: fermion action contribution
         #Free theory case for now
@@ -222,10 +224,10 @@ class schwinger():
     #Input: self
     #Output: Hot started U[1] gauge field of batch*lattice size.
         #the final dimension of 2 is for link variable in t, then x direction
-    def hotStart(self):
+    def hotStart(self, a):
         alpha = tr.normal(0.0, 2*np.pi, [self.Bs, self.V[0], self.V[1], 2],
                       dtype=self.dtype,device=self.device)
-        u = tr.exp(1.0j*alpha)
+        u = tr.exp(1.0j*a*alpha)
         return u
     
     #Input: self
@@ -251,11 +253,14 @@ def main():
     print(f"Using {device} device")
     L=16
     batch_size=1
+    #Coupling
     lam =0.5
     mass= 0.1
+    #Spacing
+    a = 1
     sch = schwinger([L,L],lam,mass,batch_size=batch_size)
 
-    u = sch.hotStart()
+    u = sch.hotStart(a)
     u_cold = sch.coldStart()
     d=sch.diracOperator(u)
     d_cold = sch.diracOperator(u_cold)
@@ -296,29 +301,85 @@ def main():
     #Test stepsize
     if(True):
         #Average over a batch of configurations
-        L=16
+        #Parameters imitate that of Duane 1987 HMC Paper
+        L=8
         batch_size=1000
-        lam =0.5
+        lam =1.015
         mass= 0.1
         sch = schwinger([L,L],lam,mass,batch_size=batch_size)
 
-        u = sch.hotStart()
+        u = sch.hotStart(a)
 
         e2 = []
-        dH = [] 
+        dH = []
+        Herr= [] 
 
-        for e in np.linspace(0.5, 1.5, 1000):
-            mn = i.minnorm2(sch.force,sch.evolveQ,1,e)
-            sim = h.hmc(sch, mn, False)
+        for e in np.linspace(0.05, 1, 100):
+            lf = i.leapfrog(sch.force,sch.evolveQ,1,e)
+            sim = h.hmc(sch, lf, False)
             e2.append(e**2)
-            dH.append(tr.mean(sim.step_DH(u)))
+            sdH = np.abs(sim.step_DH(u))
+            dH.append(tr.mean(sdH))
+            Herr.append(tr.std(sdH))
+            
+
+        lineary = np.linspace(dH[0], dH[99], 100)
+        linearx = np.linspace(e2[0], e2[99], 100)
 
         fig, ax1 = plt.subplots(1,1)
 
-        ax1.plot(e2, dH)
-        ax1.set_ylabel(r'$\Delta H$')
+        ax1.errorbar(e2, dH, yerr=Herr)
+        ax1.plot(linearx, lineary, '--r')
+        ax1.set_ylabel(r'$|\Delta H|$')
         ax1.set_xlabel(r'$\epsilon^2$')
         plt.show()
+
+    #Plaquette average - In progress
+    if(False):
+        #Average over a batch of configurations
+        #Parameters imitate that of Duane 1987 HMC Paper
+        L=8
+        batch_size=1
+        lam =1.015
+        mass= 0.1
+        sch = schwinger([L,L],lam,mass,batch_size=batch_size)
+
+        u = sch.hotStart(a)
+
+        pl_avg = []
+        #Need to generalize to larger batch size
+        #pl_err= []
+
+        #TODO: Generalize to >0 batch size
+        for e in np.linspace(0.05, 0.16, 100):
+            #Tune leap frog to desired step size
+            lf = i.leapfrog(sch.force,sch.evolveQ,50,50.0*e)
+            sim = h.hmc(sch, lf, True)
+            #Evolve, say, 10 steps of HMC- not clear from paper how many
+            #HMC steps are run
+            u_upd = sim.evolve(u, 10)
+            #Generate plaquette matrix of new config
+            pl = u_upd[:,:,:,0]*tr.roll(u_upd[:,:,:,1], shifts=-1, dims=1) \
+            * tr.conj(tr.roll(u_upd[:,:,:,0], shifts=-1, dims=2))*tr.conj(u_upd[:,:,:,1]) 
+            #Average
+            pl_avg.append(tr.mean(pl))
+
+        fig, ax1 = plt.subplots(1,1)
+
+        ax1.plot(np.linspace(0.5, 16, 100), pl_avg)
+        ax1.set_ylabel(r'Plaquette Average')
+        ax1.set_xlabel(r'$\epsilon$')
+        plt.show()
+
+        
+            
+
+        
+
+
+
+
+
 
 
 
