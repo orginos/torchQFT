@@ -33,6 +33,7 @@ class schwinger():
 
     #Section for Dirac operator and some needed functionality for manipulating it: ************************************************
     # Halted development on this section to focus on pure gauge
+    # TODO: Update the re-ordering of indices
 
     #Inputs: self, gauge field u
     #Outputs: Dirac operator
@@ -166,8 +167,8 @@ class schwinger():
     #TODO: Generalize to higher dimension lattices
     def gaugeAction(self, u):
         #plaquette matrix
-        pl = u[:,:,:,0]*tr.roll(u[:,:,:,1], shifts=-1, dims=1) \
-            * tr.conj(tr.roll(u[:,:,:,0], shifts=-1, dims=2))*tr.conj(u[:,:,:,1]) 
+        pl = u[:,0,:,:]*tr.roll(u[:,1,:,:], shifts=-1, dims=1) \
+            * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:]) 
         
         S = (1/self.lam**2) *(tr.sum(tr.real(tr.ones_like(pl) - pl),dim=(1,2)))
         return S
@@ -189,11 +190,11 @@ class schwinger():
         a = tr.zeros_like(u)
 
 
-        #TODO:Generalize to higher dimension lattices
-        a[:,:,:,0]  = tr.roll(u[:,:,:,1], shifts=-1, dims=1) * tr.conj(tr.roll(u[:,:,:,0], shifts=-1, dims=2))*tr.conj(u[:,:,:,1]) \
-                      + tr.conj(tr.roll(u[:,:,:,1], shifts=(-1,1), dims= (1,2)))*tr.conj(tr.roll(u[:,:,:,0], shifts=1, dims=2)) * tr.roll(u[:,:,:,1], shifts=1, dims=2)
-        a[:,:,:,1] = tr.conj(tr.roll(u[:,:,:,0], shifts=(1,-1), dims=(1,2))) * tr.conj(tr.roll(u[:,:,:,1], shifts=1, dims=1)) * tr.roll(u[:,:,:,0], shifts=1, dims=1) \
-                     + tr.roll(u[:,:,:,0], shifts=-1, dims=2) * tr.conj(tr.roll(u[:,:,:,1], shifts=-1, dims=1)) * tr.conj(u[:,:,:,0])
+        
+        a[:,0,:,:]  = tr.roll(u[:,1,:,:], shifts=-1, dims=1) * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:]) \
+                      + tr.conj(tr.roll(u[:,1,:,:], shifts=(-1,1), dims= (1,2)))*tr.conj(tr.roll(u[:,0,:,:], shifts=1, dims=2)) * tr.roll(u[:,1,:,:], shifts=1, dims=2)
+        a[:,1,:,:] = tr.conj(tr.roll(u[:,0,:,:], shifts=(1,-1), dims=(1,2))) * tr.conj(tr.roll(u[:,1,:,:], shifts=1, dims=1)) * tr.roll(u[:,0,:,:], shifts=1, dims=1) \
+                     + tr.roll(u[:,0,:,:], shifts=-1, dims=2) * tr.conj(tr.roll(u[:,1,:,:], shifts=-1, dims=1)) * tr.conj(u[:,0,:,:])
         #gauge action contribution
         #Additional negative sign added from Hamilton's eqs.
         fg = (-1.0)*(-1.0j* (1.0/self.lam**2)/2.0)* (u*a - tr.conj(a)*tr.conj(u))
@@ -210,11 +211,11 @@ class schwinger():
 
 
     def kinetic(self,P):
-        return tr.einsum('bxyz,bxyz->b',P,P)/2.0 
+        return tr.einsum('buxy,buxy->b',P,P)/2.0 
     
     #HMC refresh of momentum
     def refreshP(self):
-        P = tr.normal(0.0,1.0,[self.Bs,self.V[0],self.V[1], 2],dtype=self.dtype,device=self.device)
+        P = tr.normal(0.0,1.0,[self.Bs,2,self.V[0],self.V[1]],dtype=self.dtype,device=self.device)
         return P
     
     #HMC position evolve 
@@ -224,17 +225,17 @@ class schwinger():
     #Input: self
     #Output: Hot started U[1] gauge field of batch*lattice size.
         #the final dimension of 2 is for link variable in t, then x direction
-    def hotStart(self, a):
-        alpha = tr.normal(0.0, 2*np.pi, [self.Bs, self.V[0], self.V[1], 2],
+    def hotStart(self):
+        alpha = tr.normal(0.0, 2*np.pi, [self.Bs, 2, self.V[0], self.V[1]],
                       dtype=self.dtype,device=self.device)
-        u = tr.exp(1.0j*a*alpha)
+        u = tr.exp(1.0j*alpha)
         return u
     
     #Input: self
     #Output: Cold started U[1] gauge field of batch*lattice size.
         #the final dimension of 2 is for link variable in t, then x direction
     def coldStart(self):
-        return tr.ones(self.Bs, self.V[0], self.V[1], 2)
+        return tr.ones(self.Bs, 2, self.V[0], self.V[1])
     
     #Input: self
     #Output: normalized Dirac spinor lattice
@@ -247,59 +248,9 @@ class schwinger():
 
 
 def main():
-    plt.rcParams['text.usetex'] = True
-    
-    device = "cuda" if tr.cuda.is_available() else "cpu"
-    print(f"Using {device} device")
-    L=16
-    batch_size=1
-    #Coupling
-    lam =0.5
-    mass= 0.1
-    #Spacing
-    a = 1
-    sch = schwinger([L,L],lam,mass,batch_size=batch_size)
 
-    u = sch.hotStart(a)
-    u_cold = sch.coldStart()
-    d=sch.diracOperator(u)
-    d_cold = sch.diracOperator(u_cold)
-
-    mn2 = i.minnorm2(sch.force,sch.evolveQ,50,1.0)
-
-    sim = h.hmc(sch, mn2)
-
-    #Test plot of randomized link values in x direction
+    #Test stepsize error
     if(False):
-        #arccos of real part of the link -> randomized parameter
-        plt.imshow(tr.real(u[0,:,:,0]), cmap='hot', interpolation='nearest')
-        plt.show()
-
-
-    #Verify action functions run without error
-    #Runs, but values are unverified
-    if(False):
-        gS = sch.gaugeAction(u)
-        print("Gauge action: ", gS)
-
-
-    #test force function
-    if(False):
-        print("Force: ",sch.force(u))
-
-
-
-
-    #Test sim
-    if (False):
-        # plt.imshow(tr.arccos(tr.real(u[0,:,:,0])), cmap='hot', interpolation='nearest')
-        # plt.show()
-        u_upd = sim.evolve(u, 100)
-        plt.imshow(tr.real(u_upd[0,:,:,0]), cmap='hot', interpolation='nearest')
-        plt.show()
-
-    #Test stepsize
-    if(True):
         #Average over a batch of configurations
         #Parameters imitate that of Duane 1987 HMC Paper
         L=8
@@ -308,67 +259,95 @@ def main():
         mass= 0.1
         sch = schwinger([L,L],lam,mass,batch_size=batch_size)
 
-        u = sch.hotStart(a)
+        u0 = sch.hotStart()
 
         e2 = []
-        dH = []
-        Herr= [] 
+        dh = []
+        h_err= []
 
-        for e in np.linspace(0.05, 1, 100):
-            lf = i.leapfrog(sch.force,sch.evolveQ,1,e)
-            sim = h.hmc(sch, lf, False)
-            e2.append(e**2)
-            sdH = np.abs(sim.step_DH(u))
-            dH.append(tr.mean(sdH))
-            Herr.append(tr.std(sdH))
-            
+        p0 = sch.refreshP()
+        H0 = sch.action(u0) + sch.kinetic(p0)
 
-        lineary = np.linspace(dH[0], dH[99], 100)
-        linearx = np.linspace(e2[0], e2[99], 100)
+        for n in np.arange(10, 51):
+            im2 = i.minnorm2(sch.force, sch.evolveQ, n, 1.0)
+            p, u = im2.integrate(p0, u0)
+            H = sch.action(u) + sch.kinetic(p)
+            dh.append(tr.mean(H - H0))
+            h_err.append(tr.std(H - H0) / np.sqrt(batch_size - 1))
+            e2.append((1.0/n)**2)
 
         fig, ax1 = plt.subplots(1,1)
 
-        ax1.errorbar(e2, dH, yerr=Herr)
-        ax1.plot(linearx, lineary, '--r')
-        ax1.set_ylabel(r'$|\Delta H|$')
+        ax1.errorbar(e2, dh, yerr=h_err)
+        ax1.set_ylabel(r'$\Delta H$')
         ax1.set_xlabel(r'$\epsilon^2$')
         plt.show()
 
-    #Plaquette average - In progress
-    if(False):
+            
+
+
+        
+
+    #Plaquette average 
+    if(True):
         #Average over a batch of configurations
         #Parameters imitate that of Duane 1987 HMC Paper
         L=8
-        batch_size=1
-        lam =1.015
+        batch_size=1000 
+        lam =np.sqrt(1.0/0.970)
         mass= 0.1
         sch = schwinger([L,L],lam,mass,batch_size=batch_size)
 
-        u = sch.hotStart(a)
+        u = sch.hotStart()
 
         pl_avg = []
-        #Need to generalize to larger batch size
-        #pl_err= []
+        pl_err = []
 
-        #TODO: Generalize to >0 batch size
-        for e in np.linspace(0.05, 0.16, 100):
-            #Tune leap frog to desired step size
-            lf = i.leapfrog(sch.force,sch.evolveQ,50,50.0*e)
-            sim = h.hmc(sch, lf, True)
-            #Evolve, say, 10 steps of HMC- not clear from paper how many
-            #HMC steps are run
-            u_upd = sim.evolve(u, 10)
+        cpl_avg = []
+        cpl_err = []
+        cu = sch.coldStart()
+
+        #Measure plaquette average before HMC:
+        pl0 = u[:,0,:,:]*tr.roll(u[:,1,:,:], shifts=-1, dims=1) \
+            * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:])
+        cpl0 = cu[:,0,:,:]*tr.roll(cu[:,1,:,:], shifts=-1, dims=1) \
+            * tr.conj(tr.roll(cu[:,0,:,:], shifts=-1, dims=2))*tr.conj(cu[:,1,:,:])
+        #Average action
+        S0 = (1/lam**2) *(tr.real(tr.ones_like(pl0) - pl0))
+        pl_avg.append(tr.mean(S0))
+        pl_err.append(tr.std(S0)/np.sqrt(tr.numel(S0) - 1))
+        cS0 = (1/lam**2) *(tr.real(tr.ones_like(cpl0) - cpl0))
+        cpl_avg.append(tr.mean(cS0))
+        cpl_err.append(tr.std(cS0)/np.sqrt(tr.numel(cS0) - 1))
+ 
+
+       
+        for n in np.arange(0, 100):
+            #Tune integrator to desired step size
+            im2 = i.minnorm2(sch.force,sch.evolveQ,50, 1.0)
+            sim = h.hmc(sch, im2, False)
+            #Evolve, one HMC step
+            u = sim.evolve(u, 1)
+            cu = sim.evolve(cu, 1)
             #Generate plaquette matrix of new config
-            pl = u_upd[:,:,:,0]*tr.roll(u_upd[:,:,:,1], shifts=-1, dims=1) \
-            * tr.conj(tr.roll(u_upd[:,:,:,0], shifts=-1, dims=2))*tr.conj(u_upd[:,:,:,1]) 
-            #Average
-            pl_avg.append(tr.mean(pl))
+            pl = u[:,0,:,:]*tr.roll(u[:,1,:,:], shifts=-1, dims=1) \
+            * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:])
+            cpl = cu[:,0,:,:]*tr.roll(cu[:,1,:,:], shifts=-1, dims=1) \
+            * tr.conj(tr.roll(cu[:,0,:,:], shifts=-1, dims=2))*tr.conj(cu[:,1,:,:]) 
+            #Average action
+            S = (1/lam**2) *(tr.real(tr.ones_like(pl) - pl))
+            pl_avg.append(tr.mean(S))
+            pl_err.append(tr.std(S)/np.sqrt(tr.numel(S) - 1))
+            cS = (1/lam**2) *(tr.real(tr.ones_like(cpl) - cpl))
+            cpl_avg.append(tr.mean(cS))
+            cpl_err.append(tr.std(cS)/np.sqrt(tr.numel(cS) - 1))
 
         fig, ax1 = plt.subplots(1,1)
 
-        ax1.plot(np.linspace(0.5, 16, 100), pl_avg)
-        ax1.set_ylabel(r'Plaquette Average')
-        ax1.set_xlabel(r'$\epsilon$')
+        ax1.errorbar(np.arange(101), pl_avg, pl_err)
+        ax1.errorbar(np.arange(101), cpl_avg, cpl_err)
+        ax1.set_ylabel(r'$\langle S \rangle$')
+        ax1.set_xlabel(r'n')
         plt.show()
 
         
