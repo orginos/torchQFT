@@ -13,8 +13,8 @@ import integrators as i;
 import time;
 import matplotlib.pyplot as plt;
 
-gamma = tr.tensor([[[0.0, -1.0j], [-1.0j, 0.0]], [[0, -1], [1,0]], [[1,0], [0,-1]]])
-g5 = tr.tensor([[1.0+0.0j, 0], [0, -1.0+0.0j]])
+gamma = tr.tensor([[[0.0, 1.0], [1.0, 0.0]], [[0, -1.0j], [1.0j,0]]])
+g5 = tr.tensor([[1.0, 0], [0, -1.0]])
 
 class schwinger():
 
@@ -33,10 +33,40 @@ class schwinger():
 
     #Section for Dirac operator and some needed functionality for manipulating it: ************************************************
     # Halted development on this section to focus on pure gauge
-    # TODO: Update the re-ordering of indices
+    
+
+
+    #Inputs: self, gauge field u
+    #Output: the naive Dirac operator, BxNxNxNxNx2x2 tensor
+    #Writing the operator without Wilson improvement to demonstrate doublers
+    def naiveDiracOperator(self, u):
+        d = tr.zeros([self.Bs, self.V[0], self.V[1], self.V[0], self.V[1], 2,2], dtype=tr.complex64)
+        for i in range(0, self.V[0]):
+            for j in range(0, self.V[1]):
+                d[:, i, j, i , j, :, :] = self.mtil*tr.eye(2)
+                #Grab link variables on nearest neighbor lattice sites
+                #Boundary terms need conditional handling to match boundary conditions
+                if(i == 0):
+                   d[:,i,j, self.V[0]-1, j, :, :] = -1.0*tr.conj(u[:,self.V[0]-1, j, 0]) * gamma[0]
+                else:
+                    d[:,i,j, i-1, j, :, :] = tr.conj(u[:,i-1, j, 0]) * gamma[0]
+                if(i == self.V[0]-1):
+                   d[:,i,j, 0, j, :, :] = -1.0*tr.conj(u[:,i, j, 0]) * gamma[0]
+                else:
+                     d[:,i,j, i+1, j, :, :] = u[:,i, j, 0] * gamma[0]
+                if(j == 0):
+                   d[:,i,j, i, self.V[1]-1, :, :] = tr.conj(u[:,i, self.V[1]-1, 1]) * gamma[1] 
+                else:
+                    d[:,i,j, i, j-1, :, :] = tr.conj(u[:,i, j-1, 0]) * gamma[1]
+                if(j == self.V[1]-1):
+                   d[:,i,j, i, 0, :, :] = u[:,i, j, 1] * gamma[1] 
+                else:
+                     d[:,i,j, i, j+1, :, :] = u[:,i, j, 1] * gamma[1]
+
 
     #Inputs: self, gauge field u
     #Outputs: Dirac operator
+    # TODO: Update the re-ordering of indices
     def diracOperator(self, u):
 
         d = tr.zeros([self.Bs, self.V[0], self.V[1], self.V[0], self.V[1], 2,2], dtype=tr.complex64)
@@ -292,7 +322,8 @@ def main():
     if(True):
         #Average over a batch of configurations
         #Parameters imitate that of Duane 1987 HMC Paper
-        L=8
+        #16^2 lattice to more closely align with Lang 1986 paper
+        L=16
         batch_size=1000 
         lam =np.sqrt(1.0/0.970)
         mass= 0.1
@@ -307,47 +338,38 @@ def main():
         cpl_err = []
         cu = sch.coldStart()
 
-        #Measure plaquette average before HMC:
-        pl0 = u[:,0,:,:]*tr.roll(u[:,1,:,:], shifts=-1, dims=1) \
-            * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:])
-        cpl0 = cu[:,0,:,:]*tr.roll(cu[:,1,:,:], shifts=-1, dims=1) \
-            * tr.conj(tr.roll(cu[:,0,:,:], shifts=-1, dims=2))*tr.conj(cu[:,1,:,:])
         #Average action
-        S0 = (1/lam**2) *(tr.real(tr.ones_like(pl0) - pl0))
+        S0 = sch.action(u) / float(L**2)
         pl_avg.append(tr.mean(S0))
         pl_err.append(tr.std(S0)/np.sqrt(tr.numel(S0) - 1))
-        cS0 = (1/lam**2) *(tr.real(tr.ones_like(cpl0) - cpl0))
+        cS0 = sch.action(cu) / float(L**2)
         cpl_avg.append(tr.mean(cS0))
         cpl_err.append(tr.std(cS0)/np.sqrt(tr.numel(cS0) - 1))
  
 
        
-        for n in np.arange(0, 100):
+        for n in np.arange(0, 50):
             #Tune integrator to desired step size
             im2 = i.minnorm2(sch.force,sch.evolveQ,50, 1.0)
             sim = h.hmc(sch, im2, False)
             #Evolve, one HMC step
             u = sim.evolve(u, 1)
             cu = sim.evolve(cu, 1)
-            #Generate plaquette matrix of new config
-            pl = u[:,0,:,:]*tr.roll(u[:,1,:,:], shifts=-1, dims=1) \
-            * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:])
-            cpl = cu[:,0,:,:]*tr.roll(cu[:,1,:,:], shifts=-1, dims=1) \
-            * tr.conj(tr.roll(cu[:,0,:,:], shifts=-1, dims=2))*tr.conj(cu[:,1,:,:]) 
             #Average action
-            S = (1/lam**2) *(tr.real(tr.ones_like(pl) - pl))
+            S = sch.action(u) / float(L**2)
             pl_avg.append(tr.mean(S))
             pl_err.append(tr.std(S)/np.sqrt(tr.numel(S) - 1))
-            cS = (1/lam**2) *(tr.real(tr.ones_like(cpl) - cpl))
+            cS = sch.action(cu) / float(L**2)
             cpl_avg.append(tr.mean(cS))
             cpl_err.append(tr.std(cS)/np.sqrt(tr.numel(cS) - 1))
 
         fig, ax1 = plt.subplots(1,1)
 
-        ax1.errorbar(np.arange(101), pl_avg, pl_err)
-        ax1.errorbar(np.arange(101), cpl_avg, cpl_err)
+        ax1.errorbar(np.arange(51), pl_avg, pl_err, label="Hot Start")
+        ax1.errorbar(np.arange(51), cpl_avg, cpl_err, label = "Cold Start")
         ax1.set_ylabel(r'$\langle S \rangle$')
         ax1.set_xlabel(r'n')
+        ax1.legend(loc='lower right')
         plt.show()
 
         
