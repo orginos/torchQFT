@@ -38,6 +38,14 @@ class Identity(nn.Module):
         x = self.g(z)
         return x
 
+# to be used to make a realNVP with specific parity properties
+class ParityNet(nn.Module):
+    def __init__(self, net,Parity=+1):
+        super(ParityNet,self).__init__()
+        self.Parity = Parity
+        self.net = net
+    def forward(self,x):
+        return 0.5*(self.net(x) + self.Parity*self.net(-x))
     
 class RealNVP(nn.Module):
     def __init__(self, nets, nett, mask, prior,data_dims=(1)):
@@ -151,6 +159,20 @@ def FlowBijector(Nlayers=3,width=256):
     tV = mm.size
     nets = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV), nn.Tanh())
     nett = lambda: nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV))
+
+    # the number of masks determines layers
+    #Nlayers = 3
+    masks = tr.from_numpy(np.array([mm, 1-mm] * Nlayers).astype(np.float32))
+    normal = distributions.Normal(tr.zeros(tV),tr.ones(tV))
+    prior= distributions.Independent(normal, 1)
+    return  RealNVP(nets, nett, masks, prior, data_dims=(1,2))
+
+#prepares RealNVP for the Convolutional Flow Layer
+def FlowBijectorParity(Nlayers=3,width=256):
+    mm = np.array([1,0,0,1])
+    tV = mm.size
+    nets = lambda: ParityNet(nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV), nn.Tanh()),Parity=+1)
+    nett = lambda: ParityNet(nn.Sequential(nn.Linear(tV, width), nn.LeakyReLU(), nn.Linear(width, width), nn.LeakyReLU(), nn.Linear(width, tV)),Parity=-1)
 
     # the number of masks determines layers
     #Nlayers = 3
@@ -427,6 +449,69 @@ def test_realNVP():
     print("max  action diff: ", tr.max(diff.abs()).detach().numpy())
     print("mean action diff: ", diff.mean().detach().numpy())
     print("std  action diff: ", diff.std().detach().numpy())
+
+def test_realNVPparity():
+    import time
+    import matplotlib.pyplot as plt
+    
+
+    device = "cuda" if tr.cuda.is_available() else "cpu"
+    print(f"Using {device} device")
+    
+    L=4
+    V=L*L
+    batch_size=1000
+    lam =0.5
+    mass= -0.2
+    o  = p.phi4([L,L],lam,mass,batch_size=batch_size)
+
+    X = np.array(np.arange(L))[:,np.newaxis]
+    Y = np.array(np.arange(L))[np.newaxis,:]
+    X = np.repeat(X,L,axis=1)
+    Y = np.repeat(Y,L,axis=0)
+    mm = (X+Y)%2 # even odd mask
+    mm = mm.reshape(V)
+    nets = lambda: ParityNet(nn.Sequential(nn.Linear(V, 256), nn.LeakyReLU(), nn.Linear(256, 256), nn.LeakyReLU(), nn.Linear(256, V), nn.Tanh()),Parity=1)
+    nett = lambda: ParityNet(nn.Sequential(nn.Linear(V, 256), nn.LeakyReLU(), nn.Linear(256, 256), nn.LeakyReLU(), nn.Linear(256, V)),Parity=-1)
+    
+    # the number of masks determines layers
+    Nlayers = 3
+    masks = tr.from_numpy(np.array([mm, 1-mm] * Nlayers).astype(np.float32))
+    normal = distributions.Normal(tr.zeros(V),tr.ones(V))
+    prior= distributions.Independent(normal, 1)
+    flow = RealNVP(nets, nett, masks, prior)
+
+    x = prior.sample((batch_size, 1)).squeeze()
+    print("If zero the g map is odd:", (flow.g(x) + flow.g(-x)).norm().item())
+    zp,_ = flow.f(x) 
+    zm,_ = flow.f(-x)
+    print("If zero the f map is odd:",(zp+ zm).norm().item())
+    
+    optimizer = tr.optim.Adam([p for p in flow.parameters() if p.requires_grad==True], lr=1e-4)
+    for t in range(5001):   
+        #with torch.no_grad():
+        z = prior.sample((batch_size, 1)).squeeze()
+        x = flow.g(z) # generate a sample
+        loss = (flow.log_prob(x)+o.action(x.view(batch_size,L,L))).mean() # KL divergence (or not?)
+        optimizer.zero_grad()
+        loss.backward(retain_graph=True)
+        optimizer.step() 
+        if t % 500 == 0:
+            #print(z.shape)
+            print('iter %s:' % t, 'loss = %.3f' % loss)
+    print("Testing Reversibility")
+    z = prior.sample((1000, 1)).squeeze()
+    x = flow.g(z)
+    zz,j=flow.f(x)
+
+    rev_check = (tr.abs(zz-z)/V).mean()
+    print("Should be zero if reversible: ",rev_check.detach().numpy())
+
+    diff = o.action(x.view(x.shape[0],L,L))+flow.log_prob(x)
+    print("max  action diff: ", tr.max(diff.abs()).detach().numpy())
+    print("mean action diff: ", diff.mean().detach().numpy())
+    print("std  action diff: ", diff.std().detach().numpy())
+
     
 def test_Identity():
     import time
@@ -776,6 +861,10 @@ def main():
     if(args.t=='realNVP'):
         print("Testing realNVP")
         test_realNVP()
+    elif(args.t=='realNVPparity'):
+        print("Testing realNVP with parity")
+        test_realNVPparity()
+        
     elif(args.t=='id'):
         print("Testing Identity")
         test_Identity()

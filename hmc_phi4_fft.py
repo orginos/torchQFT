@@ -41,7 +41,7 @@ def correlation_length(L,ChiM,C2p):
 
 L=16
 lat = [L,L]
-lam = 1.0
+lam = 3.0
 mas = -0.5
 Nwarm = 5000
 Nmeas = 1000
@@ -65,6 +65,8 @@ phi = hmc.evolve(phi,Nwarm)
 toc=time.perf_counter()
 print(f"time {(toc - tic)*1.0e6/Nwarm:0.4f} micro-seconds per HMC trajecrory")
 
+phi_l = phi.flatten()
+
 tic=time.perf_counter()
 fx = tr.fft.fft2(phi)
 toc=time.perf_counter()
@@ -77,7 +79,9 @@ for k in pbar:
      x=hmc.evolve(phi,Nskip)
      fx = tr.fft.fft2(x).detach()
      c2p[k,:,:] = (tr.real(fx*tr.conj(fx))).mean(dim=0).detach()
-
+     phi_l = tr.cat([phi_l, x.flatten()],dim=0)
+     #print(phi_l.shape)
+     
 m_c2p=c2p.mean(dim=0)
 e_c2p=c2p.std(dim=0)/np.sqrt(Nmeas-1)
 ic2p= 1.0/m_c2p
@@ -85,6 +89,8 @@ ec2p= ic2p*(e_c2p/m_c2p)
 plt.errorbar(np.arange(L),ic2p[:,0],ec2p[:,0],marker='.')
 plt.show()
 
+plt.hist(phi_l,1000,density=True)
+plt.show()
 
 p2 = tr.zeros_like(m_c2p)
 for x in range(L):
