@@ -28,6 +28,10 @@ parser.add_argument('-g' , type=float, default=1.0 )
 parser.add_argument('-b' , type=int  , default=128 )
 parser.add_argument('-w' , type=int  , default=16  )
 parser.add_argument('-nl', type=int  , default=1   )
+parser.add_argument('-sb' , type=int  , default=1    )
+parser.add_argument('-nc' , type=int  , default=1    )
+parser.add_argument('-fbj', type=bool , default=False)
+
 
 
 args = parser.parse_args()
@@ -46,6 +50,9 @@ depth = args.d
 L=args.L
 batch_size=args.b
 
+Nconvs = args.nc
+
+
 V=L*L
 lam =args.g
 mass=args.m
@@ -60,7 +67,13 @@ prior= distributions.Independent(normal, 1)
 width=args.w
 Nlayers=args.nl
 bij = lambda: m.FlowBijector(Nlayers=Nlayers,width=width)
-mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior)
+if(args.fbj):
+     bij_list = []
+     for k in range(2*Nconvs):
+          bij_list.append(m.FlowBijector(Nlayers=Nlayers,width=width))
+     bij = m.BijectorFactory(bij_list).bij
+
+mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior,Nconvs=Nconvs)
 models = []
 
 print("Initializing ",depth," stages")
@@ -80,5 +93,5 @@ sm.load_state_dict(tr.load(file))
 sm.eval()
 
 print("starting model check")
-validate(batch_size,'foo',sm)
+validate(batch_size,args.sb,'foo',sm)
 

@@ -170,6 +170,11 @@ def validate(batch_size,super_batch_size,title,mm):
     #plt.show()
     plt.close()
 
+    plt.hist(x.detach().flatten(),200,density=True)
+    plt.savefig("sm_ph_"+title+".pdf")
+    plt.close()
+    
+     
 def test_reversibility():
     device = "cuda" if tr.cuda.is_available() else "cpu"
     print(f"Using {device} device")
