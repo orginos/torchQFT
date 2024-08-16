@@ -25,7 +25,8 @@ class hmc:
             return np.mean(self.AcceptReject)
         else:
             return 0
-        
+    
+    #Original evolve function
     def evolve(self,q,N):
         qshape =tuple([q.shape[0]]+[1]*(len(q.shape)-1))
         for k in range(N):
@@ -41,6 +42,41 @@ class hmc:
             AR = tr.where(Acc_flag,tr.ones_like(DH),tr.zeros_like(DH))
             self.AcceptReject.extend(AR.tolist())
             q = tr.where(Acc_flag.view(qshape),q,q0)
+            
+            if(self.verbose):
+                av_ar = tr.mean(AR)
+                print(" HMC: ",k," DH= ",DH.tolist()," A/R= ",Acc_flag.tolist()," Pacc= ",av_ar.item())
+                    
+        return q
+
+    #Evolve function for handling gauge fields and fermion fields as a tuple
+    def evolve_f(self,q,N, f=False):
+        qshape =tuple([q[0].shape[0]]+[1]*(len(q[0].shape)-1))
+        for k in range(N):
+            q0=tuple(q) # copy the q
+            p0 = self.T.refreshP()
+            H0 = self.T.kinetic(p0) + self.T.action(q0)
+            #Generate psuedofermions if neccesary
+            if f == True:
+                f_upd = self.T.generate_Psuedofermion(q[2])
+                q = (q[0], f_upd, q[1])
+            p,q = self.I.integrate(p0,q)
+            Hf = self.T.kinetic(p) + self.T.action(q)
+            DH = Hf - H0
+            acc_prob=tr.where(DH<0,tr.ones_like(DH),tr.exp(-DH))
+            R=tr.rand_like(acc_prob)
+            Acc_flag = (R<acc_prob)
+            AR = tr.where(Acc_flag,tr.ones_like(DH),tr.zeros_like(DH))
+            self.AcceptReject.extend(AR.tolist())
+            #This is hacky... must be better way
+            u = tr.where(Acc_flag.view(qshape),q[0],q0[0])
+            if f == False:
+                q = (u,)
+            else:
+                f = tr.where(Acc_flag.view(qshape),q[1],q0[1])
+                d = tr.where(Acc_flag.view(qshape),q[2],q0[2])
+                q = (u, f, d)
+            # q = tr.where(Acc_flag.view(qshape),q,q0)
             
             if(self.verbose):
                 av_ar = tr.mean(AR)
