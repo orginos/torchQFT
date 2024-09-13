@@ -52,14 +52,19 @@ class hmc:
     #Evolve function for handling gauge fields and fermion fields as a tuple
     def evolve_f(self,q,N, f=False):
         qshape =tuple([q[0].shape[0]]+[1]*(len(q[0].shape)-1))
+        #Acceptance flag shapes needed with fermion field/dirac operator
+        if f == True:
+            fshape = tuple([q[1].shape[0]]+[1]*(len(q[1].shape)-1))
+            dshape = tuple([q[2].shape[0]]+[1]*(len(q[2].shape)-1))
+
         for k in range(N):
+            #Generate psuedofermions if neccesary
+            if f == True:
+                f_upd = self.T.generate_Pseudofermions(q[2])
+                q = (q[0], f_upd, q[2])
             q0=tuple(q) # copy the q
             p0 = self.T.refreshP()
             H0 = self.T.kinetic(p0) + self.T.action(q0)
-            #Generate psuedofermions if neccesary
-            if f == True:
-                f_upd = self.T.generate_Psuedofermion(q[2])
-                q = (q[0], f_upd, q[1])
             p,q = self.I.integrate(p0,q)
             Hf = self.T.kinetic(p) + self.T.action(q)
             DH = Hf - H0
@@ -68,15 +73,19 @@ class hmc:
             Acc_flag = (R<acc_prob)
             AR = tr.where(Acc_flag,tr.ones_like(DH),tr.zeros_like(DH))
             self.AcceptReject.extend(AR.tolist())
-            #This is hacky... must be better way
             u = tr.where(Acc_flag.view(qshape),q[0],q0[0])
+            #This is hacky... must be better way
             if f == False:
                 q = (u,)
             else:
-                f = tr.where(Acc_flag.view(qshape),q[1],q0[1])
-                d = tr.where(Acc_flag.view(qshape),q[2],q0[2])
-                q = (u, f, d)
+                ff = tr.where(Acc_flag.view(fshape),q[1],q0[1])
+                #tr.where doesn't accept dense matrices
+                d_dense = q[2].to_dense()
+                d0_dense = q0[2].to_dense()
+                d = tr.where(Acc_flag.view(dshape),d_dense,d0_dense)
+                q = (u, ff, d.to_sparse())
             # q = tr.where(Acc_flag.view(qshape),q,q0)
+
             
             if(self.verbose):
                 av_ar = tr.mean(AR)

@@ -79,20 +79,24 @@ class schwinger():
     #outputs: Bx(VolxNd) pseudofermion field
     def generate_Pseudofermions(self, d):
         x = tr.normal(0, 2.0*np.pi, [self.Bs, self.V[0]*self.V[1]*self.Nd], dtype=tr.complex64)
-        p = tr.einsum('bxy, by-> bx', d.to_dense(), tr.exp(x))
-        return p
+        p = tr.einsum('bxy, by-> bx', d.to_dense(), tr.exp(1.0j*x))
+        norm = np.sqrt(tr.einsum('bx, bx -> b', p, p.conj()))
+        
+        return tr.einsum("bx, b->bx", p, 1.0/norm)
 
     #Input: self, Bx(VolxNd)x(VolxNd) dirac operator d, Bx(VolxNd) pseudofermion field p
     #Output: Bx1 fermio action
     def fermionAction(self, d, p):
-        p1 = tr.einsum('bxy, by -> bx', d.to_dense(), p)
+        d_dense = d.to_dense()
+        m =tr.inverse(tr.einsum('bxy, byz-> bxz', d_dense, d_dense.conj().transpose(1,2)))
+        p1 = tr.einsum('bxy, by -> bx', m, p)
         return tr.einsum('bx, bx -> b', tr.conj(p), p1)
 
 #********************************************************************************************************************************
 
 
 #Gauge theory ****************************************************************************************************************
-    #Inputs: self, BxLxLxmu gauge field u 
+    #Inputs: self, BxmuxLxL gauge field u 
     #Outputs: Pure gauge action, Bx1
     #TODO: Generalize to higher dimension lattices
     def gaugeAction(self, u):
@@ -117,7 +121,7 @@ class schwinger():
             return self.gaugeAction(q[0]).type(self.dtype) + tr.abs(self.fermionAction(q[2], q[1])).type(self.dtype)
     
 
-    #TODO: Write fermion force contribution
+
     #Inputs: self, tuple of gauge field, fermion field, dirac operator
     #Output: force tensor for updating momentum tensor in HMC
     def force(self, q):
@@ -133,17 +137,72 @@ class schwinger():
         a[:,1,:,:] = tr.conj(tr.roll(u[:,0,:,:], shifts=(1,-1), dims=(1,2))) * tr.conj(tr.roll(u[:,1,:,:], shifts=1, dims=1)) * tr.roll(u[:,0,:,:], shifts=1, dims=1) \
                      + tr.roll(u[:,0,:,:], shifts=-1, dims=2) * tr.conj(tr.roll(u[:,1,:,:], shifts=-1, dims=1)) * tr.conj(u[:,0,:,:])
         #gauge action contribution
-        #Additional negative sign added from Hamilton's eqs.
-        fg = (-1.0)*(-1.0j* (1.0/self.lam**2)/2.0)* (u*a - tr.conj(a)*tr.conj(u))
+        fg = (-1.0j* (1.0/self.lam**2)/2.0)* (u*a - tr.conj(a)*tr.conj(u))
 
-        #TODO: fermion action contribution
-        #Quenched approximation
-        ff = tr.zeros_like(u)
+
+        #If fermions aren't present, simply return force of gauge field
+        if len(q) == 1:
+            #Force is already real, force cast for downstream errors
+            #Additional negative sign added from Hamilton's eqs.
+            return (-1.0)*tr.real(fg).type(self.dtype)
+        
+        #Otherwise, compute force of the fermion fields
+        d_dense = q[2].to_dense()
+        f = q[1]
+
+        #Dirac Op. derivative- very similar to dirac operator itself without mass term:
+        #Empty bx2x(V)x(Vx2)x(Vx2)
+        dd = tr.zeros([self.Bs, self.Nd, self.V[0]*self.V[1], self.V[0]*self.V[1]*self.Nd, self.V[0]*self.V[1]*self.Nd], dtype=tr.complex64)
+        dd= dd.to_sparse()
+       
+        #enumeration of lattice sites
+        p_f = tr.tensor(np.arange(self.V[0]*self.V[1]))
+        #Reshape to match lattice geometry
+        p =tr.reshape(p_f, (self.V[0], self.V[1]))
+
+        for mu in [0, 1]:
+            #Forward shifted indices
+            p_s =  tr.roll(p, shifts = -1, dims=mu)
+            #Flatten the 2D reps of lattice/field to one dimension
+            p_sf = tr.reshape(p_s, (-1,))
+            u_f = tr.reshape(u[:, mu, :, :], (self.Bs, self.V[0]*self.V[1]))
+            d_dir = tr.zeros([self.Bs, self.Nd, self.V[0]*self.V[1], self.V[0]*self.V[1], self.V[0]*self.V[1]], dtype=tr.complex64)
+            d_dir[:, mu, p_f, p_f, p_sf] = u_f
+            #Note included imaginary number below due to derivative
+            dd = tr.add(tr.kron(d_dir, -0.5j*(tr.eye(2) - gamma[mu])), dd)
+
+            #Backwards shifted indices
+            p_s =  tr.roll(p, shifts = +1, dims=mu)
+            #Flatten the 2D reps of lattice/field to one dimension
+            p_sf = tr.reshape(p_s, (-1,))
+            u_f = tr.reshape(tr.conj(tr.roll(u[:, mu, :, :], shifts=1, dims=mu+1)), (self.Bs, self.V[0]*self.V[1]))
+            d_dir = tr.zeros([self.Bs,self.Nd, self.V[0]*self.V[1], self.V[0]*self.V[1], self.V[0]*self.V[1]], dtype=tr.complex64)
+            d_dir[:, mu, p_sf, p_f, p_sf] = u_f
+            #Note included imaginary number below due to derivative
+            dd = tr.add(tr.kron(d_dir, 0.5j*(tr.eye(2) + gamma[mu])), dd)
+
+        dd_dense= dd.to_dense()
+
+        #With Dirac operator gauge link derivative constructed, compute the full fermion force
+        m = tr.einsum('bimxy, byz-> bimxz', dd_dense, d_dense.conj().transpose(1,2)) + \
+              tr.einsum('bxy, bimyz->bimxz', d_dense, dd_dense.conj().transpose(3,4))
+        
+        #D D^dagger inverse - maybe can store this earlier on to reuse?
+        ddi =tr.inverse(tr.einsum('bxy, byz-> bxz', d_dense, d_dense.conj().transpose(1,2)))
+        v = tr.einsum('bxy, by ->bx', ddi, f)
+
+
+        
+        ff = -1.0*tr.einsum('bx, bimxy, by-> bim', v.conj(), m, v)
+
+        #Match to geometry of gauge force object
+        ff= tr.reshape(ff, [self.Bs, 2, self.V[0], self.V[1]])
             
 
 
-        #force is already be real... force the cast for downstream errors
-        return (tr.real(fg+ ff)).type(self.dtype)
+        #fermion force has small complex components.. take real part only?
+        #Additional negative sign added from Hamilton's eqs.
+        return ((-1.0)*tr.real(fg+ ff)).type(self.dtype)
         #return fg + ff
 
 
@@ -204,21 +263,6 @@ class schwinger():
         return ev / np.sqrt(1.0*self.V[1])
                 
         
-        # #Dirac inverse in tensor format
-        # d_inv_tsr = tr.reshape(d_inv, [self.Bs, self.V[0], self.V[1], self.V[0], self.V[1], 2, 2])
-
-        # #BxLxLx2x2 tensors
-        # sf = d_inv_tsr[:, 0, 0, :, :, :, :]
-        # sb = d_inv_tsr[:,:,:, 0, 0, :, :]
-
-        # #BxLxL tensor
-        # #TODO: Same as abs(D^-1)^2 ?
-        # c = -1.0*tr.einsum('ij, bxyjk, km, bxymi -> bxy', g5, sf, g5, sb)
-
-
-
-        # #BxL tensor
-        # return tr.sum(c, dim=2) /np.sqrt(1.0*self.V[1])
 
 
 
