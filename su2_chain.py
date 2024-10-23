@@ -154,6 +154,9 @@ class field():
         nn = tr.norm(P,dim=(self.ci[0],self.ci[1]))/np.sqrt(2)
         E = tr.einsum('...,ij->...ij',tr.cos(nn),tr.eye(2,2)) + tr.einsum('...,...ij->...ij',tr.sin(nn)/nn,P) 
         return E
+
+    def traceSquared(self,P):
+        return tr.einsum('...ij,...ij->',P,P.conj()).real
         
 class SU2chain():
     def __init__(self,beta,field_type):
@@ -179,6 +182,10 @@ class SU2chain():
         P[...,1,1]-=trace
         P *= 0.5
         return P
+
+    def kinetic(self,P):
+        return self.f.traceSquared(P)
+        
         
 def main():
     import matplotlib.pyplot as plt
