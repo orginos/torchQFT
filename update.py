@@ -79,7 +79,7 @@ class hmc:
                 q = (u,)
             else:
                 ff = tr.where(Acc_flag.view(fshape),q[1],q0[1])
-                #tr.where doesn't accept dense matrices
+                #tr.where doesn't accept sparse matrices
                 d_dense = q[2].to_dense()
                 d0_dense = q0[2].to_dense()
                 d = tr.where(Acc_flag.view(dshape),d_dense,d0_dense)
