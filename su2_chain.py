@@ -156,8 +156,13 @@ class field():
         return E
 
     def traceSquared(self,P):
-        return tr.einsum('...ij,...ij->',P,P.conj()).real
-        
+        return tr.einsum('b...ij,b...ij->b',P,P.conj()).real
+
+    def evolveQ(self,dt,P,Q):
+        R = self.expo(dt*P)
+        return  tr.einsum('...ik,...kj->...ij',R,Q)
+
+
 class SU2chain():
     def __init__(self,beta,field_type):
         self.beta = beta # the coupling
@@ -167,12 +172,12 @@ class SU2chain():
         A = self.f.Nd*self.f.Vol
         # normalize the action so that it is zero when the spins are 1
         #print(A)
-        for mu in range(self.gf.Nd):
-                A = A - trace_nn_prod(mu).real/float(self.f.Nc)
+        for mu in range(self.f.Nd):
+                A = A - self.f.trace_nn_prod(U,mu).real/float(self.f.Nc)
         return self.beta*A
 
     def force(self,U):
-        return self.f.nn_force(U)*(self.beta/float(self.gf.Nc))
+        return self.f.nn_force(U)*(self.beta/float(self.f.Nc))
 
     def refreshP(self):
         P = tr.normal(0.0,1.0,self.f.shape,dtype=self.f.dtype,device=self.f.device)
@@ -185,8 +190,7 @@ class SU2chain():
 
     def kinetic(self,P):
         return self.f.traceSquared(P)
-        
-        
+                
 def main():
     import matplotlib.pyplot as plt
 
