@@ -332,9 +332,79 @@ class schwinger():
     
 
 
-                
-        
+
+# Domain Decomposition Development *******************************************
 
 
+    #input: Lattice configuration, timeslice for domain boundaries
+    #Output: Domain Decompostion based block-banded Dirac operator
+    #Note assumes 2 subdomains, with width 2 boundaries for naive implementation
+    def bb_DiracOperator(self, q, xcut_1, xcut_2):
+        #enumeration of lattice sites-flat
+        p_f = tr.tensor(np.arange(self.V[0]*self.V[1]))
+        #Reshape to match lattice geometry
+        p =tr.reshape(p_f, (self.V[0], self.V[1]))
 
+        #define 2 width boundary region indices
+        b1 = p[xcut_1:xcut_1+2, :].reshape(-1,)
+        b2 = p[xcut_2:xcut_2+2, :].reshape(-1,)
+
+        #Subdomain indices
+        s1 = p[0:xcut_1, :].reshape(-1,)
+        s2 = p[xcut_1 + 2:xcut_2,:].reshape(-1,)
+
+        #Reordered indices for block-banded structure
+        ri = tr.cat([b1,b2,s1,s2])
+
+        d = q[2].to_dense()
+
+        #Block diagonal dirac operator
+        bd_d = tr.zeros_like(d)
+
+        #Naive block banded construction
+        i = 0
+        for n in ri:
+            #O(n) approach- in development
+            #Fill in Dirac space matrix at each re-ordered spacetime index
+            # bd_d[:, 2*i,0::2] = tr.index_select(d[:, 2*n, :], 1, 2*ri)
+            # bd_d[:,2*i, 1::2] = tr.index_select(d[:, 2*n, :], 1, 2*ri + 1)
+            # bd_d[:, 2*i+1,0::2] = tr.index_select(d[:, 2*n+1, :], 1, 2*ri)
+            # bd_d[:,2*i+1, 1::2] = tr.index_select(d[:, 2*n+1, :], 1, 2*ri + 1)
+
+            
+            # #Naive O(n^2) algorithm
+            j=0
+            for m in ri:
+                #Take 2x2 matrix of Dirac space for each index
+                bd_d[:, 2*i:2*i+2, 2*j:2*j+2] = d[:, 2*n:2*n+2, 2*m:2*m+2]
+                j+=1
+            i+=1
+
+        #Return sparse, as that is how normal operator is treated
+        return bd_d.to_sparse()
     
+    #input: Lattice configuration, timeslice for domain boundaries
+    #Output: Domain Decompostion based factorized propogator matrix between subdomains
+    #Note assumes 2 subdomains for naive implementation
+    def dd_Factorized_Propogator(self, q, xcut_1, xcut_2):
+
+        bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2)
+
+        bb_d = bb_d.to_dense()
+        
+        #Isolate sub matrices
+        #Assumes 2 width 2 timeslice boundaries
+        d00 = bb_d[:,0:8*self.V[1], 0:8*self.V[1]]
+        d01 = bb_d[:, 0:8*self.V[1], 8*self.V[1]:]
+        d10 = bb_d[:, 8*self.V[1]:, 0:8*self.V[1]]
+        d11 = bb_d[:, 8*self.V[1]:, 8*self.V[1]:]
+
+        #Schur complement
+        s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, tr.inverse(d00), d01)
+
+        #Factorized propogator for points in subdomains
+        fp = tr.inverse(s11)
+        return fp
+    
+ 
+

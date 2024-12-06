@@ -17,7 +17,6 @@ import schwinger as s;
 import time;
 import matplotlib.pyplot as plt;
 import pandas as pd;
-import time;
 #High performance compiler
 from numba import njit, jit
 
@@ -475,7 +474,7 @@ def pi_plus_mass():
     sim = h.hmc(sch, im2, True)
     
     #Bring lattice to equilibrium
-    q = sim.evolve_f(q, 15, True)
+    q = sim.evolve_f(q, 50, True)
 
 
 
@@ -854,23 +853,43 @@ def autograd_pi_plus_mass():
 #Fit function for pion triplet
 #TODO: N_T is hardcoded- way to pass in fitting process?
 def f_pi_triplet(x, m, A):
-    N_T = 16
+    N_T = 8
     return A* (np.exp(-m *x) + np.exp(-(N_T - x)*m))
+
+#Fit for analytical pion mass as a function of quark mass and coupling to fit critical mas
+# def f_analytical_pi_triplet(x, mc):
+#     #Coupling
+#     lam = 1.0/np.sqrt(10.0)
+#     return 2.066*np.power(((x-mc)/lam)**2, 1.0/3.0) * lam
+
+def f_analytical_pi_triplet(x, A,mc):
+    #Coupling
+    lam = 1.0/np.sqrt(10.0)
+    #mc=-0.06
+    L=8.0
+    #Theoretical infinite volume mass
+    mt = 2.066*np.power(((x-mc)/lam)**2, 1.0/3.0) * lam
+    #FV adjustment
+    fv = A * (np.sqrt(mt)/np.sqrt(L))*np.exp(-mt*L)
+    return mt + fv
+
+
+#Fit function for finite volume effects
+def f_FV_Mass(L, m_inf, A):
+    return m_inf + A*(np.sqrt(m_inf)/np.sqrt(L))*np.exp(-m_inf*L)
 
 #Effective mass curve looks OK to eye test- run a fit on the curve to estimate mass
 def pion_triplet_fit():
     #Measurement process -given function for correlator of pi plus
-    batch_size=5
+    batch_size=30
     #lam =np.sqrt(1.0/0.970)
     lam = np.sqrt(1.0/10.0)
-    mass= 0.1
-    L = 16
+    #Below is bare mass... Need critical mass offset for analytical comparison
+    mass= -0.06*lam
+    L = 8
     L2 = 8
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
-    #Average correlation function for each lattice timeslice
-    c_list = []
-    c_err = []
 
     u = sch.hotStart()
 
@@ -882,11 +901,11 @@ def pion_triplet_fit():
     q =(u, f, d)
 
     #Tune integrator to desired step size
-    im2 = i.minnorm2(sch.force,sch.evolveQ,5, 1.0)
+    im2 = i.minnorm2(sch.force,sch.evolveQ,10, 1.0)
     sim = h.hmc(sch, im2, True)
     
-    #Bring lattice to equilibrium
-    q = sim.evolve_f(q, 10, True)
+    #Trying long equilibration
+    q = sim.evolve_f(q, 15, True)
 
 
 
@@ -950,17 +969,65 @@ def import_fit():
 
     #Fit the effective mass curve
     #Select only the time slices near the center of the lattice
-    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(4, 12), np.abs(a[0, 4:12]), sigma = np.abs(a[1, 4:12]))
+    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(3,6), np.abs(a[0, 3:6]), sigma = np.abs(a[1, 3:6]))
     print(popt)
     print(pcov)
 
     #Plot the fit & data
-    ax1.plot(np.linspace(0, 16, 100), f_pi_triplet(np.linspace(0, 16, 100), *popt))
-    ax1.errorbar(np.arange(0, 16), np.abs(a[0]), np.abs(a[1]), ls="", marker=".")
+    ax1.plot(np.linspace(0, 8, 100), f_pi_triplet(np.linspace(0, 8, 100), *popt))
+    ax1.errorbar(np.arange(0, 8), np.abs(a[0]), np.abs(a[1]), ls="", marker=".")
 
     plt.show()
 
 
+#Fit FV effects
+def FV_Fitting():
+    #Match filename
+    df = pd.read_csv('FV_fit_beta=10_m0=0.csv')
+
+    fig, ax1 = plt.subplots(1,1)
+
+    popt, pcov = sp.optimize.curve_fit(f_FV_Mass, df['L'], df['m'], sigma=df['std_dev'])
+    print(popt)
+    print(pcov)
+
+    #Plot fit and data
+    ax1.plot(np.linspace(2, 14, 100), f_FV_Mass(np.linspace(2,14,100), *popt))
+    ax1.errorbar(df['L'], df['m'], df['std_dev'], ls="", marker=".")
+
+    ax1.set_ylabel(r'$m_\pi$')
+    ax1.set_xlabel(r'$L$')
+
+    plt.show()
+
+
+#Fitting critical mass of Wilson-Dirac operator for given coupling
+def fit_critical_mass():
+    #Match filename
+    df = pd.read_csv('beta=10_L=8_m0_scan.csv')
+    #Coupling
+    lam = 1.0/np.sqrt(10.0)
+
+    fig, ax1 = plt.subplots(1,1)
+    
+    #Fit to lowest mo values
+    df_fit = df.loc[df['m0'] <= 0.01]
+    popt, pcov = sp.optimize.curve_fit(f_analytical_pi_triplet, df_fit['m0'], df_fit['mpi exp'], sigma = df_fit['std_dev'], p0=(6.25, -0.06))
+    print(popt)
+    print(pcov)
+
+    #Plot the fit
+    ax1.plot((np.linspace(-0.08, 0.3, 1000000) +0.06)/lam, f_analytical_pi_triplet(np.linspace(-0.08, 0.3, 1000000), 6.25, -0.06))
+
+
+
+    ax1.errorbar((df['m0']+0.06)/lam, df['mpi exp'], df['std_dev'], ls="", marker=".")
+
+    ax1.set_ylabel(r'$m_\pi$')
+    ax1.set_xlabel(r'$m_0/e$')
+
+    plt.show()
+    
 def main():
     #dH_eps2()
     #quenched_pi_plus_mass()
@@ -977,7 +1044,10 @@ def main():
     #pi_plus_comparison()
     #autograd_pi_plus_mass()
     pion_triplet_fit()
-    #import_fit()
+    import_fit()
+    #fit_critical_mass()
+    #FV_Fitting()
+
 
 
 
