@@ -34,6 +34,8 @@ parser.add_argument('-nl' , type=int  , default=1    )
 parser.add_argument('-sb' , type=int  , default=1    )
 parser.add_argument('-nc' , type=int  , default=1    )
 parser.add_argument('-fbj', type=bool , default=False)
+parser.add_argument('-sbj', type=bool , default=False)
+
 args = parser.parse_args()
 
 file=args.f
@@ -65,6 +67,8 @@ prior= distributions.Independent(normal, 1)
 
 width=args.w
 Nlayers=args.nl
+
+#non parity symmetric (default) bijector
 bij = lambda: m.FlowBijector(Nlayers=Nlayers,width=width)
 if(args.fbj):
      bij_list = []
@@ -72,7 +76,16 @@ if(args.fbj):
           bij_list.append(m.FlowBijector(Nlayers=Nlayers,width=width))
      bij = m.BijectorFactory(bij_list).bij
 
-#bij = lambda: m.FlowBijector_3layers(Nlayers=Nlayers,width=width)
+#use parity symmetric bijector
+if(args.sbj):
+     print("Using parity symmetric bijector")
+     bij = lambda: m.FlowBijectorParity(Nlayers=Nlayers,width=width)
+     if(args.fbj):
+          bij_list = []
+          for k in range(2*Nconvs):
+               bij_list.append(m.FlowBijectorParity(Nlayers=Nlayers,width=width))
+          bij = m.BijectorFactory(bij_list).bij
+
 mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior,Nconvs=Nconvs)
 models = []
 
