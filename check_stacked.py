@@ -20,19 +20,18 @@ from stacked_model import *
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-f' , default='no-load')
-parser.add_argument('-d' , type=int  , default=1   )
-parser.add_argument('-L' , type=int  , default=16  )
-parser.add_argument('-m' , type=float, default=-0.5)
-parser.add_argument('-g' , type=float, default=1.0 )
-parser.add_argument('-b' , type=int  , default=128 )
-parser.add_argument('-w' , type=int  , default=16  )
-parser.add_argument('-nl', type=int  , default=1   )
+parser.add_argument('-f'  , default='no-load')
+parser.add_argument('-d'  , type=int  , default=1    )
+parser.add_argument('-L'  , type=int  , default=16   )
+parser.add_argument('-m'  , type=float, default=-0.5 )
+parser.add_argument('-g'  , type=float, default=1.0  )
+parser.add_argument('-b'  , type=int  , default=128    )
+parser.add_argument('-w'  , type=int  , default=16   )
+parser.add_argument('-nl' , type=int  , default=1    )
 parser.add_argument('-sb' , type=int  , default=1    )
 parser.add_argument('-nc' , type=int  , default=1    )
 parser.add_argument('-fbj', type=bool , default=False)
-
-
+parser.add_argument('-sbj', type=bool , default=False)
 
 args = parser.parse_args()
 
@@ -49,9 +48,7 @@ print(f"Using {device} device")
 depth = args.d
 L=args.L
 batch_size=args.b
-
 Nconvs = args.nc
-
 
 V=L*L
 lam =args.g
@@ -66,12 +63,24 @@ prior= distributions.Independent(normal, 1)
 
 width=args.w
 Nlayers=args.nl
+
+#non parity symmetric (default) bijector
 bij = lambda: m.FlowBijector(Nlayers=Nlayers,width=width)
 if(args.fbj):
      bij_list = []
      for k in range(2*Nconvs):
           bij_list.append(m.FlowBijector(Nlayers=Nlayers,width=width))
      bij = m.BijectorFactory(bij_list).bij
+
+#use parity symmetric bijector
+if(args.sbj):
+     print("Using parity symmetric bijector")
+     bij = lambda: m.FlowBijectorParity(Nlayers=Nlayers,width=width)
+     if(args.fbj):
+          bij_list = []
+          for k in range(2*Nconvs):
+               bij_list.append(m.FlowBijectorParity(Nlayers=Nlayers,width=width))
+          bij = m.BijectorFactory(bij_list).bij
 
 mg = lambda : m.MGflow([L,L],bij,m.RGlayer("average"),prior,Nconvs=Nconvs)
 models = []
@@ -95,3 +104,4 @@ sm.eval()
 print("starting model check")
 validate(batch_size,args.sb,'foo',sm)
 
+   

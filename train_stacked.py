@@ -105,6 +105,8 @@ print("parameter count: ",c)
 tag = str(L)+"_m"+str(mass)+"_l"+str(lam)+"_w_"+str(width)+"_l_"+str(Nlayers)+"_nc_"+str(Nconvs)+"_st_"+str(depth)
 if(args.fbj):
      tag = tag + "_fbj"
+if(args.sbj):
+     tag = tag + "_sbj"
 if(load_flag):
     sm.load_state_dict(tr.load(file))
     sm.eval()
