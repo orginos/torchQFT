@@ -848,30 +848,19 @@ def autograd_pi_plus_mass():
     ax1.errorbar(np.arange(0, L), tr.abs(c_avg), tr.abs(c_err), ls="", marker=".")
 
     plt.show()
-
+    
 
 #Fit function for pion triplet
 #TODO: N_T is hardcoded- way to pass in fitting process?
 def f_pi_triplet(x, m, A):
-    N_T = 8
+    N_T = 10
     return A* (np.exp(-m *x) + np.exp(-(N_T - x)*m))
 
 #Fit for analytical pion mass as a function of quark mass and coupling to fit critical mas
-# def f_analytical_pi_triplet(x, mc):
-#     #Coupling
-#     lam = 1.0/np.sqrt(10.0)
-#     return 2.066*np.power(((x-mc)/lam)**2, 1.0/3.0) * lam
-
-def f_analytical_pi_triplet(x, A,mc):
+def f_analytical_pi_triplet(x, mc):
     #Coupling
     lam = 1.0/np.sqrt(10.0)
-    #mc=-0.06
-    L=8.0
-    #Theoretical infinite volume mass
-    mt = 2.066*np.power(((x-mc)/lam)**2, 1.0/3.0) * lam
-    #FV adjustment
-    fv = A * (np.sqrt(mt)/np.sqrt(L))*np.exp(-mt*L)
-    return mt + fv
+    return 2.066*np.power(((x-mc)/lam)**2, 1.0/3.0) * lam
 
 
 #Fit function for finite volume effects
@@ -885,9 +874,9 @@ def pion_triplet_fit():
     #lam =np.sqrt(1.0/0.970)
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass... Need critical mass offset for analytical comparison
-    mass= -0.06*lam
-    L = 8
-    L2 = 8
+    mass= -0.12*lam
+    L = 10
+    L2 = 10
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
 
@@ -901,11 +890,11 @@ def pion_triplet_fit():
     q =(u, f, d)
 
     #Tune integrator to desired step size
-    im2 = i.minnorm2(sch.force,sch.evolveQ,10, 1.0)
+    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
     sim = h.hmc(sch, im2, True)
     
-    #Trying long equilibration
-    q = sim.evolve_f(q, 15, True)
+    #Equilibration
+    q = sim.evolve_f(q, 25, True)
 
 
 
@@ -969,13 +958,13 @@ def import_fit():
 
     #Fit the effective mass curve
     #Select only the time slices near the center of the lattice
-    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(3,6), np.abs(a[0, 3:6]), sigma = np.abs(a[1, 3:6]))
+    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(3,8), np.abs(a[0, 3:8]), sigma = np.abs(a[1, 3:8]))
     print(popt)
     print(pcov)
 
     #Plot the fit & data
-    ax1.plot(np.linspace(0, 8, 100), f_pi_triplet(np.linspace(0, 8, 100), *popt))
-    ax1.errorbar(np.arange(0, 8), np.abs(a[0]), np.abs(a[1]), ls="", marker=".")
+    ax1.plot(np.linspace(0, 10, 100), f_pi_triplet(np.linspace(0, 10, 100), *popt))
+    ax1.errorbar(np.arange(0, 10), np.abs(a[0]), np.abs(a[1]), ls="", marker=".")
 
     plt.show()
 
@@ -1004,27 +993,29 @@ def FV_Fitting():
 #Fitting critical mass of Wilson-Dirac operator for given coupling
 def fit_critical_mass():
     #Match filename
-    df = pd.read_csv('beta=10_L=8_m0_scan.csv')
+    df = pd.read_csv('beta=10_L=10_m0_scan.csv')
     #Coupling
     lam = 1.0/np.sqrt(10.0)
 
     fig, ax1 = plt.subplots(1,1)
     
     #Fit to lowest mo values
-    df_fit = df.loc[df['m0'] <= 0.01]
-    popt, pcov = sp.optimize.curve_fit(f_analytical_pi_triplet, df_fit['m0'], df_fit['mpi exp'], sigma = df_fit['std_dev'], p0=(6.25, -0.06))
+    #df_fit = df.loc[(df['m/g'] <= 0.3) & (df['m/g']>=0.2)]
+    df_fit = df
+    popt, pcov = sp.optimize.curve_fit(f_analytical_pi_triplet, df_fit['m0'], df_fit['mpi exp'], sigma = df_fit['std_dev'], p0=(-0.1))
     print(popt)
     print(pcov)
 
     #Plot the fit
-    ax1.plot((np.linspace(-0.08, 0.3, 1000000) +0.06)/lam, f_analytical_pi_triplet(np.linspace(-0.08, 0.3, 1000000), 6.25, -0.06))
+    ax1.plot((np.linspace(popt, 0.3, 1000000) -popt)/lam, f_analytical_pi_triplet(np.linspace(popt, 0.3, 1000000), *popt)/lam)
+    ax1.set_xlim(popt/lam, 0.6)
 
 
 
-    ax1.errorbar((df['m0']+0.06)/lam, df['mpi exp'], df['std_dev'], ls="", marker=".")
+    ax1.errorbar((df['m0']-popt)/lam, df['mpi exp']/lam, df['std_dev']/lam, ls="", marker=".")
 
-    ax1.set_ylabel(r'$m_\pi$')
-    ax1.set_xlabel(r'$m_0/e$')
+    ax1.set_ylabel(r'$m_\pi/e$')
+    ax1.set_xlabel(r'$m_q/e$')
 
     plt.show()
     
@@ -1047,6 +1038,8 @@ def main():
     import_fit()
     #fit_critical_mass()
     #FV_Fitting()
+    
+    #force_speed_test()
 
 
 
