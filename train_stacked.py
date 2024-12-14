@@ -35,6 +35,7 @@ parser.add_argument('-sb' , type=int  , default=1    )
 parser.add_argument('-nc' , type=int  , default=1    )
 parser.add_argument('-fbj', type=bool , default=False)
 parser.add_argument('-sbj', type=bool , default=False)
+parser.add_argument('-dev', type=int  , default=-1)
 
 args = parser.parse_args()
 
@@ -45,7 +46,32 @@ else:
     load_flag=True
     file=args.f
 
-device = "cuda" if tr.cuda.is_available() else "cpu"
+device = tr.device("cpu")
+# Check that MPS is available
+if not tr.backends.mps.is_available():
+    if not tr.backends.mps.is_built():
+        print("MPS not available because the current PyTorch install was not "
+              "built with MPS enabled.")
+    else:
+        print("MPS not available because the current MacOS version is not 12.3+ "
+              "and/or you do not have an MPS-enabled device on this machine.")
+
+else:
+     if (args.dev >= 0 ):
+          device = tr.device("mps")
+
+# Check that CUDA is available
+if not tr.cuda.is_available():
+    if not tr.backends.cuda.is_built():
+        print("CUDA not available because the current PyTorch install was not "
+              "built with CUDA enabled.")
+    else:
+        print("CUDA not available or you do not have a GPU on this machine.")
+
+else:
+     if (args.dev >= 0 ):
+          device = tr.device("cuda:"+str(args.dev))
+
 print(f"Using {device} device")
 
 depth = args.d
@@ -93,7 +119,8 @@ print("Initializing ",depth," stages")
 for d in range(depth):
     models.append(mg())
         
-sm = SuperModel(models,target =o.action )
+sm = SuperModel(models,target =o.action)
+sm.to(device)
 
 c=0
 for tt in sm.parameters():

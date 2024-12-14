@@ -116,8 +116,8 @@ def trainSM( SuperM, levels=[], epochs=100,batch_size=16,super_batch_size=1,lear
             tloss.backward()
             loss+=tloss
         optimizer.step()
-        loss_history.append(loss.detach().numpy())
-        pbar.set_postfix({'loss': loss.detach().numpy()})
+        loss_history.append(loss.detach().to("cpu").numpy())
+        pbar.set_postfix({'loss': loss.detach().to("cpu").numpy()})
     toc = time.perf_counter()
     print(f"Time {(toc - tic):0.4f} seconds")
     return loss_history
