@@ -125,7 +125,6 @@ for d in range(depth):
     models.append(mg())
         
 sm = SuperModel(models,target =o.action )
-sm.to(device)
 
 c=0
 for tt in sm.parameters():
@@ -143,6 +142,7 @@ if(load_flag):
     sm.load_state_dict(tr.load(file))
     sm.eval()
 
+sm.to(device)
 
 if(not load_flag):
     file = "sm_phi4_"+tag+".dict"

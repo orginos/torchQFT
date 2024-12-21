@@ -120,7 +120,6 @@ for d in range(depth):
     models.append(mg())
         
 sm = SuperModel(models,target =o.action)
-sm.to(device)
 
 c=0
 for tt in sm.parameters():
@@ -138,7 +137,8 @@ if(load_flag):
     sm.load_state_dict(tr.load(file))
     sm.eval()
 
-    
+sm.to(device)
+
 for b in batch_size*(2**np.arange(args.nb)):
      print("Running with batch_size = ",b, " and learning rate= ",args.lr)
      loss_hist=trainSM(sm,levels=[], epochs=epochs,batch_size=b,super_batch_size=args.sb,learning_rate=args.lr)
