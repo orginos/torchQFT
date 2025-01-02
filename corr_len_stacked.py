@@ -51,31 +51,43 @@ def reweight_list(l,w):
     return (np.array(l)*np.array(w)).tolist()
 
 
-def compute_observables(av_phi,lC2p,lchi_m,E):
+def compute_observables(av_phi,lC2p,lchi_m,E,mag,mag2,mag4):
     m_phi, e_phi = average(av_phi)
     print("m_phi: ",m_phi,e_phi)
-
+    m_mag, e_mag = average(mag)
+    
     m_chi_m, e_chi_m = average(np.array(lchi_m) - (m_phi**2)*V)
     m_C2p, e_C2p     = average(lC2p)
     print("Chi_m: ",m_chi_m, e_chi_m)
     print("C2p  : ",m_C2p, e_C2p)
     avE,eE = average(E)
     print("E = ", avE ,'+/-',eE)
+    print("Magnetization : ", m_mag, '+/-',e_mag)
     
     xi = correlation_length(L,m_chi_m, m_C2p)
     print("The correlation length is: ",xi)
     jphi   = jackknife(av_phi)
     jchi_m = jackknife(lchi_m)- np.array(jphi)**2 * V
     jC2p   = np.array(jackknife(lC2p)) 
-    
+    jmag2 = np.array(jackknife(mag2))
+    jmag4 = np.array(jackknife(mag4))
     
     j_xi = correlation_length(L,jchi_m,jC2p)
     
     m_xi,e_xi = average(j_xi)
-
+    e_xi *= len(j_xi)
 
     print("The correlation length from jackknife is is: ",m_xi," +/- ", e_xi)
 
+    jU = jmag4/(jmag2)**2
+    jB = 1 - jU/3
+
+    m_U,e_U = average(jU)
+    e_U *= len(jU)
+    m_B,e_B = average(jB)
+    e_B *= len(jB)
+    print("U = ",m_U," +/- ",e_U)
+    print("B = ",m_B," +/- ",e_B)
     
 parser = argparse.ArgumentParser()
 parser.add_argument('-f' , default='no-load')
@@ -206,6 +218,9 @@ lchi_m = []
 E = []
 av_phi = []
 rw = []
+mag = []
+mag2 = []
+mag4 = []
 phase=tr.tensor(np.exp(1j*np.indices(tuple((L,L)))[0]*2*np.pi/L))
 for k in range(Nmeas):
     print(k)
@@ -218,6 +233,9 @@ for k in range(Nmeas):
     w = foo/tr.mean(foo)
     rw.extend(w)
     av = phi.mean(axis=(1,2)).detach()
+    mag.extend(av.abs().numpy())
+    mag2.extend((av**2).numpy())
+    mag4.extend((av**4).numpy())
     #print(av)
     av_phi.extend(av.numpy())
     chi_m = av*av*V
@@ -227,16 +245,19 @@ for k in range(Nmeas):
     lchi_m.extend(chi_m.numpy())
 
 print("RAW observables")
-compute_observables(av_phi,lC2p,lchi_m,E)
+compute_observables(av_phi,lC2p,lchi_m,E,mag,mag2,mag4)
 print("-------")
 
 av_phi = reweight_list(av_phi,rw)
 lC2p = reweight_list(lC2p,rw)
 lchi_m = reweight_list(lchi_m,rw)
 E = reweight_list(E,rw)
+mag = reweight_list(mag,rw)
+mag2 = reweight_list(mag2,rw)
+mag4 = reweight_list(mag4,rw)
 
 print("Reweighted observables")
-compute_observables(av_phi,lC2p,lchi_m,E)
+compute_observables(av_phi,lC2p,lchi_m,E,mag,mag2,mag4)
 print("-------")
 
 
