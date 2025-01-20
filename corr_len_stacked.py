@@ -77,7 +77,7 @@ def compute_observables(av_phi,lC2p,lchi_m,E,mag,mag2,mag4):
     m_xi,e_xi = average(j_xi)
     e_xi *= len(j_xi)
 
-    print("The correlation length from jackknife is is: ",m_xi," +/- ", e_xi)
+    print("The correlation length from jackknife is: ",m_xi," +/- ", e_xi)
 
     jU = jmag4/(jmag2)**2
     jB = 1 - jU/3
@@ -104,6 +104,7 @@ parser.add_argument('-fbj', type=bool , default=False)
 parser.add_argument('-sbj', type=bool , default=False)
 parser.add_argument('-dev', type=int  , default=-1)
 parser.add_argument('-nmeas', type=int  , default=10)
+parser.add_argument('-plt', type=bool  , default=False)
 
 args = parser.parse_args()
 
@@ -208,7 +209,7 @@ sm.to(device)
 
 
 print("starting model check")
-validate(batch_size,10*args.sb,'foo',sm)
+validate(batch_size,args.sb,'foo',sm)
 
 
 Nmeas = args.nmeas
@@ -261,21 +262,23 @@ compute_observables(av_phi,lC2p,lchi_m,E,mag,mag2,mag4)
 print("-------")
 
 
-plt.hist(rw,bins=100)
-plt.show()
-plt.hist(np.log(rw),bins=100)
-plt.show()
-plt.plot(range(len(lchi_m)),lchi_m)
-plt.show()
-plt.plot(range(len(lC2p)),lC2p)
-plt.show()
-plt.plot(range(len(E)),E)
-plt.show()
-plt.plot(range(len(av_phi)),av_phi)
-plt.show()
-
-
-plt.imshow(phi.detach()[0,:,:], cmap='hot', interpolation='nearest')
-plt.show()
+if(args.plt):
+    plt.hist(rw,bins=100)
+    plt.show()
+    plt.hist(np.log(rw),bins=100)
+    plt.show()
+    plt.plot(range(len(lchi_m)),lchi_m)
+    plt.show()
+    plt.plot(range(len(lC2p)),lC2p)
+    plt.show()
+    plt.plot(range(len(E)),E)
+    plt.show()
+    plt.plot(range(len(av_phi)),av_phi)
+    plt.show()
+    
+    
+    plt.imshow(phi.detach()[0,:,:], cmap='hot', interpolation='nearest')
+    plt.show()
+    
 
 
