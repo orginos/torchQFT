@@ -50,6 +50,16 @@ def correlation_length(L,ChiM,C2p):
 def reweight_list(l,w):
     return (np.array(l)*np.array(w)).tolist()
 
+def tr_jackknife(d,func):
+     # d is a torch tensor with the first dimension being a batch
+     # function is evaluated in the data
+     r =tr.zeros_like(d)
+     for j in range(d.shape[0]):
+          tt = tr.cat((d[:j],d[(j+1):]),0)
+          #print(tt,tt.std())
+          r[j]=func(tt).mean()
+
+     return r
 
 def compute_observables(av_phi,lC2p,lchi_m,E,mag,mag2,mag4):
     m_phi, e_phi = average(av_phi)
@@ -65,7 +75,6 @@ def compute_observables(av_phi,lC2p,lchi_m,E,mag,mag2,mag4):
     print("Magnetization : ", m_mag, '+/-',e_mag)
     
     xi = correlation_length(L,m_chi_m, m_C2p)
-    print("The correlation length is: ",xi)
     jphi   = jackknife(av_phi)
     jchi_m = jackknife(lchi_m)- np.array(jphi)**2 * V
     jC2p   = np.array(jackknife(lC2p)) 
@@ -88,7 +97,8 @@ def compute_observables(av_phi,lC2p,lchi_m,E,mag,mag2,mag4):
     e_B *= len(jB)
     print("U = ",m_U," +/- ",e_U)
     print("B = ",m_B," +/- ",e_B)
-    
+    return m_phi, e_phi, m_mag, e_mag, m_chi_m, e_chi_m,  m_C2p, e_C2p, avE,eE, m_xi,e_xi, m_U,e_U, m_B,e_B 
+
 parser = argparse.ArgumentParser()
 parser.add_argument('-f' , default='no-load')
 parser.add_argument('-d' , type=int  , default=1   )
@@ -103,7 +113,6 @@ parser.add_argument('-nc' , type=int  , default=1    )
 parser.add_argument('-fbj', type=bool , default=False)
 parser.add_argument('-sbj', type=bool , default=False)
 parser.add_argument('-dev', type=int  , default=-1)
-parser.add_argument('-nmeas', type=int  , default=10)
 parser.add_argument('-plt', type=bool  , default=False)
 
 args = parser.parse_args()
@@ -209,10 +218,35 @@ sm.to(device)
 
 
 print("starting model check")
-validate(batch_size,args.sb,'foo',sm)
+x=sm.sample(batch_size)
+diff = sm.diff(x).detach()
+for b in range(1,args.sb):
+    x=sm.sample(batch_size)
+    diff = tr.cat((diff,sm.diff(x).detach()),0)
+    
+m_diff = diff.mean()     
+diff -= m_diff
 
+std =  diff.std().numpy()
+e_std = tr_jackknife(diff,tr.std).std().numpy()*np.sqrt(diff.shape[0]-1)
+print("max  action diff: ", tr.max(diff.abs()).numpy())
+print("min  action diff: ", tr.min(diff.abs()).numpy())
+print("mean action diff: ", m_diff.detach().numpy())
+print("std  action diff: ",std,"+/-",e_std)
+#compute the reweighting factor
+foo = tr.exp(-diff)
+#print(foo)
+w = foo/tr.mean(foo)
 
-Nmeas = args.nmeas
+rw = w.mean().numpy()
+e_rw = w.std().numpy()
+print("mean re-weighting factor: " , rw)
+print("std  re-weighting factor: " , e_rw)
+
+ESS = (foo.mean())**2/(foo*foo).mean()
+print("ESS                     : " , ESS.numpy())
+
+Nmeas = args.sb
 
 lC2p = []
 lchi_m = []
@@ -246,7 +280,12 @@ for k in range(Nmeas):
     lchi_m.extend(chi_m.numpy())
 
 print("RAW observables")
-compute_observables(av_phi,lC2p,lchi_m,E,mag,mag2,mag4)
+m_phi, e_phi, m_mag, e_mag, m_chi_m, e_chi_m,  m_C2p, e_C2p, avE,eE, m_xi,e_xi, m_U,e_U, m_B,e_B = compute_observables(av_phi,lC2p,lchi_m,E,mag,mag2,mag4)
+print("-------")
+OBS=[L,args.m,std,e_std,ESS.numpy(), m_mag,e_mag,  m_chi_m, e_chi_m, m_xi,e_xi, m_U,e_U ]
+fmt=len(OBS) * '{:.3f} '
+print("      L  m2    std   estd  ESS   Mag   eMag  ChiM  eChiM Xi   eXi  U      eU")
+print("OBS: ",fmt.format(*OBS))
 print("-------")
 
 av_phi = reweight_list(av_phi,rw)
@@ -258,9 +297,13 @@ mag2 = reweight_list(mag2,rw)
 mag4 = reweight_list(mag4,rw)
 
 print("Reweighted observables")
-compute_observables(av_phi,lC2p,lchi_m,E,mag,mag2,mag4)
+m_phi, e_phi, m_mag, e_mag, m_chi_m, e_chi_m,  m_C2p, e_C2p, avE,eE, m_xi,e_xi, m_U,e_U, m_B,e_B = compute_observables(av_phi,lC2p,lchi_m,E,mag,mag2,mag4)
 print("-------")
-
+RW_OBS=[L,args.m,std,e_std,ESS.numpy(), m_mag,e_mag,  m_chi_m, e_chi_m, m_xi,e_xi, m_U,e_U ]
+fmt=len(RW_OBS) * '{:.3f} '
+print("         L  m2    std   estd  ESS   Mag   eMag  ChiM  eChiM Xi   eXi  U      eU")
+print("RW_OBS: ",fmt.format(*RW_OBS))
+print("-------")
 
 if(args.plt):
     plt.hist(rw,bins=100)
