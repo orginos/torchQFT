@@ -874,7 +874,7 @@ def pion_triplet_fit():
     #lam =np.sqrt(1.0/0.970)
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass... Need critical mass offset for analytical comparison
-    mass= -0.12*lam
+    mass= -0.14*lam
     L = 10
     L2 = 10
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
@@ -890,7 +890,7 @@ def pion_triplet_fit():
     q =(u, f, d)
 
     #Tune integrator to desired step size
-    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
+    im2 = i.minnorm2(sch.force,sch.evolveQ,30, 1.0)
     sim = h.hmc(sch, im2, True)
     
     #Equilibration
@@ -958,7 +958,7 @@ def import_fit():
 
     #Fit the effective mass curve
     #Select only the time slices near the center of the lattice
-    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(3,8), np.abs(a[0, 3:8]), sigma = np.abs(a[1, 3:8]))
+    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(3,7), np.abs(a[0, 3:7]), sigma = np.abs(a[1, 3:7]))
     print(popt)
     print(pcov)
 
@@ -1008,7 +1008,7 @@ def fit_critical_mass():
 
     #Plot the fit
     ax1.plot((np.linspace(popt, 0.3, 1000000) -popt)/lam, f_analytical_pi_triplet(np.linspace(popt, 0.3, 1000000), *popt)/lam)
-    ax1.set_xlim(popt/lam, 0.6)
+    ax1.set_xlim(-0.05, 0.6)
 
 
 

@@ -344,13 +344,21 @@ class schwinger():
         b2 = p[xcut_2:xcut_2+2, :].reshape(-1,)
 
         #Subdomain indices
+        #TODO: This is the problem with boundary crossing subdomains i think
         s1 = p[0:xcut_1, :].reshape(-1,)
         s2 = p[xcut_1 + 2:xcut_2,:].reshape(-1,)
+        if (xcut_2 +2 != self.V[0]):
+            s1 = tr.cat((p[xcut_2+2:, :].reshape(-1), s1), dim=0)
 
         #Reordered indices for block-banded structure
         ri = tr.cat([b1,b2,s1,s2])
 
-        d = q[2].to_dense()
+        #Use Dirac operator for dynamical fermions
+        #Need to build it if its a quenched model
+        if len(q) == 1:
+            d = self.diracOperator(q[0]).to_dense()
+        else:
+            d = q[2].to_dense()
 
         #Block diagonal dirac operator
         bd_d = tr.zeros_like(d)
@@ -400,7 +408,7 @@ class schwinger():
         fp = tr.inverse(s11)
         return fp
     
-    #Input: Factorized propogator matrix, cut timeslices assuming width 2
+    #Input: Factorized propogator matrix, cut timeslices assuming width 2, source point
     #Output: Batch x Vector of Correlation functions for each time slice
     #Note- assumes spatial momentum zero for propogating state
     def dd_Pi_Plus_Correlator(self, fp, xcut_1, xcut_2):
@@ -410,26 +418,29 @@ class schwinger():
         n=0
         #Time slice on full lattice
         nt = 0
+
+        #Corrected ordering of timeslices if neccesary
+        ts = np.arange(self.V[0])
+        if (xcut_2 + 2 < self.V[0]):
+            ts = np.roll(ts, self.V[0] - (xcut_2+2))
+
         #Traverse each lattice site in subdomains
-        while n < fp.size(dim=1)-2:
-            c = tr.zeros(self.Bs)
-            #Each spatial index on a timeslice
-            for nx in np.arange(self.V[1]):
-                s1 = fp[:, n:n+2, 0:2]
-                s2 = tr.einsum('bxy, bzy -> bxz', s1, s1.conj())
+        for nt in ts:
+            #Skip timeslice if its in boundary area
+            if (nt != xcut_1 and nt !=xcut_1+1 and nt != xcut_2 and nt !=xcut_2+1):
+                c = tr.zeros(self.Bs)
+                #Each spatial index on a timeslice
+                for nx in np.arange(self.V[1]):
+                    s1 = fp[:, n:n+2, 0:2]
+                    s2 = tr.einsum('bxy, bzy -> bxz', s1, s1.conj())
 
-                #B length vector
-                c = c - tr.sum(s2, dim=(1,2))
-                #Iterate to next spatial site
-                n += 2
+                    #B length vector
+                    c = c - tr.sum(s2, dim=(1,2))
+                    #Iterate to next spatial site
+                    n += 2
 
-            #BxL tensor      
-            ev[:, nt] = tr.real(c)
-            #If next time slice is a boundary slice, skip them in correlator vector
-            if (nt + 1 == xcut_1 or nt+1 ==xcut_2):
-                nt += 3
-            else:
-                nt +=1
+                #BxL tensor      
+                ev[:, nt] = tr.real(c)
 
         return ev / np.sqrt(1.0*self.V[1])
  
@@ -462,7 +473,7 @@ class schwinger():
     #input: Lattice configuration, timeslice for domain boundaries, rank of approximation, source index
     #Output: Domain Decompostion based factorized propogator matrix between subdomains
     #Note: assumes 2 subdomains for naive implementation
-    #TODO: In development
+    #TODO: In development- seems to break when 2nd boundary isn't on lattice edge
     def dd_Approx_Propogator(self, q, xcut_1, xcut_2, r, sx):
 
         bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2)
@@ -479,22 +490,34 @@ class schwinger():
         #Schur complement
         s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, self.neumann_Inverse(d00, r), d01)
 
-        # build batch of solution vectors for point source
+        # build batch of solution vectors for point source - one for each dirac index
         source_vec = tr.zeros(self.Bs, d11.size(dim=1))
-        #Adjust sx for boundary as needed-assumes just two boundaries, with one on end
-        if(sx > 2*xcut_1*self.V[1]):
+        source_vec2 = tr.zeros(self.Bs, d11.size(dim=1))
+        #Adjust sx for boundary as needed-assumes just two boundaries
+        if(sx > xcut_2*self.V[1]):
             sx = sx - 4*self.V[1]
-        source_vec[:, sx]
+        elif(sx > xcut_1*self.V[1]):
+            sx = sx - 2*self.V[1]
+        #Also adjust potential movement of the timeslice
+        if(xcut_2 + 2 < self.V[0]):
+            sx = sx + (self.V[0] - (xcut_2 + 2))*self.V[1]
+        #Mark the point source in the solution vector-
+        source_vec[:, 2*sx] = 1.0
+        source_vec2[:,2*sx+1] = 1.0
         s11_np = s11.numpy()
         source_vec_np = source_vec.numpy()
+        source_vec2_np = source_vec2.numpy()
 
-        #TODO: Is there a better way to batch solve these inexactly?
-        prop = tr.zeros([self.Bs, d11.size(dim=2)], dtype=tr.complex64)
+        #Additional dimension for Dirac space
+        prop = tr.zeros([self.Bs, d11.size(dim=2),2], dtype=tr.complex64)
         for b in np.arange(self.Bs):
-            prop[b, :] = tr.from_numpy(sp.sparse.linalg.bicgstab(s11_np[b, :, :], source_vec_np[b, :])[0])
+            prop[b, :, 0] = tr.from_numpy(sp.sparse.linalg.bicgstab(s11_np[b, :, :], source_vec_np[b, :])[0])
+            prop[b, :, 1] = tr.from_numpy(sp.sparse.linalg.bicgstab(s11_np[b, :, :], source_vec2_np[b, :])[0])
 
         #Return propogator vectors solved via BICGSTAB
         return prop
+    
+    
 
 
             
