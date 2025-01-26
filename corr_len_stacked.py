@@ -300,7 +300,8 @@ print("Reweighted observables")
 m_phi, e_phi, m_mag, e_mag, m_chi_m, e_chi_m,  m_C2p, e_C2p, avE,eE, m_xi,e_xi, m_U,e_U, m_B,e_B = compute_observables(av_phi,lC2p,lchi_m,E,mag,mag2,mag4)
 print("-------")
 RW_OBS=[L,args.m,std,e_std,ESS.numpy(), m_mag,e_mag,  m_chi_m, e_chi_m, m_xi,e_xi, m_U,e_U ]
-fmt=len(RW_OBS) * '{:.3f} '
+#fmt=len(RW_OBS) * '{:.3f} '
+fmt= 4 * '{:.3f} ' + '{:.3e} ' + 8 * '{:.3f} '
 print("         L  m2    std   estd  ESS   Mag   eMag  ChiM  eChiM Xi   eXi  U      eU")
 print("RW_OBS: ",fmt.format(*RW_OBS))
 print("-------")
