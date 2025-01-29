@@ -14,7 +14,9 @@ from tqdm import tqdm
 
 import argparse
 import sys
-    
+
+from copy import deepcopy
+
 import time
 from stacked_model import *
 
@@ -152,12 +154,18 @@ for b in batch_size*(2**np.arange(args.nb)):
           for r in range(args.nr):
                print("Running with batch_size = ",b, " and learning rate= ",lr)
                print("Try ",r)
-               loss_hist=trainSM(sm,levels=[], epochs=epochs,batch_size=b,super_batch_size=args.sb,learning_rate=lr)
+               loss_hist,av_sm=trainSMaveraged(sm,levels=[], epochs=epochs,batch_size=b,super_batch_size=args.sb,learning_rate=lr,swa_lr=lr,swa_start=int(epochs/2))
+               av_sm.eval()
                batch_size = b*args.sb
                tt = tag+"_b"+str(batch_size)+"_lr_"+str(lr)
                plot_loss(loss_hist,tt)
                validate(b,10*args.sb,tt,sm)
+               print("After averaging")
+               sm =  deepcopy(av_sm.module)
+               sm.eval()
+               validate(b,10*args.sb,tt,sm)
                tr.save(sm.state_dict(), file)
+
 
 
 
