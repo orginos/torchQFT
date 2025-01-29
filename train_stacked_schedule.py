@@ -149,7 +149,7 @@ if(not load_flag):
 for b in batch_size*(2**np.arange(args.nb)):
      for lr in args.lr*(0.1**np.arange(args.nlr)):
           print("Running with batch_size = ",b, " and learning rate= ",lr)
-          loss_hist=trainSM(sm,levels=[], epochs=epochs,batch_size=b,super_batch_size=args.sb,learning_rate=args.lr)
+          loss_hist=trainSM(sm,levels=[], epochs=epochs,batch_size=b,super_batch_size=args.sb,learning_rate=lr)
           batch_size = b*args.sb
           tt = tag+"_b"+str(batch_size)+"_lr_"+str(lr)
           plot_loss(loss_hist,tt)

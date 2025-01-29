@@ -1,6 +1,7 @@
 import numpy as np
 import torch as tr
 import torch.nn as nn
+from torch.optim.swa_utils import AveragedModel, SWALR
 from torch import distributions
 from torch.nn.parameter import Parameter
 import phi4_mg as m
@@ -121,6 +122,53 @@ def trainSM( SuperM, levels=[], epochs=100,batch_size=16,super_batch_size=1,lear
     toc = time.perf_counter()
     print(f"Time {(toc - tic):0.4f} seconds")
     return loss_history
+
+def trainSMaveraged( SuperM, levels=[], epochs=100,batch_size=16,super_batch_size=1,learning_rate=1.0e-4,swa_lr=0.05,swa_start=50):
+    tic = time.perf_counter()
+    params = []
+    if levels==[] :
+        params = [p for p in SuperM.parameters() if p.requires_grad==True]
+    else:
+        for l in levels:
+            params.extend([p for p in SuperM.models[l].parameters() if p.requires_grad==True])
+
+    print("Number of parameters to train is: ",len(params))
+    optimizer = tr.optim.Adam(params, lr=learning_rate)
+
+    # Create an AveragedModel instance
+    swa_model = AveragedModel(SuperM)
+    # Create a SWALR scheduler
+    swa_scheduler = SWALR(optimizer, swa_lr=swa_lr)
+
+    loss_history = []
+    #tic=time.perf_counter()
+    pbar = tqdm(range(epochs))
+    for t in pbar:   
+        loss = 0.0
+        optimizer.zero_grad()
+        for b in range(0,super_batch_size):
+            z = SuperM.prior_sample(batch_size)
+            x = SuperM(z) # generate a sample
+            tloss = SuperM.loss(x)/super_batch_size
+            tloss.backward()
+            loss+=tloss
+        optimizer.step()
+        loss_history.append(loss.detach().to("cpu").numpy())
+        pbar.set_postfix({'loss': loss.detach().to("cpu").numpy()})
+        # Update SWA model
+        if t > swa_start:
+            swa_model.update_parameters(SuperM)
+            swa_scheduler.step()
+            #print("SWA lr:",swa_scheduler.get_last_lr())
+
+    # Update batch norm statistics for the SWA model
+    #tr.optim.swa_utils.update_bn(loader, swa_model)
+
+    toc = time.perf_counter()
+    print(f"Time {(toc - tic):0.4f} seconds")
+    return loss_history,swa_model
+
+
 
 
 def plot_loss(lh,title):
