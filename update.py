@@ -93,6 +93,20 @@ class hmc:
                     
         return q
     
+    #Multi-level integrator for DD calculations
+    #Input: simulated fields, level 0 configs, level 1 configs, 
+    #timeslice of boundaries
+    #TODO: In development
+    def dd_Evolve(self, q, n0, n1, xcut1, xcut2):
+        qshape =tuple([q[0].shape[0]]+[1]*(len(q[0].shape)-1))
+        #Checking if quenched/dynamical calculation
+        if len(q) > 1:
+            fshape = tuple([q[1].shape[0]]+[1]*(len(q[1].shape)-1))
+            dshape = tuple([q[2].shape[0]]+[1]*(len(q[2].shape)-1))
+        for k in range(n0):
+            q0 = q.clone()
+
+    
     #Naive DD evolve - added for numerical methods project
     def dd_Evolve(self,q, N, xcut):
         qshape =tuple([q.shape[0]]+[1]*(len(q.shape)-1))

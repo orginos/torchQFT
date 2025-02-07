@@ -272,7 +272,7 @@ def quenched_pi_plus_mass():
         #for nt in np.arange(0, L):
             
         #Vector of time slice correlations
-        cl = sch.pi_plus_correlator(d_inv)
+        cl = sch.exact_Two_Point_correlator(d_inv)
         if n ==0:
             c = cl
         else:
@@ -487,7 +487,7 @@ def pi_plus_mass():
 
             
         #Vector of time slice correlations
-        cl = sch.pi_plus_correlator(d_inv)
+        cl = sch.exact_Two_Point_correlator(d_inv)
         if n ==0:
             c = cl
         else:
@@ -750,8 +750,8 @@ def pi_plus_comparison():
         #for nt in np.arange(0, L):
             
         #Vector of time slice correlations
-        e_cl = sch.pi_plus_correlator(e_d_inv)
-        a_cl = sch.pi_plus_correlator(a_d_inv)
+        e_cl = sch.exact_Two_Point_correlator(e_d_inv)
+        a_cl = sch.exact_Two_Point_correlator(a_d_inv)
         if n ==0:
             e_c = e_cl
             a_c = a_cl
@@ -824,7 +824,7 @@ def autograd_pi_plus_mass():
         #for nt in np.arange(0, L):
             
         #Vector of time slice correlations
-        cl = sch.pi_plus_correlator(d_inv)
+        cl = sch.exact_Two_Point_correlator(d_inv)
         if n ==0:
             c = cl
         else:
@@ -908,7 +908,7 @@ def pion_triplet_fit():
 
             
         #Vector of time slice correlations
-        cl = sch.pi_plus_correlator(d_inv)
+        cl = sch.exact_Two_Point_correlator(d_inv)
         if n ==0:
             c = cl
         else:
