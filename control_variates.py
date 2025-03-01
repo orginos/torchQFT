@@ -23,8 +23,86 @@ else:
     
 print("Using divice: ",device)
 
+def C2pt(x,tau):
+    return tr.mean(x*tr.roll(x,shifts=-tau,dims=2),dim=(1,2))
+
+def symmetry_checker(x,model):
+    out     = model(x)
+    sout    = model(tr.roll(x,shifts=(2,3),dims=(1,2)))
+    r90out  = model(tr.rot90(x,k=1,dims=(1,2)))
+    r180out = model(tr.rot90(x,k=2,dims=(1,2)))
+    f1out   = model(tr.flip(x,dims=[1]))
+    f2out   = model(tr.flip(x,dims=[2]))
+    pout    = model(-x)
+    print("Parity: ",(tr.norm(out-pout)/tr.norm(out)).item())
+    print("Translation: ",(tr.norm(out-sout)/tr.norm(out)).item())
+    print("Rotation(90): ",(tr.norm(out-r90out)/tr.norm(out)).item())
+    print("Rotation(180): ",(tr.norm(out-r180out)/tr.norm(out)).item())
+    print("Flip(1): ",(tr.norm(out-f1out)/tr.norm(out)).item())
+    print("Flip(2): ",(tr.norm(out-f2out)/tr.norm(out)).item())
+
+
+#WARNING: FieldTrans and Funct do not seem to work... they do not pass the derivative test
+# I do not care to debug because the rest work beautifully
+class FieldTrans(nn.Module):
+    def __init__(self,L,depth=2,width=10,activation=nn.GELU(),dtype=tr.float): 
+        super().__init__()
+
+        self.depth = depth
+        self.w = width
+        # Define trainable parameters
+        self.ai = nn.Parameter(tr.randn(self.w,1))
+        self.ao = nn.Parameter(tr.randn(1,self.w))
+        self.a  = nn.Parameter(tr.randn(self.depth,self.w,self.w))
+        self.bi = nn.Parameter(tr.randn(self.w,1))
+        self.bo = nn.Parameter(tr.randn(1,self.w))
+        self.b  = nn.Parameter(tr.randn(self.depth,self.w,self.w))
+        self.ci = nn.Parameter(tr.randn(self.w,1))
+        self.co = nn.Parameter(tr.randn(1,self.w))
+        self.c  = nn.Parameter(tr.randn(self.depth,self.w,self.w))
+        self.bias_i = nn.Parameter(tr.randn(self.w))
+        self.bias = nn.Parameter(tr.randn(self.depth,self.w))
+        #self.pool = nn.AvgPool2d(kernel_size=block_size, stride=block_size) 
+        self.activation = activation
+        
+    def func(self, x):
+        """Applies the convolution by summing rolled versions of x, weighted by a, b, and c."""
+        
+        # Center term (c): No shift needed
+        #print(self.ci.shape,x.shape)
+        x = x.view(x.shape[0],1,x.shape[1],x.shape[2])
+        y = tr.einsum('oi,bixy->boxy',self.ci,x)
+        y+= tr.einsum('oi,bixy->boxy',self.bi,(tr.roll(x, shifts=1, dims=2) + tr.roll(x, shifts=-1, dims=2)))  # Vertical shift
+        y+= tr.einsum('oi,bixy->boxy',self.bi,(tr.roll(x, shifts=1, dims=3) + tr.roll(x, shifts=-1, dims=3)))  # Horizontal shift
+        y+= tr.einsum('oi,bixy->boxy',self.ai,(tr.roll(x, shifts=(1, 1), dims=(2,3)) + tr.roll(x, shifts=(-1,-1), dims=(2,3))))
+        y+= tr.einsum('oi,bixy->boxy',self.ai,(tr.roll(x, shifts=(1,-1), dims=(2,3)) + tr.roll(x, shifts=(-1, 1), dims=(2,3))))
+
+        x = self.activation(y+self.bias_i.view(1,self.w,1,1))
+        
+        for k in range(self.depth):
+            y = tr.einsum('oi,bixy->boxy',self.c[k],x)
+            y+= tr.einsum('oi,bixy->boxy',self.b[k],(tr.roll(x, shifts=1, dims=2) + tr.roll(x, shifts=-1, dims=2)))  # Vertical shift
+            y+= tr.einsum('oi,bixy->boxy',self.b[k],(tr.roll(x, shifts=1, dims=3) + tr.roll(x, shifts=-1, dims=3)))  # Horizontal shift
+            y+= tr.einsum('oi,bixy->boxy',self.a[k],(tr.roll(x, shifts=(1,1), dims=(2,3)) + tr.roll(x, shifts=(-1,-1), dims=(2,3))))
+            y+= tr.einsum('oi,bixy->boxy',self.a[k],(tr.roll(x, shifts=(1,-1), dims=(2,3)) + tr.roll(x, shifts=(-1,1), dims=(2,3))))
+        
+            x = self.activation(y+self.bias[k].view(1,self.w,1,1))
+
+        y = tr.einsum('oi,bixy->boxy',self.co,x)
+        y+= tr.einsum('oi,bixy->boxy',self.bo,(tr.roll(x, shifts=1, dims=2) + tr.roll(x, shifts=-1, dims=2)))  # Vertical shift
+        y+= tr.einsum('oi,bixy->boxy',self.bo,(tr.roll(x, shifts=1, dims=3) + tr.roll(x, shifts=-1, dims=3)))  # Horizontal shift
+        y+= tr.einsum('oi,bixy->boxy',self.ao,(tr.roll(x, shifts=(1, 1), dims=(2,3)) + tr.roll(x, shifts=(-1,-1), dims=(2,3))))
+        y+= tr.einsum('oi,bixy->boxy',self.ao,(tr.roll(x, shifts=(1,-1), dims=(2,3)) + tr.roll(x, shifts=(-1, 1), dims=(2,3))))
+
+        return y.squeeze()
+
+    #enforce parity
+    def forward(self,x):
+        return 0.5*(self.func(x) - self.func(-x))
+     
+    
 class Funct(nn.Module):
-    def __init__(self,dim=2,y=0,FieldTrans=None): 
+    def __init__(self,dim=2,y=0,FieldTrans=None,dtype=tr.float): 
         super().__init__()
         self.ft  = FieldTrans
         self.y   = y
@@ -49,11 +127,11 @@ class Funct(nn.Module):
         
         return self.func(x)+self.func(fx)
 
-    def grad_and_lap(self,x):
+    def grad_and_lapl(self,x):
         y = self.forward(x) 
-        print(y.shape,x.shape)
+        #print(y.shape,x.shape)
         grad = tr.autograd.grad(y,x,tr.ones_like(y),create_graph=True)[0]
-        print(grad.shape)
+        #print(grad.shape)
         lapl = tr.zeros_like(y)
         for i in range(x.shape[1]):  # Loop over dim 1
             for j in range(x.shape[2]):  # Loop over dim 2
@@ -64,7 +142,7 @@ class Funct(nn.Module):
 
 
 class Funct2(nn.Module):
-    def __init__(self,dim=2,y=0,layers=[32],dtype=tr.float64,activation=tr.nn.Tanh(),initializer=tr.nn.init.xavier_uniform_): 
+    def __init__(self,dim=2,y=0,conv_layers=[32],dtype=tr.float64,activation=tr.nn.Tanh(),initializer=tr.nn.init.xavier_uniform_): 
         super().__init__()
         self.net  = nn.Sequential()
         self.y   = y
@@ -72,7 +150,7 @@ class Funct2(nn.Module):
         self.dtype = dtype
         in_dim =3
         k=0
-        for l in layers:
+        for l in conv_layers:
             #print(k,in_dim,l)
             layer = nn.Linear(in_dim,l,dtype=self.dtype)
             initializer(layer.weight)
@@ -179,7 +257,7 @@ class Funct3(nn.Module):
                 k+=1
             self.net.add_module('poo'+str(p),pool)
         self.net.add_module('fla0',nn.Flatten(start_dim=1) )
-        layer = tr.nn.Linear(in_dim,1,dtype=self.dtype)
+        layer = tr.nn.Linear(in_dim,1,dtype=self.dtype,bias=False) # the constant is a zero mode
         initializer(layer.weight)
         self.net.add_module('lin'+str(k),layer)
         self.net.add_module('fla1',nn.Flatten(start_dim=0) )
@@ -211,6 +289,62 @@ class Funct3(nn.Module):
                 lapl+=foo[:,i,j]
         return grad,lapl 
 
+class Funct3no(nn.Module):
+    def __init__(self,L,dim=2,y=0,conv_layers=[4,4],dtype=tr.float32, pool=nn.AvgPool2d(kernel_size=2,stride=2),activation=tr.nn.Tanh(),initializer=tr.nn.init.xavier_uniform_): 
+        super().__init__()
+
+        self.net = nn.Sequential()
+        
+        self.dtype = dtype
+        self.Npool = int(np.log(L)/np.log(2))
+        #self.pool = pool
+        self.y   = y
+        self.dim = dim
+        in_dim =1
+        k=0
+        for p in range(self.Npool):           
+            for l in conv_layers:
+                #print(k,in_dim,l)
+                layer = nn.Conv2d(in_dim,l, kernel_size=3, stride=1, padding=1, padding_mode='circular')
+                initializer(layer.weight)
+                self.net.add_module('lin'+str(k),layer)
+                self.net.add_module('act'+str(k),activation)
+                in_dim=l
+                k+=1
+            self.net.add_module('poo'+str(p),pool)
+        self.net.add_module('fla0',nn.Flatten(start_dim=1) )
+        layer = tr.nn.Linear(in_dim,1,dtype=self.dtype,bias=False) # the constant is a zero mode
+        initializer(layer.weight)
+        self.net.add_module('lin'+str(k),layer)
+        self.net.add_module('fla1',nn.Flatten(start_dim=0) )
+
+        
+    def par(self,x,f):
+        return 0.5*(f(x)+f(-x))
+    def rot180(self,x,f): 
+        return 0.5*(f(x)+f(tr.rot90(x,k=2,dims=(2,3))))
+    def flip(self,x,f,dims=[2]):
+        return 0.5*(f(x)+f(tr.flip(x,dims=dims)))
+       
+    def forward(self,x):  
+        x = x.unsqueeze(1)
+        #flip along the other axis comes out automatically because
+        # it is equivalent to 180 rotation followed by a flip around the axis (already symmetrized)
+        #return self.par(x,lambda x: self.rot180(x,lambda x: self.flip(x,self.net)))
+        return self.net(x) # impose only parity via x**2
+        
+
+    def grad_and_lapl(self,x):
+        y = self.forward(x) 
+        #print(y.shape,x.shape)
+        grad = tr.autograd.grad(y,x,tr.ones_like(y),create_graph=True)[0]
+        #print(grad.shape)
+        lapl = tr.zeros_like(y)
+        for i in range(x.shape[1]):  # Loop over dim 1
+            for j in range(x.shape[2]):  # Loop over dim 2
+                foo=tr.autograd.grad(grad[:,i,j],x,tr.ones_like(grad[:,i,j]),create_graph=True)[0]
+                lapl+=foo[:,i,j]
+        return grad,lapl 
 
 class Funct3Tinv(nn.Module):
     def __init__(self,L,dim=2,y=0,conv_layers=[4,4],dtype=tr.float32,activation=tr.nn.Tanh(),initializer=tr.nn.init.xavier_uniform_): 
@@ -268,6 +402,63 @@ class Funct3Tinv(nn.Module):
                 lapl+=foo[:,i,j]
         return grad,lapl 
 
+class Funct3T(nn.Module):
+    def __init__(self,L,dim=2,y=0,conv_layers=[4,4],dtype=tr.float32,activation=tr.nn.Tanh(),initializer=tr.nn.init.xavier_uniform_): 
+        super().__init__()
+
+        self.net = nn.Sequential()
+     
+        self.dtype = dtype
+        self.Npool = int(np.log(L)/np.log(2))
+        #self.pool = pool
+        self.y   = y
+        self.dim = dim
+        in_dim =1
+        k=0          
+        for l in conv_layers:
+            #print(k,in_dim,l)
+            layer = nn.Conv2d(in_dim,l, kernel_size=3, stride=1, padding=1, padding_mode='circular')
+            initializer(layer.weight)
+            self.net.add_module('lin'+str(k),layer)
+            self.net.add_module('act'+str(k),activation)
+            in_dim=l
+            k+=1
+
+        self.net.add_module('global_pool',nn.AvgPool2d(kernel_size=L,stride=L))
+        self.net.add_module('fla0',nn.Flatten(start_dim=1) )
+        layer = tr.nn.Linear(in_dim,1,dtype=self.dtype)
+        initializer(layer.weight)
+        self.net.add_module('lin'+str(k),layer)
+        self.net.add_module('fla1',nn.Flatten(start_dim=0) )
+
+        
+    def par(self,x,f):
+        return 0.5*(f(x)+f(-x))
+    def rot180(self,x,f): 
+        return 0.5*(f(x)+f(tr.rot90(x,k=2,dims=(2,3))))
+    def flip(self,x,f,dims=[2]):
+        return 0.5*(f(x)+f(tr.flip(x,dims=dims)))
+    
+
+    def forward(self,x):
+        x = x.unsqueeze(1)
+        #flip along the other axis comes out automatically because
+        # it is equivalent to 180 rotation followed by a flip around the axis (already symmetrized)
+        #return self.par(x,lambda x: self.rot180(x,lambda x: self.flip(x,self.net)))
+        return self.net(x)
+
+    def grad_and_lapl(self,x):
+        y = self.forward(x) 
+        #print(y.shape,x.shape)
+        grad = tr.autograd.grad(y,x,tr.ones_like(y),create_graph=True)[0]
+        #print(grad.shape)
+        lapl = tr.zeros_like(y)
+        for i in range(x.shape[1]):  # Loop over dim 1
+            for j in range(x.shape[2]):  # Loop over dim 2
+                foo=tr.autograd.grad(grad[:,i,j],x,tr.ones_like(grad[:,i,j]),create_graph=True)[0]
+                lapl+=foo[:,i,j]
+        return grad,lapl 
+
 
 class ControlModel(nn.Module):
     def __init__(self,muO=1.0,force=None,c2p_net=None):
@@ -311,6 +502,7 @@ def train_control_model(CM,phi,learning_rate=1e-3,epochs=100,super_batch=1,updat
     loss = tr.zeros(1,device=device)
     
     loss_history = []
+    #muO_history = []
     for t in pbar: 
         optimizer.zero_grad()
         loss = tr.zeros(1,device=device)
@@ -323,19 +515,64 @@ def train_control_model(CM,phi,learning_rate=1e-3,epochs=100,super_batch=1,updat
         loss += tloss
         optimizer.step()
         loss_history.append(loss.detach().to("cpu").numpy())
+        #loss_history.append(CM.muO.detach().to("cpu").numpy())
         pbar.set_postfix({'loss': loss.detach().to("cpu").numpy()})
 
     return loss_history,phi
 
 
-model_factory = {'Funct2'     : lambda L,y,ll,type : Funct2(y=y,layers=ll,dtype=type),
-                 'Funct3'     : lambda L,y,ll,type : Funct3(L,dim=2,y=y,conv_layers=ll,dtype=type),
-                 'Funct3Tinv' : lambda L,y,ll,type : Funct3Tinv(L,dim=2,y=y,conv_layers=ll,dtype=type)}
+#model_factory_v0 = {'Funct2'      : lambda L,y,ll,type : Funct2(y=y,conv_layers=ll,dtype=type),
+#                 'Funct3'      : lambda L,y,ll,type : Funct3(L,dim=2,y=y,conv_layers=ll,dtype=type),
+#                 'Funct3Tinv'  : lambda L,y,ll,type : Funct3Tinv(L,dim=2,y=y,conv_layers=ll,dtype=type),
+#                 'Funct3T'     : lambda L,y,ll,type : Funct3T(L,dim=2,y=y,conv_layers=ll,dtype=type),
+#                 'Funct3no'    : lambda L,y,ll,type : Funct3no(L,dim=2,y=y,conv_layers=ll,dtype=type)}
 
+
+# Factory Functions
+def activation_factory(name, **kwargs):
+    """Factory function to create activation functions dynamically."""
+    activations = {
+        "relu": nn.ReLU,
+        "leaky_relu": nn.LeakyReLU,
+        "sigmoid": nn.Sigmoid,
+        "tanh": nn.Tanh,
+        "gelu": nn.GELU,
+        "elu": nn.ELU,
+        "softplus": nn.Softplus
+    }
+    
+    if name not in activations:
+        raise ValueError(f"Unknown activation function: {name}")
+    
+    return activations[name](**kwargs)  # Pass any extra arguments dynamically
+
+
+def model_factory(class_name, **kwargs):
+    classes = {
+        'Funct2'      : Funct2,
+        'Funct3'      : Funct3,
+        'Funct3Tinv'  : Funct3Tinv,
+        'Funct3T'     : Funct3T,
+        'Funct3no'    : Funct3no
+    }
+    
+    if class_name not in classes:
+        raise ValueError(f"Unknown class: {class_name}")
+
+    return classes[class_name](**kwargs)  # Dynamically pass arguments
+
+def test_symmetries(model):
+    L=8
+    bs=3
+    model = model_factory(model,L=L,y=2,conv_layers=[4,4],dtype=tr.double)
+    model.to(tr.double)
+    x = tr.randn(bs,L,L,dtype=tr.double)
+    symmetry_checker(x,model)
+    
 def test_grad_and_lap(model):
     L=8
     bs = 3
-    model = model_factory[model](L,2,[4,4],type=tr.double)
+    model = model_factory(model,L=L,y=2,conv_layers=[4,4],dtype=tr.double)
     model.to(tr.double)
     #check grad
     x = tr.randn(bs,L,L,dtype=tr.double)
@@ -376,7 +613,7 @@ def test_grad_and_lap(model):
 def test_train(model_name,epochs,learning_rate,load_flag=False,ff='control_model_file.dict'):
     L=8
     bs = 256
-    model = model_factory[model_name](L,2,[4,4,4,4],type=tr.float)
+    model = model_factory(model_name,L=L,y=2,conv_layers=[4,4,4,4],dtype=tr.float)
     if(load_flag):
         model.load_state_dict(tr.load(ff))
         model.eval()
@@ -426,33 +663,42 @@ def test_train(model_name,epochs,learning_rate,load_flag=False,ff='control_model
 
     print("Value of muO: ",CM.muO.to("cpu").detach().numpy())
     print("Mean(O): ",CM.computeO(x).mean().to("cpu").detach().numpy())
+    print("Mean(impO): ",CM.Delta(x).mean().to("cpu").detach().numpy())
     tF = CM.F(x).to("cpu").detach().numpy()
     tO = CM.computeO(x).to("cpu").detach().numpy()
 
     corr = np.corrcoef(tF,tO)
     print("Correlation: ", corr[0,1])
+
+    print("\n======")
+    
+    symmetry_checker(x,model)
     
     plt.plot(ll_hist)
     plt.yscale('log')
     plt.show()
-    
+
     
 def main():
     import argparse
     import sys
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('-l', default='no-load')
-    parser.add_argument('-e', type=int,default=1000)
-    parser.add_argument('-lr', type=float,default=1.0e-3)
-    parser.add_argument('-t', default='test_ders')
-    parser.add_argument('-model', default='Funct2')
+    parser.add_argument('-l'     , default='no-load')
+    parser.add_argument('-e'     , type=int,default=1000)
+    parser.add_argument('-lr'    , type=float,default=1.0e-3)
+    parser.add_argument('-t'     ,  default='test_ders')
+    parser.add_argument('-model' , default='Funct2')
     
     
     args = parser.parse_args()
-    if(args.t=='test_ders'):
+    if(args.t=='grads'):
         print("Testing derivatives for "+args.model)
         test_grad_and_lap(args.model)
+
+    elif(args.t=='symms'):
+        print("Testing symmetries for "+args.model)
+        test_symmetries(args.model)
         
     elif(args.t=="train"):
         print("Testing training of model "+args.model)
@@ -461,10 +707,13 @@ def main():
         else:
             test_train(args.model,args.e,args.lr)
             
-    elif(args.t=="hmc"):
-        test_hmc(args.l,args.d)
     else:
         print("Nothing to test")
+        print("Production training on the way....")
+
+        production_train()
+        
+        print("...Done!")
 
 if __name__ == "__main__":
     main()
