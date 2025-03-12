@@ -60,6 +60,7 @@ class ConvRealNVP(nn.Module):
         self.s = nn.ModuleList()
         self.t = nn.ModuleList()
         self.shape = shape
+        self.V = np.prod(shape)
         
         # set up the t and s networks
         for i in range(len(mask)):
@@ -127,9 +128,8 @@ class ConvRealNVP(nn.Module):
         return z.squeeze(), log_det_J
         
     def log_prob(self,x):
-        z, logp = self.backward(x)
+        z, logp = self.inverse(x)
         return self.prior.log_prob(z.flatten(start_dim=1)) + logp 
-        #return self.prior.log_prob(z.view(x.shape[0],np.prod(x.shape[1:3]))) + logp 
     
     def sample(self, batchSize): 
         z = self.prior.sample((batchSize, 1)).view([batchSize]+self.shape).to(self.device)
@@ -220,6 +220,7 @@ class FlowModel(nn.Module):
         super().__init__()
         self.flows = nn.ModuleList(flows)  # List of flows
         self.shape = self.flows[0].shape
+        self.V = np.prod(self.shape)
         
     def forward(self, x):
         for flow in self.flows:
@@ -236,7 +237,7 @@ class FlowModel(nn.Module):
         
     def log_prob(self,x):
         z, logp = self.inverse(x)
-        return self.prior.log_prob(z) + logp #+ self.C
+        return self.flows[0].prior.log_prob(z.flatten(start_dim=1)) + logp 
 
     def sample(self, batchSize): 
         z = self.flows[0].prior_sample(batchSize)
