@@ -73,6 +73,14 @@ CM = ControlModel(muO=muO,force = sg.force,c2p_net=funct)
 CM.to(device)
 print(CM)
 
+if(load_flag): # the model was pre-trained
+   phi = hmc.evolve(phi,Nskip)
+   x = phi.clone()
+   x.requires_grad = True # because some of the tests may require grads
+   CM.muO.data = CM.Delta(x).mean()
+   print("Initial  muO: ",CM.muO.detach().to("cpu").numpy())
+   print("Initial loss: ",CM.loss(x).detach().to("cpu").numpy())
+   
 hmc.AcceptReject = []
 ll_hist, phi= train_control_model(CM,phi,learning_rate=args.lr,epochs=args.e,super_batch=1,update=lambda x : hmc.evolve(x,Nskip))
 print('HMC acceptance: ',hmc.calc_Acceptance())
@@ -82,7 +90,7 @@ print('HMC history length: ',len(hmc.AcceptReject))
 ff = args.f
 if(not load_flag):
     ws = "_".join(str(l) for l in args.conv_l)
-    ff = "cv_"+args.model+"_act_"+args.activ+"_cl_"+ws+".dict"
+    ff = "cv_"+"L_"+str(L)+"_tau_"+str(args.tau)+"_"+args.model+"_act_"+args.activ+"_cl_"+ws+".dict"
 tr.save(funct.state_dict(), ff)
 
 

@@ -459,6 +459,56 @@ class Funct3T(nn.Module):
                 lapl+=foo[:,i,j]
         return grad,lapl 
 
+#symmetrizer wrapper class
+#I need to eliminate the symmetric modules as those are much slower
+#i.e. train assymetric --- symmetrize at the end gives major improvement
+class FunctSym(nn.Module):
+    def __init__(self,F=F): 
+        super().__init__()
+
+        self.F = F
+        self.y = F.y
+        self.dim = F.dim
+        
+    def par(self,x,f):
+        return 0.5*(f(x)+f(-x))
+    def rot180(self,x,f): 
+        return 0.5*(f(x)+f(tr.rot90(x,k=2,dims=(1,2))))
+    def flip(self,x,f,dims=[1]):
+        return 0.5*(f(x)+f(tr.flip(x,dims=dims)))
+    
+
+    def apply_symmetries(self, x):
+        px = -x
+        rx = tr.rot90(x, k=2, dims=(1, 2))
+        fx = tr.flip(x, dims=[1])
+        prx = -rx
+        pfx = -fx
+        frx = tr.flip(rx, dims=[1])
+        prfx = -frx
+        return 0.125*(self.F(x) + self.F(px) + self.F(rx) +self.F(fx) + self.F(prx) +self.F(pfx) + self.F(frx) + self.F(prfx))
+                
+    def forward(self,x):
+        #x = x.unsqueeze(1)
+        #flip along the other axis comes out automatically because
+        # it is equivalent to 180 rotation followed by a flip around the axis (already symmetrized)
+        return self.par(x,lambda x: self.rot180(x,lambda x: self.flip(x,self.F)))
+        #return self.F(x)
+        #return self.apply_symmetries(x)
+
+    
+    def grad_and_lapl(self,x):
+        y = self.forward(x) 
+        #print(y.shape,x.shape)
+        grad = tr.autograd.grad(y,x,tr.ones_like(y),create_graph=True)[0]
+        #print(grad.shape)
+        lapl = tr.zeros_like(y)
+        for i in range(x.shape[1]):  # Loop over dim 1
+            for j in range(x.shape[2]):  # Loop over dim 2
+                foo=tr.autograd.grad(grad[:,i,j],x,tr.ones_like(grad[:,i,j]),create_graph=True)[0]
+                lapl+=foo[:,i,j]
+        return grad,lapl 
+
 
 class ControlModel(nn.Module):
     def __init__(self,muO=1.0,force=None,c2p_net=None):
@@ -521,6 +571,7 @@ def train_control_model(CM,phi,learning_rate=1e-3,epochs=100,super_batch=1,updat
     return loss_history,phi
 
 
+
 #model_factory_v0 = {'Funct2'      : lambda L,y,ll,type : Funct2(y=y,conv_layers=ll,dtype=type),
 #                 'Funct3'      : lambda L,y,ll,type : Funct3(L,dim=2,y=y,conv_layers=ll,dtype=type),
 #                 'Funct3Tinv'  : lambda L,y,ll,type : Funct3Tinv(L,dim=2,y=y,conv_layers=ll,dtype=type),
@@ -547,32 +598,36 @@ def activation_factory(name, **kwargs):
     return activations[name](**kwargs)  # Pass any extra arguments dynamically
 
 
-def model_factory(class_name, **kwargs):
+def model_factory(class_name, sym_flag=False, **kwargs):
     classes = {
         'Funct2'      : Funct2,
         'Funct3'      : Funct3,
         'Funct3Tinv'  : Funct3Tinv,
         'Funct3T'     : Funct3T,
-        'Funct3no'    : Funct3no
+        'Funct3no'    : Funct3no,
     }
     
     if class_name not in classes:
         raise ValueError(f"Unknown class: {class_name}")
 
-    return classes[class_name](**kwargs)  # Dynamically pass arguments
+    foo=classes[class_name](**kwargs)  # Dynamically pass arguments
+    if(sym_flag):
+        return FunctSym(F=foo)
+    else:
+        return foo
 
-def test_symmetries(model):
+def test_symmetries(model,flag):
     L=8
     bs=3
-    model = model_factory(model,L=L,y=2,conv_layers=[4,4],dtype=tr.double)
+    model = model_factory(model,sym_flag=flag,L=L,y=2,conv_layers=[4,4],dtype=tr.double)
     model.to(tr.double)
     x = tr.randn(bs,L,L,dtype=tr.double)
     symmetry_checker(x,model)
     
-def test_grad_and_lap(model):
+def test_grad_and_lap(model,flag):
     L=8
     bs = 3
-    model = model_factory(model,L=L,y=2,conv_layers=[4,4],dtype=tr.double)
+    model = model_factory(model,sym_flag=flag,L=L,y=2,conv_layers=[4,4],dtype=tr.double)
     model.to(tr.double)
     #check grad
     x = tr.randn(bs,L,L,dtype=tr.double)
@@ -689,16 +744,21 @@ def main():
     parser.add_argument('-lr'    , type=float,default=1.0e-3)
     parser.add_argument('-t'     ,  default='test_ders')
     parser.add_argument('-model' , default='Funct2')
+    parser.add_argument('-symm'  , action='store_true')
     
     
     args = parser.parse_args()
     if(args.t=='grads'):
         print("Testing derivatives for "+args.model)
-        test_grad_and_lap(args.model)
+        if(args.symm):
+            print("Testing symmetrized model")
+        test_grad_and_lap(args.model,args.symm)
 
     elif(args.t=='symms'):
         print("Testing symmetries for "+args.model)
-        test_symmetries(args.model)
+        if(args.symm):
+            print("Testing symmetrized model")
+        test_symmetries(args.model,args.symm)
         
     elif(args.t=="train"):
         print("Testing training of model "+args.model)
