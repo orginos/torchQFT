@@ -112,7 +112,7 @@ class field():
         return one.repeat([self.Nd,self.shape[1]]+self.lat+[1,1])
     def hot(self):
         v = tr.randn(self.shape[0:-2]+[4])
-        print(v.shape)
+        #print(v.shape)
         v = 2.0*v/v.norm(dim=len(self.shape)-2).view((self.shape[0:-2]+[1])).type(self.dtype)
         return tr.einsum('mac,...m->...ac',basis,v)
         
