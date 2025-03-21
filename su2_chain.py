@@ -126,11 +126,13 @@ class field():
         return tr.einsum('...ik,...jk->...ij',U,V.conj())
         
     def nn_force(self,U):
-        F = self.zero()
+        H = self.zero()
         for mu in range(self.Nd):
-            F += tr.einsum('...ik,...jk->...ij',U,U.roll(dims=mu+1,shifts=-1).conj())
+            #F += tr.einsum('...ik,...jk->...ij',U,U.roll(dims=mu+1,shifts=-1).conj())
+            H += U.roll(dims=mu+1,shifts=-1) + U.roll(dims=mu+1,shifts=+1)
+        F = tr.einsum('...ik,...jk->...ij',U,H.conj())
         F=0.5*(F-F.transpose(self.ci[0],self.ci[1]).conj()) # no need to subtract the trace     
-        return F
+        return -0.5*F
         # NEED TO CHECK CORRECTNESS 
 
     def coeffs(self,U):
