@@ -205,18 +205,18 @@ def approx_Propogator_Testing():
 #Comparing the 2 point function generated with full propogator and Schur complement
 #based subdomain propogators in the quenched approximation
 def quenched_two_point_Comparison():
-    batch_size= 10
+    batch_size= 30
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
-    mass= 0.08
+    mass= 0.00
     L = 32
     L2 = 32
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     #Boundary cut timeslices
-    xcut_1 = 14
-    xcut_2 = 30
-    bw=2
+    xcut_1 = 12
+    xcut_2 = 28
+    bw=4
     #Neumann Approximation rank
     r=0
 
@@ -248,8 +248,8 @@ def quenched_two_point_Comparison():
 
             
         #Vector of time slice correlations
-        cl = sch.two_Point_Correlator(d, np.concatenate((np.arange(4,8), np.arange(16,20))))
-        cl2 = sch.dd_Two_Point_Correlator(bb_d, xcut_1, xcut_2, bw, r, np.concatenate((np.arange(4,8), np.arange(16,20))))
+        cl = sch.exact_Two_Point_Correlator(d_inv, np.concatenate((np.arange(4,8), np.arange(20,24))))
+        cl2 = sch.dd_Two_Point_Correlator(bb_d, xcut_1, xcut_2, bw, r, np.concatenate((np.arange(4,8), np.arange(20,24))))
         if n ==0:
             c = cl
             c2= cl2
@@ -281,6 +281,28 @@ def quenched_two_point_Comparison():
     ax1.errorbar(np.arange(0, L), tr.abs(c2_avg), tr.abs(c2_err), ls="", marker=".")
 
     plt.show()
+
+#Plot 2 pt functions, difference, and error differences to assess approximation
+def plot_Two_Point_Difference():
+    data = np.genfromtxt('m0=-0.04.csv', delimiter=',')
+    
+    
+    fig, ax1 = plt.subplots(1,1)
+    ax1.set_yscale('log', nonpositive='clip')
+
+    ax1.errorbar(data[0], np.abs(data[1]), data[2], label=r"C(t)")
+    ax1.errorbar(data[0], np.abs(data[3]), data[4], label=r"C'(t)")
+
+    ax1.plot(data[0], data[5], label=r"C(t) - C'(t)")
+    ax1.plot(data[0], data[6], label=r"Err[C(t)] - Err[C'(t)]")
+
+    plt.title(r"$m_0 = -0.04$, $\beta = 10$, 32x32 100 configs")
+    plt.legend(loc=4)
+
+    plt.show()
+
+
+
 
 #Comparing the 2 point function generated with full propogator and Schur complement
 #based subdomain propogators
@@ -675,17 +697,47 @@ def multilevel_Integrator():
         q0 = (u0,)
         q1 = (u1,)
 
+#Plot exact/approx correlator difference from imported csv data
+def plot_correlator_difference():
+    #Match filename
+    df = pd.read_csv('correlator approx data.csv')
+
+    fig, ax1 = plt.subplots(1,1)
+
+    ax1.set_yscale('log', nonpositive='clip')
+
+    ax1.scatter(df['timeslice'], df['exact'], label=r'$C(t)$')
+    ax1.scatter(df['timeslice'], df['exact err'], label=r'$Err [ C(t) ]$')
+
+    ax1.scatter(df['timeslice approx'], df['approx'], label=r'$\bar{C}(t)$')
+    ax1.scatter(df['timeslice approx'], df['approx err'], label=r'$Err [ \bar{C}(t) ]$')
+
+    ax1.scatter(df['timeslice approx'], df['diff'], label=r'$C(t)-\bar{C}(t)$')
+    ax1.scatter(df['timeslice approx'], df['err diff'], label=r'$Err [C(t) - \bar{C}(t) ]$')
+
+    ax1.set_xlabel(r'$n_t$', fontsize=32)
+
+    ax1.yaxis.set_tick_params(labelsize=28)
+    ax1.xaxis.set_tick_params(labelsize=28)
+
+    ax1.set_title(r'300 Configurations w/ Correlation length $\approx 4.5$', fontsize=32)
+
+    ax1.legend(loc='lower right')
+    plt.show()
+
 
 
 def main():
     #block_Diagonal_Check()
     #propogator_Comparison()
     #dirac_Operator_Norm()
-    quenched_two_point_Comparison()
+    #quenched_two_point_Comparison()
+    #plot_Two_Point_Difference()
     #fit_Exact_and_Approx()
-    two_Point_Decay_Comparison()
+    #two_Point_Decay_Comparison()
     #approx_Propogator_Testing()
     #compute_Propogator_Correction()
+    plot_correlator_difference()
 
 
 

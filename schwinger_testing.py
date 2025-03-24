@@ -329,8 +329,8 @@ def fermion_force():
 #Testing equilibration of full dynamical model
 def dynamical_action():
     #Plaquette average of dynamical fermion theory
-    L=4
-    batch_size=50
+    L=8
+    batch_size=100
     lam =np.sqrt(1.0/4)
     mass= 0.4
     sch = s.schwinger([L,L],lam,mass,batch_size=batch_size)
@@ -384,18 +384,21 @@ def dynamical_action():
 
     ax1.errorbar(np.arange(steps + 1), pl_avg, pl_err, label="Hot Start")
     ax1.errorbar(np.arange(steps + 1), cpl_avg, cpl_err, label = "Cold Start")
-    ax1.set_ylabel(r'$\langle S \rangle$')
-    ax1.set_xlabel(r'n')
+    ax1.set_ylabel(r'$\langle S \rangle$', fontsize=32)
+    ax1.yaxis.set_tick_params(labelsize=28)
+    ax1.set_xlabel(r'n', fontsize=32)
+    ax1.xaxis.set_tick_params(labelsize=28)
     ax1.legend(loc='lower right')
     ax1.set_title(str(batch_size) + ' batch '+ str(L) + 'x' + str(L) + r' lattice, $\beta$ = ' + str(1/lam**2) +' m=' + str(mass))
     plt.show()
 
+
 #Testing Monte Carlo integration of full dynamical model
 def dynamical_dH_vs_eps2():
     L=4
-    batch_size=50
-    lam =np.sqrt(1.0/5.0)
-    mass= 1.125
+    batch_size=100
+    lam =np.sqrt(1.0/10.0)
+    mass= 0.02
     sch = s.schwinger([L,L],lam,mass,batch_size=batch_size)
 
     u0 = sch.hotStart()
@@ -430,17 +433,21 @@ def dynamical_dH_vs_eps2():
         e2.append((1.0/n)**2)
         print(n)
 
-    fig, (ax1, ax2) = plt.subplots(2,1)
-    fig.suptitle(r'Integrator comparison: '+r'$\beta=$'+str(1/lam**2) + r', ' + r'$m=$' + str(mass))
-    ax1.errorbar(e2, lf_dh, yerr=lf_herr)
-    ax1.set_ylabel(r'$\Delta H$')
-    ax1.set_xlabel(r'$\epsilon^2$')
-    ax1.set_title('Leapfrog integrator')
+    #fig, (ax1, ax2) = plt.subplots(2,1)
+    fig, ax2 = plt.subplots(1,1)
+    fig.suptitle(r'$\beta=$'+str(1/lam**2) + r', ' + r'$m_0=$' + str(mass), fontsize=32)
+    # ax1.errorbar(e2, lf_dh, yerr=lf_herr)
+    # ax1.set_ylabel(r'$\Delta H$', fontsize=14)
+    # ax1.set_xlabel(r'$\epsilon^2$')
+    # ax1.set_title('Leapfrog integrator')
 
-    ax2.errorbar(e2, mn_dh, yerr=mn_herr)
-    ax2.set_ylabel(r'$\Delta H$')
-    ax2.set_xlabel(r'$\epsilon^2$')
-    ax2.set_title('Min norm squared integrator')
+    #ax2.errorbar(e2, mn_dh, yerr=mn_herr)
+    ax2.errorbar(np.arange(10,51)**2, mn_dh, yerr=mn_herr)
+    ax2.yaxis.set_tick_params(labelsize=28)
+    ax2.set_ylabel(r'$\Delta H$', fontsize=32)
+    ax2.xaxis.set_tick_params(labelsize=28)
+    ax2.set_xlabel(r'Integration steps$^2$', fontsize=32)
+    #ax2.set_title('Min norm squared integrator')
 
     plt.show()
 
@@ -874,9 +881,9 @@ def pion_triplet_fit():
     #lam =np.sqrt(1.0/0.970)
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass... Need critical mass offset for analytical comparison
-    mass= -0.14*lam
+    mass= -0.08*lam
     L = 10
-    L2 = 10
+    L2 = 8
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
 
@@ -890,11 +897,11 @@ def pion_triplet_fit():
     q =(u, f, d)
 
     #Tune integrator to desired step size
-    im2 = i.minnorm2(sch.force,sch.evolveQ,30, 1.0)
+    im2 = i.minnorm2(sch.force,sch.evolveQ,25, 1.0)
     sim = h.hmc(sch, im2, True)
     
     #Equilibration
-    q = sim.evolve_f(q, 25, True)
+    q = sim.evolve_f(q, 50, True)
 
 
 
@@ -908,7 +915,7 @@ def pion_triplet_fit():
 
             
         #Vector of time slice correlations
-        cl = sch.exact_Two_Point_correlator(d_inv)
+        cl = sch.exact_Two_Point_Correlator(d_inv, (0,), p=1*(2*np.pi)/L2)
         if n ==0:
             c = cl
         else:
@@ -963,8 +970,18 @@ def import_fit():
     print(pcov)
 
     #Plot the fit & data
-    ax1.plot(np.linspace(0, 10, 100), f_pi_triplet(np.linspace(0, 10, 100), *popt))
-    ax1.errorbar(np.arange(0, 10), np.abs(a[0]), np.abs(a[1]), ls="", marker=".")
+    #ax1.plot(np.linspace(0, 10, 100), f_pi_triplet(np.linspace(0, 10, 100), *popt))
+    ax1.errorbar(np.arange(0, 10), np.abs(a[0]), np.abs(a[1]), ls="", marker=".", markersize=10, elinewidth=2.0)
+
+    ax1.set_ylabel(r'$C(t)$', fontsize=32)
+    ax1.set_xlabel(r'$n_t$', fontsize=32)
+
+    ax1.yaxis.set_tick_params(labelsize=28)
+    ax1.xaxis.set_tick_params(labelsize=28)
+
+    ax1.set_title(r'$p= \frac{4 \pi}{L}$', fontsize=32)
+
+    ax1.set_ylim(0.000001, 1)
 
     plt.show()
 
@@ -1000,25 +1017,81 @@ def fit_critical_mass():
     fig, ax1 = plt.subplots(1,1)
     
     #Fit to lowest mo values
-    #df_fit = df.loc[(df['m/g'] <= 0.3) & (df['m/g']>=0.2)]
-    df_fit = df
-    popt, pcov = sp.optimize.curve_fit(f_analytical_pi_triplet, df_fit['m0'], df_fit['mpi exp'], sigma = df_fit['std_dev'], p0=(-0.1))
+    df_fit = df.loc[(df['m/g'] <= 0.3) & (df['m/g']>=0.2)]
+    #df_fit = df
+    popt, pcov = sp.optimize.curve_fit(f_analytical_pi_triplet, df_fit['m0'], df_fit['mpi exp'], sigma = df_fit['std_dev'], p0=(-0.12))
     print(popt)
     print(pcov)
+    
 
     #Plot the fit
-    ax1.plot((np.linspace(popt, 0.3, 1000000) -popt)/lam, f_analytical_pi_triplet(np.linspace(popt, 0.3, 1000000), *popt)/lam)
-    ax1.set_xlim(-0.05, 0.6)
+    ax1.plot((np.linspace(popt, 0.3, 1000000) -popt)/lam, f_analytical_pi_triplet(np.linspace(popt, 0.3, 1000000), *popt)/lam, linewidth=3.0)
+    ax1.set_xlim(0.1, 0.5)
 
 
 
-    ax1.errorbar((df['m0']-popt)/lam, df['mpi exp']/lam, df['std_dev']/lam, ls="", marker=".")
+    ax1.errorbar((df['m0']-popt)/lam, df['mpi exp']/lam, df['std_dev']/lam, ls="", marker=".", markersize=10.0, elinewidth=2.0)
 
-    ax1.set_ylabel(r'$m_\pi/e$')
-    ax1.set_xlabel(r'$m_q/e$')
+    ax1.set_ylabel(r'$m_\pi/e$', fontsize=32)
+    ax1.set_xlabel(r'$m_q/e$', fontsize=32)
+
+    ax1.yaxis.set_tick_params(labelsize=28)
+    ax1.xaxis.set_tick_params(labelsize=28)
+
+    ax1.set_title(r'300 Configurations, $\beta =10$', fontsize=32)
 
     plt.show()
+
+#TODO: Needs review
+def topological_Charge_Distribution():
+    #Measurement process -given function for correlator of pi plus
+    batch_size=30
+    #lam =np.sqrt(1.0/0.970)
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass... Need critical mass offset for analytical comparison
+    mass= -0.08*lam
+    L = 10
+    L2 = 8
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+
+    u = sch.hotStart()
+
+    d = sch.diracOperator(u)
+
+    f = sch.generate_Pseudofermions(d)
+
+    #Define q as a tuple of the gauge field, psuedofermion field, Dirac operator
+    q =(u, f, d)
+
+    #Tune integrator to desired step size
+    im2 = i.minnorm2(sch.force,sch.evolveQ,25, 1.0)
+    sim = h.hmc(sch, im2, True)
     
+    #Equilibration
+    q = sim.evolve_f(q, 50, True)
+
+
+    charge = tr.sum(tr.real(tr.log(q[0])/1.0j) % (2.0*np.pi), dim=(1,2,3))/(2.0*np.pi*L*L2) - 1.0
+    #Measurement process- nm measurements on batches
+    nm = 20
+    for n in np.arange(nm):
+        #Discard some in between
+        q= sim.evolve_f(q, 10, True)
+        charge = tr.cat((charge, tr.sum(tr.real(tr.log(q[0])/1.0j) % (2.0*np.pi), dim=(1,2,3))/(2.0*np.pi*L*L2) -1.0))
+
+    fig, ax1 = plt.subplots(1,1)
+
+    df = pd.DataFrame(charge.detach().numpy())
+    #TODO: Write more descriptive datafile name
+    df.to_csv("output.csv", index = False)
+
+    ax1.hist(charge)
+
+    plt.show()
+
+
+
 def main():
     #dH_eps2()
     #quenched_pi_plus_mass()
@@ -1027,17 +1100,18 @@ def main():
     #pure_gauge_Savg()
     #trivial_D_inspect()
     #dynamical_action()
-    #dynamical_dH_vs_eps2()
+    dynamical_dH_vs_eps2()
     #pi_plus_mass()
     #autograd_test()
     #autograd_dH_vs_eps2()
     #autograd_dynamical_action()
     #pi_plus_comparison()
     #autograd_pi_plus_mass()
-    pion_triplet_fit()
-    import_fit()
+    #pion_triplet_fit()
+    #import_fit()
     #fit_critical_mass()
     #FV_Fitting()
+    #topological_Charge_Distribution()
     
     #force_speed_test()
 

@@ -101,9 +101,9 @@ class schwinger():
     #Output: Bx1 fermion action
     def fermionAction(self, d, p):
         d_dense = d.to_dense()
-        m =tr.inverse(tr.einsum('bxy, byz-> bxz', d_dense, d_dense.conj().transpose(1,2)))
-        p1 = tr.einsum('bxy, by -> bx', m, p)
-        return tr.einsum('bx, bx -> b', tr.conj(p), p1)
+        d_inv = tr.inverse(d_dense)
+        d_dag_inv = tr.inverse(d_dense.conj().transpose(1,2))
+        return tr.einsum('bx, bxy, byz, bz->b', tr.conj(p), d_dag_inv, d_inv, p)
 
 #********************************************************************************************************************************
 
@@ -298,11 +298,10 @@ class schwinger():
             d_upd = self.diracOperator(u_upd)
             return (u_upd, Q[1], d_upd)
     
-    
-    #Input: Inverse dirac operator, source timeslices to average over
+    #TODO: Testing allowing for non-zero momentum
+    #Input: Inverse dirac operator, source timeslices to average over, spatial momentum
     #Output: Batch x Vector of Correlation functions for each time slice
-    #Note- assumes spatial momentum zero for propogating state
-    def exact_Two_Point_Correlator(self, d_inv, s_range):
+    def exact_Two_Point_Correlator(self, d_inv, s_range, p=0.0):
 
         ev = tr.zeros([self.Bs, self.V[0]])
 
@@ -322,8 +321,9 @@ class schwinger():
                     s2 = tr.einsum('bxy, byz -> bxz', s1, s1.conj().transpose(1,2))
 
                     #B length vector
-                    c = c - tr.sum(s2, dim=(1,2))
+                    c = c - np.exp(-1.0j*nx*p)*tr.sum(s2, dim=(1,2))
                 #BxL tensor
+                #TODO: See below- are values of c going to still be real?
                 # values of c are verified as real- cast them to real to avoid error message        
                 ev[:, nt] = ev[:, nt] +  tr.real(c)
 
@@ -352,8 +352,8 @@ class schwinger():
         prop = tr.zeros([self.Bs, d.size(dim=2),2], dtype=tr.complex64)
         for b in np.arange(self.Bs):
             #Note- transposing Dirac matrix seems to work? Is the whole structure backwards?
-            prop[b, :, 0] = tr.from_numpy(sp.sparse.linalg.bicgstab(d_np[b, :, :], source_vec_np[b, :], tol=1e-08)[0])
-            prop[b, :, 1] = tr.from_numpy(sp.sparse.linalg.bicgstab(d_np[b, :, :], source_vec2_np[b, :], tol=1e-08)[0])
+            prop[b, :, 0] = tr.from_numpy(sp.sparse.linalg.bicgstab(d_np[b, :, :], source_vec_np[b, :], tol=1e-09)[0])
+            prop[b, :, 1] = tr.from_numpy(sp.sparse.linalg.bicgstab(d_np[b, :, :], source_vec2_np[b, :], tol=1e-09)[0])
 
         #Return propogator vectors solved via BICGSTAB
         return prop
@@ -571,6 +571,16 @@ class schwinger():
         #Schur complement
         s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, self.neumann_Inverse(d00, r), d01)
 
+        #Alternative- use an exact inverse of the approximated schur complement
+        if(True):
+            inv_s = tr.inverse(s11)
+            #Adjust sx for boundary as needed-assumes just two boundaries
+            if(sx > xcut_2*self.V[1]):
+                sx = sx - 2*bw*self.V[1]
+            elif(sx > xcut_1*self.V[1]):
+                sx = sx - bw*self.V[1]
+            return inv_s[:, :, 2*sx:2*sx+2]
+
         # build batch of solution vectors for point source - one for each dirac index
         source_vec = tr.zeros(self.Bs, d11.size(dim=1))
         source_vec2 = tr.zeros(self.Bs, d11.size(dim=1))
@@ -593,13 +603,91 @@ class schwinger():
         prop = tr.zeros([self.Bs, d11.size(dim=2),2], dtype=tr.complex64)
         for b in np.arange(self.Bs):
 
-            prop[b, :, 0] = tr.from_numpy(sp.sparse.linalg.bicgstab(s11_np[b, :, :], source_vec_np[b, :])[0])
-            prop[b, :, 1] = tr.from_numpy(sp.sparse.linalg.bicgstab(s11_np[b, :, :], source_vec2_np[b, :])[0])
+            prop[b, :, 0] = tr.from_numpy(sp.sparse.linalg.bicgstab(s11_np[b, :, :], source_vec_np[b, :], tol=1e-9)[0])
+            prop[b, :, 1] = tr.from_numpy(sp.sparse.linalg.bicgstab(s11_np[b, :, :], source_vec2_np[b, :], tol=1e-9)[0])
 
         #Return propogator vectors solved via BICGSTAB
         return prop
 
 
+# Two Level HMC Functions *******************************************
+
+
+def dd_FermionAction(self, bb_d, p, xcut_1, xcut_2, bw, r):
+    #Slice psuedofermion vector as appropriate
+    p_sd = tr.cat((p[:, 0:xcut_1*2*self.V[1]], p[:, (xcut_1+bw)*2*self.V[1]:xcut_2*2*self.V[1]]))
+
+    #Compute Schur complement
+    #Isolate sub matrices
+    #Assumes 2 width 2 timeslice boundaries
+    d00 = bb_d[:,0:4*bw*self.V[1], 0:4*bw*self.V[1]]
+    d01 = bb_d[:, 0:4*bw*self.V[1], 4*bw*self.V[1]:]
+    d10 = bb_d[:, 4*bw*self.V[1]:, 0:4*bw*self.V[1]]
+    d11 = bb_d[:, 4*bw*self.V[1]:, 4*bw*self.V[1]:]
+
+    #Schur complement
+    s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, self.neumann_Inverse(d00, r), d01)
+
+
+    #Compute action
+    s_inv = tr.inverse(s11)
+    s_dag_inv = tr.inverse(s11.conj().transpose(1,2))
+    return tr.einsum('bx, bxy, byz, bz', tr.conj(p_sd), s_dag_inv, s_inv, p_sd)
+
+def dd_GaugeAction(self, u, xcut_1, xcut_2, bw):
+    #plaquette matrix
+    pl = u[:,0,:,:]*tr.roll(u[:,1,:,:], shifts=-1, dims=1) \
+        * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:])
+
+    #Only add plaquettes in the subdomains
+    pl1 = pl[:,:xcut_1,:]
+    pl2 = pl[:,xcut_1+bw:xcut_2, :]
+    s1 = (1/self.lam**2) *(tr.sum(tr.real(tr.ones_like(pl1) - pl1),dim=(1,2)))
+    s2 = (1/self.lam**2) *(tr.sum(tr.real(tr.ones_like(pl2) - pl2),dim=(1,2)))
+    return s1+s2
+
+def dd_Action(self, q, xcut_1, xcut_2, bw, r):
+    if len(q) == 1:
+        return self.dd_GaugeAction(q[0], xcut_1, xcut_2, bw)
+    else:
+        bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2, bw)
+        return self.dd_GaugeAction(q[0], xcut_1, xcut_2, bw) + \
+        tr.abs(dd_FermionAction(bb_d, q[1], xcut_1, xcut_2, bw, r))
+    
+def dd_Force(self, q, xcut_1, xcut_2, bw, r):
+    #Compute gauge force as in the full model
+
+    #Isolate gauge field
+        u = q[0]
+        #A tensor of 'staples'
+        a = tr.zeros_like(q[0])
+
+        
+        a[:,0,:,:]  = tr.roll(u[:,1,:,:], shifts=-1, dims=1) * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:]) \
+                      + tr.conj(tr.roll(u[:,1,:,:], shifts=(-1,1), dims= (1,2)))*tr.conj(tr.roll(u[:,0,:,:], shifts=1, dims=2)) * tr.roll(u[:,1,:,:], shifts=1, dims=2)
+        a[:,1,:,:] = tr.conj(tr.roll(u[:,0,:,:], shifts=(1,-1), dims=(1,2))) * tr.conj(tr.roll(u[:,1,:,:], shifts=1, dims=1)) * tr.roll(u[:,0,:,:], shifts=1, dims=1) \
+                     + tr.roll(u[:,0,:,:], shifts=-1, dims=2) * tr.conj(tr.roll(u[:,1,:,:], shifts=-1, dims=1)) * tr.conj(u[:,0,:,:])
+        #gauge action contribution
+        fg = (-1.0j* (1.0/self.lam**2)/2.0)* (u*a - tr.conj(a)*tr.conj(u))
+
+        #Zero out the force on the frozen links
+        fg[:,:,xcut_1:xcut_1+bw, :] = 0.0
+        fg[:,:,xcut_2:xcut_2+bw, :] = 0.0
+
+        #If fermions aren't present, simply return force of gauge field
+        if len(q) == 1:
+            #Force is already real, force cast for downstream errors
+            #Additional negative sign added from Hamilton's eqs.
+            return (-1.0)*tr.real(fg).type(self.dtype)
+        
+        #Otherwise, compute force of the fermion fields
+        d_dense = q[2].to_dense()
+        f = q[1]
+
+
+
+
+        
             
     
 
