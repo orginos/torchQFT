@@ -98,7 +98,9 @@ class field():
          self.Nc = 2
          self.shape = [Nbatch]+lat+[self.Nc,self.Nc]
          self.ci = [len(self.shape)-2, len(self.shape)-1]# color indices
-        
+         self.eps = tr.finfo(dtype).eps
+         #self.eye = tr.eye(2).expand(10, 128, 128, -1, -1)
+
     def empty(self):
         return tr.empty(self.shape,device=self.device,dtype=self.dtype)
     def zero(self):
@@ -120,9 +122,9 @@ class field():
     def trace_nn_prod(self,U,mu):
         return tr.einsum('b...ik,b...ik->b',U,U.roll(dims=mu+1,shifts=-1).conj())
 
-    def multCM(U,V):
+    def multCM(self,U,V):
         return tr.einsum('...ik,...kj->...ij',U,V)
-    def multCMdag(U,V):
+    def multCMdag(self,U,V):
         return tr.einsum('...ik,...jk->...ij',U,V.conj())
         
     def nn_force(self,U):
@@ -143,7 +145,10 @@ class field():
     def mat(self,b):
         return tr.einsum('kij,...k->...ij',basis, tr.complex(b,tr.zeros_like(b)))
     
-    
+    def reunit(self,A):
+        U,S,Vh = tr.linalg.svd(A)
+        return U@Vh
+
     def LieProject(self,F):
         F = 0.5*(F-F.transpose(self.ci[0],self.ci[1]).conj())
         trace = 0.5*tr.einsum('...ii->...',F)
@@ -152,11 +157,19 @@ class field():
         F[...,1,1] -= trace
         return F 
 
-    def expo(self,P):
-        nn = tr.norm(P,dim=(self.ci[0],self.ci[1]))/np.sqrt(2)
-        E = tr.einsum('...,ij->...ij',tr.cos(nn),tr.eye(2,2)) + tr.einsum('...,...ij->...ij',tr.sin(nn)/nn,P) 
-        return E
+#    def expo(self,P):
+#        nn = tr.norm(P,dim=(self.ci[0],self.ci[1]))/np.sqrt(2)
+#        E = tr.einsum('...,ij->...ij',tr.cos(nn),tr.eye(2,2)) + tr.einsum('...,...ij->...ij',tr.sin(nn)/nn,P) 
+#        return E
 
+#assumes last two indices are where the matrix is
+    def expo(self,P):
+        nn = tr.norm(P,dim=(-1,-2))/np.sqrt(2)
+        cos=tr.cos(nn).unsqueeze(-1).unsqueeze(-1)
+        sin=tr.where(nn > self.eps,tr.sin(nn)/nn,tr.ones_like(nn)).unsqueeze(-1).unsqueeze(-1)       
+        return cos*tr.eye(2, dtype=P.dtype, device=P.device).expand_as(P) + sin*P
+
+    
     def traceSquared(self,P):
         return tr.einsum('b...ij,b...ij->b',P,P.conj()).real
 
