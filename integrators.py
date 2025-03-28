@@ -55,46 +55,19 @@ class minnorm2(integrator):
                        
         return p,q
     
-    #For CS Methods project
-    def dd_Integrate(self, p, q, xcut):
-        #For pure gauge theory, evolution is local-
-        #no need to run seperate processes for subdomains
-        #Complete the first pass normally:
-        # p=self.evolveP(self.dt*self.lam,self.force(q),p)
-        # q = self.evolveQ(0.5*self.dt,p,q) #q + 0.5*self.dt*p
-        # #p = p + self.force(q)*self.dt*(1.0-2.0*self.lam)
-        # p=self.evolveP(self.dt*(1.0-2.0*self.lam),self.force(q),p)
-        # q = self.evolveQ(0.5*self.dt,p,q) #q + 0.5*self.dt*p
-        # #p = p + self.force(q)*self.dt*self.lam
-        # p=self.evolveP(self.dt*self.lam,self.force(q),p)
-        q0=q.clone()
-        p0 = p.clone()
-        #Freeze the boundary for the rest of the updates
+    #Integrator for 2nd level configurations
+    #Work around since force requires more arguments on 2nd level
+    #TODO: May be a better way to incorporate arguments to keep integrator general
+    def dd_Integrate(self, p, q, xcut_1, xcut_2, bw):
         for t in range(0,self.Nmd):
             #p = p + self.force(q)*self.dt*self.lam
-            p=self.evolveP(self.dt*self.lam,self.force(q),p)
-            #Freeze boundary
-            p[:,xcut, :, :] = p0[:,xcut, :,:]
-            p[:,0, :, :] = p0[:,0, :,:]
+            p=self.evolveP(self.dt*self.lam,self.force(q, xcut_1,xcut_2, bw),p)
             q = self.evolveQ(0.5*self.dt,p,q) #q + 0.5*self.dt*p
-            #Freeze boundary
-            q[:,xcut, :, :] = q0[:,xcut, :,:]
-            q[:,0, :, :] = q0[:,0, :,:]
             #p = p + self.force(q)*self.dt*(1.0-2.0*self.lam)
-            p=self.evolveP(self.dt*(1.0-2.0*self.lam),self.force(q),p)
-            #Freeze boundary
-            p[:,xcut, :, :] = p0[:,xcut, :,:]
-            p[:,0, :, :] = p0[:,0, :,:]
+            p=self.evolveP(self.dt*(1.0-2.0*self.lam),self.force(q, xcut_1,xcut_2, bw),p)
             q = self.evolveQ(0.5*self.dt,p,q) #q + 0.5*self.dt*p
-            #Freeze boundary
-            q[:,xcut, :, :] = q0[:,xcut, :,:]
-            q[:,0, :, :] = q0[:,0, :,:]
             #p = p + self.force(q)*self.dt*self.lam
-            p=self.evolveP(self.dt*self.lam,self.force(q),p)
-            #Freeze boundary
-            p[:,xcut, :, :] = p0[:,xcut, :,:]
-            p[:,0, :, :] = p0[:,0, :,:]
-
+            p=self.evolveP(self.dt*self.lam,self.force(q, xcut_1,xcut_2, bw),p)
 
         return p, q
         

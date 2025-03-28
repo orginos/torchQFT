@@ -301,7 +301,7 @@ class schwinger():
     #TODO: Testing allowing for non-zero momentum
     #Input: Inverse dirac operator, source timeslices to average over, spatial momentum
     #Output: Batch x Vector of Correlation functions for each time slice
-    def exact_Two_Point_Correlator(self, d_inv, s_range, p=0.0):
+    def exact_Pion_Correlator(self, d_inv, s_range, p=0.0):
 
         ev = tr.zeros([self.Bs, self.V[0]])
 
@@ -363,7 +363,7 @@ class schwinger():
     #Output: Batch x Vector of Correlation functions for each time slice
     #Note- assumes spatial momentum zero for propogating state
     #Propogator found with BICGStab rather than exact inverse
-    def two_Point_Correlator(self, d, s_range):
+    def pion_Correlator(self, d, s_range):
 
         ev = tr.zeros([self.Bs, self.V[0]])
 
@@ -480,11 +480,57 @@ class schwinger():
         fp = tr.inverse(s11)
         return fp
     
+    #Input: inverse Schur complement, starting timeslice of boundarys, boundary width
+    #range of source timeslices to average over
+    #Output: Hadron correlator computed using inverse of exact Schur complement
+    def dd_Exact_Pion_Correlator(self, s_inv, xcut_1, xcut_2, bw, s_range):
+
+        ev = tr.zeros([self.Bs, self.V[0]])
+
+        for sx in s_range:
+            sx = self.V[1] * sx
+
+            #lattice site index of subdomains
+            n=0
+
+            #Corrected ordering of timeslices if neccesary
+            ts = np.arange(self.V[0])
+            if (xcut_2 + bw < self.V[0]):
+                ts = np.roll(ts, self.V[0] - (xcut_2+bw))
+
+            #Traverse each lattice site in subdomains
+            for nt in ts:
+                #Skip timeslice if its in boundary area
+                if (nt not in np.arange(xcut_1, xcut_1+bw) and nt not in np.arange(xcut_2, xcut_2+bw)):
+                    c = tr.zeros(self.Bs)
+                    #Each spatial index on a timeslice
+                    for nx in np.arange(self.V[1]):
+                        s1 = s_inv[:, n:n+2, 2*sx:2*sx+2]
+                        s2 = tr.einsum('bxy, bzy -> bxz', s1, s1.conj())
+
+                        #B length vector
+                        c = c - tr.sum(s2, dim=(1,2))
+                        #Iterate to next spatial site
+                        n += 2
+
+                    #BxL tensor      
+                    ev[:, nt] = ev[:, nt] + tr.real(c)
+
+        #Average over the sources
+        ev = ev / (len(s_range))
+
+        return ev / np.sqrt(1.0*self.V[1])
+
+        
+
+
+
+    
     #Input: block banded D operator, cut timeslices, boundary width, Neumann approx. rank
     #source timeslice range
     #Output: Batch x Vector of Correlation functions for each time slice
     #Note- assumes spatial momentum zero for propogating state
-    def dd_Two_Point_Correlator(self, bb_d, xcut_1, xcut_2, bw, r, s_range):
+    def dd_Pion_Correlator(self, bb_d, xcut_1, xcut_2, bw, r, s_range):
 
         ev = tr.zeros([self.Bs, self.V[0]])
 
@@ -571,7 +617,8 @@ class schwinger():
         #Schur complement
         s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, self.neumann_Inverse(d00, r), d01)
 
-        #Alternative- use an exact inverse of the approximated schur complement
+        #Alternative- use an exact inverse of the approximated schur complement rather than
+        #using BICGStab
         if(True):
             inv_s = tr.inverse(s11)
             #Adjust sx for boundary as needed-assumes just two boundaries
@@ -612,82 +659,86 @@ class schwinger():
 
 # Two Level HMC Functions *******************************************
 
+    def dd_FermionAction(self, bb_d, p, xcut_1, xcut_2, bw, r=-1):
+        #Slice psuedofermion vector as appropriate
+        p_sd = tr.cat((p[:, 0:xcut_1*2*self.V[1]], p[:, (xcut_1+bw)*2*self.V[1]:xcut_2*2*self.V[1]]))
 
-def dd_FermionAction(self, bb_d, p, xcut_1, xcut_2, bw, r):
-    #Slice psuedofermion vector as appropriate
-    p_sd = tr.cat((p[:, 0:xcut_1*2*self.V[1]], p[:, (xcut_1+bw)*2*self.V[1]:xcut_2*2*self.V[1]]))
+        #Compute Schur complement
+        #Isolate sub matrices
+        #Assumes 2 width 2 timeslice boundaries
+        d00 = bb_d[:,0:4*bw*self.V[1], 0:4*bw*self.V[1]]
+        d01 = bb_d[:, 0:4*bw*self.V[1], 4*bw*self.V[1]:]
+        d10 = bb_d[:, 4*bw*self.V[1]:, 0:4*bw*self.V[1]]
+        d11 = bb_d[:, 4*bw*self.V[1]:, 4*bw*self.V[1]:]
 
-    #Compute Schur complement
-    #Isolate sub matrices
-    #Assumes 2 width 2 timeslice boundaries
-    d00 = bb_d[:,0:4*bw*self.V[1], 0:4*bw*self.V[1]]
-    d01 = bb_d[:, 0:4*bw*self.V[1], 4*bw*self.V[1]:]
-    d10 = bb_d[:, 4*bw*self.V[1]:, 0:4*bw*self.V[1]]
-    d11 = bb_d[:, 4*bw*self.V[1]:, 4*bw*self.V[1]:]
-
-    #Schur complement
-    s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, self.neumann_Inverse(d00, r), d01)
+        #Schur complement
+        if r ==-1:
+            s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, tr.inverse(d00), d01)
+        else:
+            s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, self.neumann_Inverse(d00, r), d01)
 
 
-    #Compute action
-    s_inv = tr.inverse(s11)
-    s_dag_inv = tr.inverse(s11.conj().transpose(1,2))
-    return tr.einsum('bx, bxy, byz, bz', tr.conj(p_sd), s_dag_inv, s_inv, p_sd)
+        #Compute action
+        s_inv = tr.inverse(s11)
+        s_dag_inv = tr.inverse(s11.conj().transpose(1,2))
+        return tr.einsum('bx, bxy, byz, bz', tr.conj(p_sd), s_dag_inv, s_inv, p_sd)
 
-def dd_GaugeAction(self, u, xcut_1, xcut_2, bw):
-    #plaquette matrix
-    pl = u[:,0,:,:]*tr.roll(u[:,1,:,:], shifts=-1, dims=1) \
-        * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:])
+    def dd_GaugeAction(self, u, xcut_1, xcut_2, bw):
+        #plaquette matrix
+        pl = u[:,0,:,:]*tr.roll(u[:,1,:,:], shifts=-1, dims=1) \
+            * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:])
 
-    #Only add plaquettes in the subdomains
-    pl1 = pl[:,:xcut_1,:]
-    pl2 = pl[:,xcut_1+bw:xcut_2, :]
-    s1 = (1/self.lam**2) *(tr.sum(tr.real(tr.ones_like(pl1) - pl1),dim=(1,2)))
-    s2 = (1/self.lam**2) *(tr.sum(tr.real(tr.ones_like(pl2) - pl2),dim=(1,2)))
-    return s1+s2
+        #Only add plaquettes in the subdomains
+        pl1 = pl[:,:xcut_1,:]
+        pl2 = pl[:,xcut_1+bw:xcut_2, :]
+        s1 = (1/self.lam**2) *(tr.sum(tr.real(tr.ones_like(pl1) - pl1),dim=(1,2)))
+        s2 = (1/self.lam**2) *(tr.sum(tr.real(tr.ones_like(pl2) - pl2),dim=(1,2)))
+        return s1+s2
 
-def dd_Action(self, q, xcut_1, xcut_2, bw, r):
-    if len(q) == 1:
-        return self.dd_GaugeAction(q[0], xcut_1, xcut_2, bw)
-    else:
-        bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2, bw)
-        return self.dd_GaugeAction(q[0], xcut_1, xcut_2, bw) + \
-        tr.abs(dd_FermionAction(bb_d, q[1], xcut_1, xcut_2, bw, r))
-    
-def dd_Force(self, q, xcut_1, xcut_2, bw, r):
-    #Compute gauge force as in the full model
-
-    #Isolate gauge field
-        u = q[0]
-        #A tensor of 'staples'
-        a = tr.zeros_like(q[0])
-
-        
-        a[:,0,:,:]  = tr.roll(u[:,1,:,:], shifts=-1, dims=1) * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:]) \
-                      + tr.conj(tr.roll(u[:,1,:,:], shifts=(-1,1), dims= (1,2)))*tr.conj(tr.roll(u[:,0,:,:], shifts=1, dims=2)) * tr.roll(u[:,1,:,:], shifts=1, dims=2)
-        a[:,1,:,:] = tr.conj(tr.roll(u[:,0,:,:], shifts=(1,-1), dims=(1,2))) * tr.conj(tr.roll(u[:,1,:,:], shifts=1, dims=1)) * tr.roll(u[:,0,:,:], shifts=1, dims=1) \
-                     + tr.roll(u[:,0,:,:], shifts=-1, dims=2) * tr.conj(tr.roll(u[:,1,:,:], shifts=-1, dims=1)) * tr.conj(u[:,0,:,:])
-        #gauge action contribution
-        fg = (-1.0j* (1.0/self.lam**2)/2.0)* (u*a - tr.conj(a)*tr.conj(u))
-
-        #Zero out the force on the frozen links
-        fg[:,:,xcut_1:xcut_1+bw, :] = 0.0
-        fg[:,:,xcut_2:xcut_2+bw, :] = 0.0
-
-        #If fermions aren't present, simply return force of gauge field
+    def dd_Action(self, q, xcut_1, xcut_2, bw, r=-1):
         if len(q) == 1:
-            #Force is already real, force cast for downstream errors
-            #Additional negative sign added from Hamilton's eqs.
-            return (-1.0)*tr.real(fg).type(self.dtype)
+            return self.dd_GaugeAction(q[0], xcut_1, xcut_2, bw)
+        else:
+            bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2, bw)
+            return self.dd_GaugeAction(q[0], xcut_1, xcut_2, bw) + \
+            tr.abs(self.dd_FermionAction(bb_d, q[1], xcut_1, xcut_2, bw, r))
         
-        #Otherwise, compute force of the fermion fields
-        d_dense = q[2].to_dense()
-        f = q[1]
+    def dd_Force(self, q, xcut_1, xcut_2, bw, r=-1):
+        #Compute gauge force as in the full model
 
+        #Isolate gauge field
+            u = q[0]
+            #A tensor of 'staples'
+            a = tr.zeros_like(q[0])
 
-
-
-        
             
-    
+            a[:,0,:,:]  = tr.roll(u[:,1,:,:], shifts=-1, dims=1) * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:]) \
+                        + tr.conj(tr.roll(u[:,1,:,:], shifts=(-1,1), dims= (1,2)))*tr.conj(tr.roll(u[:,0,:,:], shifts=1, dims=2)) * tr.roll(u[:,1,:,:], shifts=1, dims=2)
+            a[:,1,:,:] = tr.conj(tr.roll(u[:,0,:,:], shifts=(1,-1), dims=(1,2))) * tr.conj(tr.roll(u[:,1,:,:], shifts=1, dims=1)) * tr.roll(u[:,0,:,:], shifts=1, dims=1) \
+                        + tr.roll(u[:,0,:,:], shifts=-1, dims=2) * tr.conj(tr.roll(u[:,1,:,:], shifts=-1, dims=1)) * tr.conj(u[:,0,:,:])
+            #gauge action contribution
+            fg = (-1.0j* (1.0/self.lam**2)/2.0)* (u*a - tr.conj(a)*tr.conj(u))
+
+            #Zero out the force on the frozen links
+            fg[:,:,xcut_1:xcut_1+bw, :] = 0.0
+            fg[:,:,xcut_2:xcut_2+bw, :] = 0.0
+
+            #If fermions aren't present, simply return force of gauge field
+            if len(q) == 1:
+                #Force is already real, force cast for downstream errors
+                #Additional negative sign added from Hamilton's eqs.
+                return (-1.0)*tr.real(fg).type(self.dtype)
+            
+            
+            #Otherwise, compute force of the fermion fields
+            #Quenched simulation only for now
+            #TODO: Dynamical force with DD
+            return 0
+
+
+
+
+            
+                
+        
 

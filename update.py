@@ -50,16 +50,16 @@ class hmc:
         return q
 
     #Evolve function for handling gauge fields and fermion fields as a tuple
-    def evolve_f(self,q,N, f=False):
+    def evolve_f(self,q,N):
         qshape =tuple([q[0].shape[0]]+[1]*(len(q[0].shape)-1))
         #Acceptance flag shapes needed with fermion field/dirac operator
-        if f == True:
+        if len(q) !=1:
             fshape = tuple([q[1].shape[0]]+[1]*(len(q[1].shape)-1))
             dshape = tuple([q[2].shape[0]]+[1]*(len(q[2].shape)-1))
 
         for k in range(N):
             #Generate psuedofermions if neccesary
-            if f == True:
+            if len(q) !=1:
                 f_upd = self.T.generate_Pseudofermions(q[2])
                 q = (q[0], f_upd, q[2])
             q0=tuple(q) # copy the q
@@ -75,7 +75,7 @@ class hmc:
             self.AcceptReject.extend(AR.tolist())
             u = tr.where(Acc_flag.view(qshape),q[0],q0[0])
             #This is hacky... must be better way
-            if f == False:
+            if len(q) ==1:
                 q = (u,)
             else:
                 ff = tr.where(Acc_flag.view(fshape),q[1],q0[1])
@@ -94,17 +94,52 @@ class hmc:
         return q
     
     #Multi-level integrator for DD calculations
-    #Input: simulated fields, level 0 configs, level 1 configs, 
+    #Input: simulated fields, level 1 configs, 
     #timeslice of boundaries
     #TODO: In development
-    def dd_Evolve(self, q, n0, n1, xcut1, xcut2):
+    def second_Level_Evolve(self, q, n, xcut1, xcut2, bw, r=-1):
         qshape =tuple([q[0].shape[0]]+[1]*(len(q[0].shape)-1))
         #Checking if quenched/dynamical calculation
         if len(q) > 1:
             fshape = tuple([q[1].shape[0]]+[1]*(len(q[1].shape)-1))
             dshape = tuple([q[2].shape[0]]+[1]*(len(q[2].shape)-1))
-        for k in range(n0):
-            q0 = q.clone()
+        for k in range(n):
+            #Generate psuedofermions if neccesary
+            #Do we still refresh pseudofermions on 2nd level?
+            if len(q) > 1:
+                f_upd = self.T.generate_Pseudofermions(q[2])
+                q = (q[0], f_upd, q[2])
+            q0 = tuple(q)
+            p0 = self.T.refreshP()
+            H0 = self.T.kinetic(p0) + self.T.dd_Action(q0, xcut1, xcut2, bw)
+            p,q = self.I.dd_Integrate(p0,q, xcut1, xcut2, bw)
+            Hf = self.T.kinetic(p) + self.T.dd_Action(q,xcut1, xcut2, bw)
+            DH = Hf - H0
+            acc_prob=tr.where(DH<0,tr.ones_like(DH),tr.exp(-DH))
+            R=tr.rand_like(acc_prob)
+            Acc_flag = (R<acc_prob)
+            AR = tr.where(Acc_flag,tr.ones_like(DH),tr.zeros_like(DH))
+            self.AcceptReject.extend(AR.tolist())
+            u = tr.where(Acc_flag.view(qshape),q[0],q0[0])
+            #This is hacky... must be better way
+            if len(q)==1:
+                q = (u,)
+            else:
+                ff = tr.where(Acc_flag.view(fshape),q[1],q0[1])
+                #tr.where doesn't accept sparse matrices
+                d_dense = q[2].to_dense()
+                d0_dense = q0[2].to_dense()
+                d = tr.where(Acc_flag.view(dshape),d_dense,d0_dense)
+                q = (u, ff, d.to_sparse())
+            # q = tr.where(Acc_flag.view(qshape),q,q0)
+
+            
+            if(self.verbose):
+                av_ar = tr.mean(AR)
+                print(" HMC: ",k," DH= ",DH.tolist()," A/R= ",Acc_flag.tolist()," Pacc= ",av_ar.item())
+                    
+        return q
+
 
     
     #Naive DD evolve - added for numerical methods project

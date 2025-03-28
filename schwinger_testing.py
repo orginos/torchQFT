@@ -256,7 +256,7 @@ def quenched_pi_plus_mass():
     sim = h.hmc(sch, im2, False)
     
     #Bring lattice to equilibrium
-    q = sim.evolve_f(q, 5, False)
+    q = sim.evolve_f(q, 5)
 
 
 
@@ -272,7 +272,7 @@ def quenched_pi_plus_mass():
         #for nt in np.arange(0, L):
             
         #Vector of time slice correlations
-        cl = sch.exact_Two_Point_correlator(d_inv)
+        cl = sch.exact_Pion_Correlator(d_inv)
         if n ==0:
             c = cl
         else:
@@ -323,7 +323,7 @@ def fermion_force():
     im2 = i.minnorm2(sch.force,sch.evolveQ,100, 1.0)
     sim = h.hmc(sch, im2, True)
 
-    q = sim.evolve_f(q, 5, True)
+    q = sim.evolve_f(q, 5)
 
 
 #Testing equilibration of full dynamical model
@@ -367,8 +367,8 @@ def dynamical_action():
     steps = 20
     for n in np.arange(0, steps):
         #Evolve, one HMC step
-        q = sim.evolve_f(q, 1, True)
-        cq = sim.evolve_f(cq, 1, True)
+        q = sim.evolve_f(q, 1)
+        cq = sim.evolve_f(cq, 1)
         u = q[0]
         cu = cq[0]
         #Average action
@@ -481,20 +481,20 @@ def pi_plus_mass():
     sim = h.hmc(sch, im2, True)
     
     #Bring lattice to equilibrium
-    q = sim.evolve_f(q, 50, True)
+    q = sim.evolve_f(q, 50)
 
 
 
     #Measurement process- n measurements on batches
     for n in np.arange(10):
         #Discard some in between
-        q= sim.evolve_f(q, 10, True)
+        q= sim.evolve_f(q, 10)
         d = sch.diracOperator(q[0])
         d_inv = tr.linalg.inv(d.to_dense())
 
             
         #Vector of time slice correlations
-        cl = sch.exact_Two_Point_correlator(d_inv)
+        cl = sch.exact_Pion_Correlator(d_inv)
         if n ==0:
             c = cl
         else:
@@ -672,8 +672,8 @@ def autograd_dynamical_action():
     steps = 60
     for n in np.arange(0, steps):
         #Evolve, one HMC step
-        q = sim.evolve_f(q, 1, True)
-        cq = sim.evolve_f(cq, 1, True)
+        q = sim.evolve_f(q, 1)
+        cq = sim.evolve_f(cq, 1)
         u = q[0]
         cu = cq[0]
         #Average action
@@ -695,7 +695,7 @@ def autograd_dynamical_action():
     plt.show()
 
 #Compare results of pi plus mass calculation using explicit and autograd approach on a small lattice
-def pi_plus_comparison():
+def autograd_pi_plus_comparison():
     #Measurement process -given function for correlator of pi plus
     batch_size=10
     #lam =np.sqrt(1.0/0.970)
@@ -733,18 +733,18 @@ def pi_plus_comparison():
     a_sim = h.hmc(sch, a_im2, False)
     
     #Bring lattice to equilibrium
-    e_q = e_sim.evolve_f(q, 20, True)
+    e_q = e_sim.evolve_f(q, 20)
 
-    a_q = a_sim.evolve_f(q, 20, True)
+    a_q = a_sim.evolve_f(q, 20)
 
 
 
     #Measurement process- n measurements on the batches
     for n in np.arange(10):
         #Discard some in between
-        e_q = e_sim.evolve_f(e_q, 10, True)
+        e_q = e_sim.evolve_f(e_q, 10)
 
-        a_q = a_sim.evolve_f(a_q, 10, True)
+        a_q = a_sim.evolve_f(a_q, 10)
         
         e_d = sch.diracOperator(e_q[0])
         e_d_inv = tr.linalg.inv(e_d.to_dense())
@@ -757,8 +757,8 @@ def pi_plus_comparison():
         #for nt in np.arange(0, L):
             
         #Vector of time slice correlations
-        e_cl = sch.exact_Two_Point_correlator(e_d_inv)
-        a_cl = sch.exact_Two_Point_correlator(a_d_inv)
+        e_cl = sch.exact_Pion_Correlator(e_d_inv)
+        a_cl = sch.exact_Pion_Correlator(a_d_inv)
         if n ==0:
             e_c = e_cl
             a_c = a_cl
@@ -815,14 +815,14 @@ def autograd_pi_plus_mass():
     sim = h.hmc(sch, im2, True)
     
     #Bring lattice to equilibrium
-    q = sim.evolve_f(q, 30, True)
+    q = sim.evolve_f(q, 30)
 
 
 
     #Measurement process- n measurements on the batches
     for n in np.arange(10):
         #Discard some in between
-        q= sim.evolve_f(q, 10, True)
+        q= sim.evolve_f(q, 10)
         d = sch.diracOperator(q[0])
         d_inv = tr.linalg.inv(d.to_dense())
 
@@ -901,7 +901,7 @@ def pion_triplet_fit():
     sim = h.hmc(sch, im2, True)
     
     #Equilibration
-    q = sim.evolve_f(q, 50, True)
+    q = sim.evolve_f(q, 50)
 
 
 
@@ -909,13 +909,13 @@ def pion_triplet_fit():
     nm = 10
     for n in np.arange(nm):
         #Discard some in between
-        q= sim.evolve_f(q, 10, True)
+        q= sim.evolve_f(q, 10)
         d = sch.diracOperator(q[0])
         d_inv = tr.linalg.inv(d.to_dense())
 
             
         #Vector of time slice correlations
-        cl = sch.exact_Two_Point_Correlator(d_inv, (0,), p=1*(2*np.pi)/L2)
+        cl = sch.exact_Pion_Correlator(d_inv, (0,), p=1*(2*np.pi)/L2)
         if n ==0:
             c = cl
         else:
@@ -1069,7 +1069,7 @@ def topological_Charge_Distribution():
     sim = h.hmc(sch, im2, True)
     
     #Equilibration
-    q = sim.evolve_f(q, 50, True)
+    q = sim.evolve_f(q, 50)
 
 
     charge = tr.sum(tr.real(tr.log(q[0])/1.0j) % (2.0*np.pi), dim=(1,2,3))/(2.0*np.pi*L*L2) - 1.0
@@ -1077,7 +1077,7 @@ def topological_Charge_Distribution():
     nm = 20
     for n in np.arange(nm):
         #Discard some in between
-        q= sim.evolve_f(q, 10, True)
+        q= sim.evolve_f(q, 10)
         charge = tr.cat((charge, tr.sum(tr.real(tr.log(q[0])/1.0j) % (2.0*np.pi), dim=(1,2,3))/(2.0*np.pi*L*L2) -1.0))
 
     fig, ax1 = plt.subplots(1,1)

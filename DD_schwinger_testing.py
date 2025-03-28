@@ -100,7 +100,7 @@ def dirac_Operator_Norm():
     im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
     sim = h.hmc(sch, im2, False)
     #Equilibration
-    q = sim.evolve_f(q, 25, False)
+    q = sim.evolve_f(q, 25)
 
     d = sch.bb_DiracOperator(q, xcut_1, xcut_2).to_dense()
 
@@ -132,7 +132,7 @@ def dirac_Operator_Norm():
     im2 = i.minnorm2(sch.force,sch.evolveQ,10, 1.0)
     sim = h.hmc(sch, im2, False)
     #Equilibration
-    q = sim.evolve_f(q, 25, True)
+    q = sim.evolve_f(q, 25)
 
     d = sch.bb_DiracOperator(q, xcut_1, xcut_2).to_dense()
     d00 = d[:,0:8*L, 0:8*L]
@@ -234,22 +234,22 @@ def quenched_two_point_Comparison():
     #sch.dd_Two_Point_Correlator(q, xcut_1, xcut_2, r)
 
     #Equilibration
-    q = sim.evolve_f(q, 25, False)
+    q = sim.evolve_f(q, 25)
 
 
     #Measurement process- Compare nm measurements on batches
     nm = 10
     for n in np.arange(nm):
         #Discard some in between
-        q= sim.evolve_f(q, 10, False)
+        q= sim.evolve_f(q, 10)
         d = sch.diracOperator(q[0])
         bb_d = sch.bb_DiracOperator(q, xcut_1, xcut_2, bw)
         d_inv = tr.linalg.inv(d.to_dense())
 
             
         #Vector of time slice correlations
-        cl = sch.exact_Two_Point_Correlator(d_inv, np.concatenate((np.arange(4,8), np.arange(20,24))))
-        cl2 = sch.dd_Two_Point_Correlator(bb_d, xcut_1, xcut_2, bw, r, np.concatenate((np.arange(4,8), np.arange(20,24))))
+        cl = sch.exact_Pion_Correlator(d_inv, np.concatenate((np.arange(4,8), np.arange(20,24))))
+        cl2 = sch.dd_Pion_Correlator(bb_d, xcut_1, xcut_2, bw, r, np.concatenate((np.arange(4,8), np.arange(20,24))))
         if n ==0:
             c = cl
             c2= cl2
@@ -282,7 +282,7 @@ def quenched_two_point_Comparison():
 
     plt.show()
 
-#Plot 2 pt functions, difference, and error differences to assess approximation
+#Plot imported data on 2 pt functions, difference, and error differences to assess approximation
 def plot_Two_Point_Difference():
     data = np.genfromtxt('m0=-0.04.csv', delimiter=',')
     
@@ -336,10 +336,10 @@ def two_Point_Decay_Comparison():
     
     #Does it run?
     fp = sch.dd_Approx_Propogator(q, xcut_1, xcut_2, r, 0)
-    sch.dd_Two_Point_Correlator(fp, xcut_1, xcut_2, 0)
+    sch.dd_Pion_Correlator(fp, xcut_1, xcut_2, 0)
 
     #Equilibration
-    q = sim.evolve_f(q, 25, True)
+    q = sim.evolve_f(q, 25)
 
 
 
@@ -347,15 +347,15 @@ def two_Point_Decay_Comparison():
     nm = 1
     for n in np.arange(nm):
         #Discard some in between
-        q= sim.evolve_f(q, 10, True)
+        q= sim.evolve_f(q, 10)
         d = sch.diracOperator(q[0])
         d_inv = tr.linalg.inv(d.to_dense())
         fp = sch.dd_Approx_Propogator(q, xcut_1, xcut_2, r, 0)
 
             
         #Vector of time slice correlations
-        cl = sch.exact_Two_Point_correlator(d_inv)
-        cl2 = sch.dd_Two_Point_Correlator(fp, xcut_1, xcut_2, 0)
+        cl = sch.exact_Pion_Correlator(d_inv)
+        cl2 = sch.dd_Pion_Correlator(fp, xcut_1, xcut_2, 0)
         if n ==0:
             c = cl
             c2= cl2
@@ -445,7 +445,7 @@ def compute_Propogator_Correction():
     #Neumann Approximation rank
     r=0
 
-    s_range = np.concatenate((np.arange(0,14), np.arange(16,30)))
+    s_range = (7,)
 
 
     u = sch.hotStart()
@@ -457,22 +457,23 @@ def compute_Propogator_Correction():
 
     print("Approx. calculation: ")
     #Equilibration
-    q = sim.evolve_f(q, 25, False)
+    q = sim.evolve_f(q, 25)
 
     #Measurement process- Compare nm measurements on batches
     nm = 10
     for n in np.arange(nm):
         #Discard some in between
-        q= sim.evolve_f(q, 10, False)
+        q= sim.evolve_f(q, 10)
         bb_d = sch.bb_DiracOperator(q, xcut_1, xcut_2, bw)
 
             
         #Vector of time slice correlations
-        cl = sch.dd_Two_Point_Correlator(bb_d, xcut_1, xcut_2, bw, r, s_range)
+        cl = sch.dd_Pion_Correlator(bb_d, xcut_1, xcut_2, bw, r, s_range)
         if n ==0:
             c= cl
         else:
             c = tr.cat((c, cl),0)
+            
         print(n)
 
     #Now Compute the Exact observable
@@ -494,18 +495,18 @@ def compute_Propogator_Correction():
 
     print("Exact calculation: ")
     #Equilibration
-    q = sim.evolve_f(q, 25, False)
+    q = sim.evolve_f(q, 25)
 
     #Measurement process- Compare nm measurements on batches
     nm = 10
     for n in np.arange(nm):
         #Discard some in between
-        q= sim.evolve_f(q, 10, False)
+        q= sim.evolve_f(q, 10)
         d = sch.diracOperator(q[0])
         d_inv = tr.linalg.inv(d.to_dense())
             
         #Vector of time slice correlations
-        cl = sch.two_Point_correlator(q[2], s_range)
+        cl = sch.pion_Correlator(sch.diracOperator(q[0]), s_range)
 
         if n ==0:
             c2= cl
@@ -535,20 +536,23 @@ def compute_Propogator_Correction():
 #Note- this is NOT a differing Monte Carlo process- just the factorized observable
 #TODO: In development
 def compute_Pion_Mass_Correction():
-    #First we compute the pion mass observable using the approximation scheme:
+   #First we compute the correlator using the approximation scheme:
     batch_size= 100
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
-    mass= 0.0
-    L = 16
-    L2 = 16
+    mass= 0.08
+    L = 32
+    L2 = 32
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     #Boundary cut timeslices
-    xcut_1 = 7
-    xcut_2 = 14
+    xcut_1 = 14
+    xcut_2 = 30
+    bw=2
     #Neumann Approximation rank
-    r=1
+    r=0
+
+    s_range = (7,)
 
 
     u = sch.hotStart()
@@ -558,64 +562,36 @@ def compute_Pion_Mass_Correction():
     im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
     sim = h.hmc(sch, im2, False)
 
-    print("Approx. calculation: ")
+    #print("Approx. calculation: ")
     #Equilibration
-    q = sim.evolve_f(q, 25, False)
+    q = sim.evolve_f(q, 50)
 
     #Measurement process- Compare nm measurements on batches
-    nm = 10
+    nm = 1
     for n in np.arange(nm):
         #Discard some in between
-        q= sim.evolve_f(q, 10, False)
-        fp = sch.dd_Approx_Propogator(q, xcut_1, xcut_2, r, 0)
+        q= sim.evolve_f(q, 10)
+        bb_d = sch.bb_DiracOperator(q, xcut_1, xcut_2, bw)
 
             
         #Vector of time slice correlations
-        cl = sch.dd_Two_Point_Correlator(fp, xcut_1, xcut_2)
+        cl = sch.dd_Pion_Correlator(bb_d, xcut_1, xcut_2, bw, r, s_range)
         if n ==0:
             c= cl
         else:
             c = tr.cat((c, cl),0)
-        print(n)
 
-    #Now Compute the Exact observable
-    batch_size= 10
-    lam = np.sqrt(1.0/10.0)
-    #Below is bare mass
-    mass= 0.0
-    L = 16
-    L2 = 16
-    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
-
-
-    u = sch.hotStart()
-
-    q = (u,)
-
-    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
-    sim = h.hmc(sch, im2, False)
-
-    print("Exact calculation: ")
-    #Equilibration
-    q = sim.evolve_f(q, 25, False)
-
-    #Measurement process- Compare nm measurements on batches
-    nm = 10
-    for n in np.arange(nm):
-        #Discard some in between
-        q= sim.evolve_f(q, 10, False)
         d = sch.diracOperator(q[0])
-        d_inv = tr.linalg.inv(d.to_dense())
             
         #Vector of time slice correlations
-        cl = sch.exact_Two_Point_correlator(d_inv)
+        cl = sch.exact_Pion_Correlator(tr.inverse(d.to_dense()), s_range)
 
         if n ==0:
             c2= cl
         else:
             c2 = tr.cat((c2, cl),0)
+        
         print(n)
-
 
     #Save produced correlator data
     #Average over all batches and configurations measured
@@ -632,35 +608,67 @@ def compute_Pion_Mass_Correction():
     df.to_csv("output.csv", index = False)
 
 
-    #Now fit the effective mass curves and report measurement
+#Fit function for pion triplet
+#TODO: N_T is hardcoded- way to pass in fitting process?
+def f_pi_triplet(x, m, A):
+    s = 7.0
+    N_T = 10.0
+    return A* (np.exp(-m *(s-x)) + np.exp(-(N_T + s - x)*m))
 
-    #Fit the effective mass curve for the exact computation and approximation
+def import_correction_fit():
+    df = pd.read_csv('output.csv')
+    a = df.to_numpy()
+
+
+    fig, (ax1, ax2) = plt.subplots(1,2)
+
+    ax1.set_yscale('log', nonpositive='clip')
+    ax2.set_yscale('log', nonpositive='clip')
+
+
+    #Fit the effective mass curve
     #Select only the time slices near the center of the lattice
-    approx_popt, approx_pcov = sp.optimize.curve_fit(f_pi_triplet, np.concatenate((np.arange(3,7),np.arange(9,12))), np.concatenate((np.abs(df.iloc[0, 3:7]), np.abs(df.iloc[0, 9:12]))), sigma = np.concatenate((np.abs(df.iloc[1, 3:7]), np.abs(df.iloc[1, 9:12]))))
-    print("Approximation:")
-    print(approx_popt)
-    print(approx_pcov)
+    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(0,5), np.abs(a[0, 0:5]), sigma = np.abs(a[1, 0:5]))
+    print("Approx:")
+    print(popt)
+    print(pcov)
 
-    exact_popt, exact_pcov = sp.optimize.curve_fit(f_pi_triplet, np.concatenate((np.arange(3,7),np.arange(9,12))), np.concatenate((np.abs(df.iloc[2, 3:7]), np.abs(df.iloc[2, 9:12]))), sigma = np.concatenate((np.abs(df.iloc[3, 3:7]), np.abs(df.iloc[3, 9:12]))))
-    print("Exact")
-    print(exact_popt)
-    print(exact_pcov)
+    #Plot the fit & data
+    #ax1.plot(np.linspace(0, 10, 100), f_pi_triplet(np.linspace(0, 10, 100), *popt))
+    ax1.errorbar(np.arange(0, 32), np.abs(a[0]), np.abs(a[1]), ls="", marker=".", markersize=10, elinewidth=2.0)
 
-    #Plot 
-    fig, ax1 = plt.subplots(1,1)
+    ax1.set_ylabel(r'$C(t)$', fontsize=32)
+    ax1.set_xlabel(r'$n_t$', fontsize=32)
 
-    ax1.plot(np.linspace(0, 16, 100), f_pi_triplet(np.linspace(0, 16, 100), *exact_popt), 'b')
-    ax1.errorbar(np.arange(0, 16), np.abs(df.iloc[2, :]), np.abs(df.iloc[3, :]), ls="", fmt="b.", label="Exact")
+    ax1.yaxis.set_tick_params(labelsize=28)
+    ax1.xaxis.set_tick_params(labelsize=28)
 
-    ax1.plot(np.linspace(0, 16, 100), f_pi_triplet(np.linspace(0, 16, 100), *approx_popt), 'r')
-    ax1.errorbar(np.arange(0, 16), np.abs(df.iloc[0, :]), np.abs(df.iloc[1, :]), ls="", fmt="r.", label="Approx.")
 
-    ax1.legend()
+    #Fit the effective mass curve
+    #Select only the time slices near the center of the lattice
+    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(0,5), np.abs(a[2, 0:5]), sigma = np.abs(a[3, 0:5]))
+    print("Exact:")
+    print(popt)
+    print(pcov)
+
+    #Plot the fit & data
+    #ax1.plot(np.linspace(0, 10, 100), f_pi_triplet(np.linspace(0, 10, 100), *popt))
+    ax2.errorbar(np.arange(0, 32), np.abs(a[2]), np.abs(a[3]), ls="", marker=".", markersize=10, elinewidth=2.0)
+
+    ax2.set_ylabel(r'$C(t)$', fontsize=32)
+    ax2.set_xlabel(r'$n_t$', fontsize=32)
+
+    ax2.yaxis.set_tick_params(labelsize=28)
+    ax2.xaxis.set_tick_params(labelsize=28)
+
+
+
 
     plt.show()
-    
+
 #Testing implementation of multilevel integrator- quenched
 #TODO: In Development
+#Runs without issue, results need validating
 def multilevel_Integrator():
     batch_size= 100
     lam = np.sqrt(1.0/10.0)
@@ -671,10 +679,11 @@ def multilevel_Integrator():
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     #Boundary cut timeslices
-    xcut_1 = 7
+    xcut_1 = 6
     xcut_2 = 14
-    #Neumann Approximation rank
-    r=1
+    bw=2
+
+    s_range= (3,)
 
 
     u = sch.hotStart()
@@ -682,20 +691,49 @@ def multilevel_Integrator():
     q = (u,)
 
     im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
+    lvl2_im2 = i.minnorm2(sch.dd_Force,sch.evolveQ,20, 1.0)
     sim = h.hmc(sch, im2, False)
+    lvl2_sim = h.hmc(sch, lvl2_im2, False)
 
     #Typical equilibration
-    q = sim.evolve_f(q, 25, False)
+    q = sim.evolve_f(q, 50)
 
     #Level 0 configurations per batch
     n0 = 10
 
-    for i in np.arange(n0):
-        #seperate the subdomains- keep immediate edge of boundary regions
-        u0 = tr.cat((q[0][:, xcut_2+1, :], q[0][:, 0:xcut_1+1, :]), dim=1)
-        u1 = q[0][:, xcut_1 +2:xcut_2+1, :] 
-        q0 = (u0,)
-        q1 = (u1,)
+    #Level 1 configurations per batch
+    n1 = 10
+
+    for n in np.arange(n0):
+        q = sim.evolve_f(q, 10)
+
+        for n2 in np.arange(n1):
+            q = lvl2_sim.second_Level_Evolve(q, 10, xcut_1, xcut_2, bw)
+            s_inv = tr.inverse(sch.bb_DiracOperator(q, xcut_1, xcut_2, bw).to_dense())
+
+            cl = sch.dd_Exact_Pion_Correlator(s_inv, xcut_1, xcut_2, bw, s_range)
+
+            if n ==0:
+                c= cl
+            else:
+                c = tr.cat((c, cl),0)
+        print(n)
+
+
+    #Save produced correlator data
+    #Average over all batches and configurations measured
+    c_avg = tr.mean(c, dim=0)
+    c_err = (tr.std(c, dim=0)/np.sqrt(tr.numel(c[:,0]) - 1))
+
+    #Write dataframe of data
+
+    df = pd.DataFrame([c_avg.detach().numpy(), c_err.detach().numpy()])
+    #TODO: Write more descriptive datafile name
+    df.to_csv("output.csv", index = False)
+            
+
+
+
 
 #Plot exact/approx correlator difference from imported csv data
 def plot_correlator_difference():
@@ -727,6 +765,7 @@ def plot_correlator_difference():
 
 
 
+
 def main():
     #block_Diagonal_Check()
     #propogator_Comparison()
@@ -737,7 +776,10 @@ def main():
     #two_Point_Decay_Comparison()
     #approx_Propogator_Testing()
     #compute_Propogator_Correction()
-    plot_correlator_difference()
+    #compute_Pion_Mass_Correction()
+    #import_correction_fit()
+    #plot_correlator_difference()
+    multilevel_Integrator()
 
 
 
