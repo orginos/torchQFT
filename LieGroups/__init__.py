@@ -47,7 +47,7 @@ def expo(X):
     return tr.matrix_exp(X)
 
 #differential of the exponential map
-def dexpo(x,y,Ntaylor=10):
+def dexpo(x,y,Ntaylor=20):
     #horner scheme
     r = (-1)**(Ntaylor%2)/tr.math.factorial(Ntaylor+1)*y
     for k in range(Ntaylor-1,0,-1):
@@ -60,5 +60,6 @@ def dexpo(x,y,Ntaylor=10):
 
 
 from . import so3
+from . import su2
 
     

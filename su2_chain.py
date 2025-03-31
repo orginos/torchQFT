@@ -164,10 +164,9 @@ class field():
 
 #assumes last two indices are where the matrix is
     def expo(self,P):
-        nn = tr.norm(P,dim=(-1,-2))/np.sqrt(2)+tr.finfo(P.dtype).eps
-        cos=tr.cos(nn).unsqueeze(-1).unsqueeze(-1)
-        sin=tr.where(nn > self.eps,tr.sin(nn)/nn,tr.ones_like(nn)).unsqueeze(-1).unsqueeze(-1)       
-        return cos*tr.eye(2, dtype=P.dtype, device=P.device).expand_as(P) + sin*P
+        nn = (tr.norm(P,dim=(-1,-2))/np.sqrt(2)+tr.finfo(P.dtype).eps).unsqueeze(-1).unsqueeze(-1)   
+        return tr.cos(nn)*tr.eye(2, dtype=P.dtype, device=P.device).expand_as(P) + P*(tr.sin(nn)/nn) 
+
 
     
     def traceSquared(self,P):
