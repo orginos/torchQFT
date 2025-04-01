@@ -47,7 +47,7 @@ def check_algebra():
     acom = foo + foo.transpose(0,1)
     
    
-    print("Normalization checks if zero: ",(tr.einsum('aij,bji->ab',T,T)+0.5*tr.eye(8)).norm()/8.0)
+    print("Normalization checks if zero: ",(tr.einsum('aij,bji->ab',T,T)+0.5*tr.eye(8)).norm().numpy()/8.0)
     boo = tr.einsum('abc,cij->abij',f_struc,T)
     print("If zero the su3 algebra checks: ",((comm-boo).norm()/boo.norm()).numpy())
     boo = tr.einsum('abc,cij->abij',1j*d_struc,T)
