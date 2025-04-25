@@ -71,7 +71,7 @@ def propogator_Comparison():
 
     q = (u, f, d)
 
-    s_inv = sch.dd_Factorized_Propogator(q, 3, 8)
+    s_inv = sch.dd_Factorized_Propogator(q, 3, 8, 2)
 
     #Compare propogator of first time slice of first subdomain
     # Very nearly match! Error of 10^-9
@@ -209,14 +209,14 @@ def quenched_two_point_Comparison():
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
     mass= 0.00
-    L = 32
-    L2 = 32
+    L = 16
+    L2 = 16
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     #Boundary cut timeslices
-    xcut_1 = 12
-    xcut_2 = 28
-    bw=4
+    xcut_1 = 6
+    xcut_2 = 14
+    bw=2
     #Neumann Approximation rank
     r=0
 
@@ -243,13 +243,13 @@ def quenched_two_point_Comparison():
         #Discard some in between
         q= sim.evolve_f(q, 10)
         d = sch.diracOperator(q[0])
-        bb_d = sch.bb_DiracOperator(q, xcut_1, xcut_2, bw)
+        s_inv = sch.dd_Factorized_Propogator(q, xcut_1, xcut_2, bw)
         d_inv = tr.linalg.inv(d.to_dense())
 
             
         #Vector of time slice correlations
-        cl = sch.exact_Pion_Correlator(d_inv, np.concatenate((np.arange(4,8), np.arange(20,24))))
-        cl2 = sch.dd_Pion_Correlator(bb_d, xcut_1, xcut_2, bw, r, np.concatenate((np.arange(4,8), np.arange(20,24))))
+        cl = sch.exact_Pion_Correlator(d_inv, (3,))
+        cl2 = sch.dd_Exact_Pion_Correlator(s_inv, xcut_1, xcut_2, bw, (3,))
         if n ==0:
             c = cl
             c2= cl2
@@ -318,8 +318,9 @@ def two_Point_Decay_Comparison():
     #Boundary cut timeslices
     xcut_1 = 2
     xcut_2 = 7
+    bw = 2
     #Approximation rank
-    r=2
+    #r=2
 
 
     u = sch.hotStart()
@@ -335,8 +336,8 @@ def two_Point_Decay_Comparison():
     sim = h.hmc(sch, im2, False)
     
     #Does it run?
-    fp = sch.dd_Approx_Propogator(q, xcut_1, xcut_2, r, 0)
-    sch.dd_Pion_Correlator(fp, xcut_1, xcut_2, 0)
+    #fp = sch.dd_Approx_Propogator(q, xcut_1, xcut_2, r, 0)
+    #sch.dd_Pion_Correlator(fp, xcut_1, xcut_2, 0)
 
     #Equilibration
     q = sim.evolve_f(q, 25)
@@ -350,12 +351,12 @@ def two_Point_Decay_Comparison():
         q= sim.evolve_f(q, 10)
         d = sch.diracOperator(q[0])
         d_inv = tr.linalg.inv(d.to_dense())
-        fp = sch.dd_Approx_Propogator(q, xcut_1, xcut_2, r, 0)
+        fp = sch.dd_Factorized_Propogator(q, xcut_1, xcut_2,bw)
 
             
         #Vector of time slice correlations
-        cl = sch.exact_Pion_Correlator(d_inv)
-        cl2 = sch.dd_Pion_Correlator(fp, xcut_1, xcut_2, 0)
+        cl = sch.exact_Pion_Correlator(d_inv, (3,))
+        cl2 = sch.dd_Exact_Pion_Correlator(fp, xcut_1, xcut_2, bw (3,))
         if n ==0:
             c = cl
             c2= cl2
@@ -611,9 +612,9 @@ def compute_Pion_Mass_Correction():
 #Fit function for pion triplet
 #TODO: N_T is hardcoded- way to pass in fitting process?
 def f_pi_triplet(x, m, A):
-    s = 7.0
-    N_T = 10.0
-    return A* (np.exp(-m *(s-x)) + np.exp(-(N_T + s - x)*m))
+    s = 3.0
+    N_T = 16.0
+    return A* (np.exp(-m *(x-s)) + np.exp(-(N_T - (x-s))*m))
 
 def import_correction_fit():
     df = pd.read_csv('output.csv')
@@ -666,16 +667,113 @@ def import_correction_fit():
 
     plt.show()
 
+
+#Testing Integrator behaves as an Omelyan integratior with boundary freezing
+def dd_Integrator_dH():
+    #Average over a batch of configurations
+    L=16
+    batch_size=30
+    lam = np.sqrt(1.0/10.0)
+    mass= -0.08*lam
+    sch = s.schwinger([L,L],lam,mass,batch_size=batch_size)
+
+    u0 = (sch.hotStart(),)
+
+    e2 = []
+    dh = []
+    h_err= []
+
+    xcut1 = 6
+    xcut2= 14
+    bw = 2
+
+    p0 = sch.refreshP()
+    p0 = sch.dd_Freeze_P(p0, xcut1, xcut2, bw)
+    H0 = sch.action(u0) + sch.kinetic(p0)
+
+    for n in np.arange(10, 51):
+        im2 = i.minnorm2(sch.dd_Force, sch.evolveQ, n, 1.0)
+        p, u = im2.dd_Integrate(p0, u0, xcut1, xcut2, bw)
+        H = sch.action(u) + sch.kinetic(p)
+        dh.append(tr.mean(H - H0))
+        h_err.append(tr.std(H - H0) / np.sqrt(batch_size - 1))
+        e2.append((1.0/n)**2)
+        print(n)
+
+    fig, ax1 = plt.subplots(1,1)
+
+    ax1.errorbar(e2, dh, yerr=h_err)
+    ax1.set_ylabel(r'$\Delta H$')
+    ax1.set_xlabel(r'$\epsilon^2$')
+    plt.show()
+
+#Testing how dd integration affects action:
+def dd_Integrated_Action():
+    L=16
+    batch_size=30
+    lam = np.sqrt(1.0/10.0)
+    mass= -0.08*lam
+    sch = s.schwinger([L,L],lam,mass,batch_size=batch_size)
+
+
+
+    u = sch.hotStart()
+
+    pl_avg = []
+    pl_err = []
+
+
+    #Gauge theory- tuple contains one element, the gauge field
+    q = (u,)
+
+    im2 = i.minnorm2(sch.force,sch.evolveQ,50, 1.0)
+    sim = h.hmc(sch, im2, False)
+
+    q = sim.evolve_f(q, 50)
+
+    #Average action
+    S0 = sch.gaugeAction(q[0]) / float(L**2)
+    pl_avg.append(tr.mean(S0))
+    pl_err.append(tr.std(S0)/np.sqrt(tr.numel(S0) - 1))
+
+    lvl2_im2 = i.minnorm2(sch.dd_Force,sch.evolveQ,20, 1.0)
+    lvl2_sim = h.hmc(sch, lvl2_im2, False)
+
+    nm = 150
+    for n in np.arange(0, nm):
+        #Tune integrator to desired step size
+        #Evolve, one HMC step
+        if(n < 100):
+            q = sim.evolve_f(q, 1)
+        else:
+            q = lvl2_sim.second_Level_Evolve(q, 1, 6, 14, 2)
+            
+        u = q[0]
+        #Average action
+        S = sch.gaugeAction(u) / float(L**2)
+        pl_avg.append(tr.mean(S))
+        pl_err.append(tr.std(S)/np.sqrt(tr.numel(S) - 1))
+
+    fig, ax1 = plt.subplots(1,1)
+
+    ax1.errorbar(np.arange(nm+1), pl_avg, pl_err, label="Hot Start")
+    ax1.set_ylabel(r'$\langle S \rangle$')
+    ax1.set_xlabel(r'n')
+    ax1.legend(loc='lower right')
+    plt.show()
+
 #Testing implementation of multilevel integrator- quenched
 #TODO: In Development
-#Runs without issue, results need validating
+#Runs, but two-level integrator data isn't behaving as expected
 def multilevel_Integrator():
-    batch_size= 100
+    batch_size= 30
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
-    mass= 0.0
+    mass= -0.08*lam
     L = 16
     L2 = 16
+    pm = 2.0
+    p= pm*(2.0*np.pi/L)
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     #Boundary cut timeslices
@@ -696,44 +794,129 @@ def multilevel_Integrator():
     lvl2_sim = h.hmc(sch, lvl2_im2, False)
 
     #Typical equilibration
-    q = sim.evolve_f(q, 50)
+    q0 = sim.evolve_f(q, 200)
+    q = tuple(q0)
 
+
+    # Two level integration
     #Level 0 configurations per batch
     n0 = 10
 
     #Level 1 configurations per batch
     n1 = 10
 
+    #Ensemble averaged correlation function data array:
+    c= tr.zeros(batch_size, n0*n1, L)
+
     for n in np.arange(n0):
-        q = sim.evolve_f(q, 10)
 
-        for n2 in np.arange(n1):
+        #Thermalize several steps between 2nd level integration
+        q = sim.evolve_f(q, 100)
+        q1 = tuple(q)
+
+        for nx in np.arange(n1):
+        
+        #For each subdomain:
+            # Evolve locally while maintaining boundaries
+            # For quenched model, its actually more efficient to update the whole lattice
             q = lvl2_sim.second_Level_Evolve(q, 10, xcut_1, xcut_2, bw)
-            s_inv = tr.inverse(sch.bb_DiracOperator(q, xcut_1, xcut_2, bw).to_dense())
+            s_inv = sch.dd_Factorized_Propogator(q, xcut_1,xcut_2, bw)
+            
+            # Measure locally in subdomains
+            cl = sch.dd_Exact_Pion_Correlator(s_inv,xcut_1,xcut_2, bw, s_range,p=p)
 
-            cl = sch.dd_Exact_Pion_Correlator(s_inv, xcut_1, xcut_2, bw, s_range)
 
-            if n ==0:
-                c= cl
-            else:
-                c = tr.cat((c, cl),0)
+
+            c[:, n*n1+nx, :] = cl
+
+        #Return to configuration before 2nd level integration
+        q = tuple(q1)
+
+        print(n)
+
+    #Save produced correlator data
+    #Average over all batches and configurations measured
+    c_avg = tr.mean(c, dim=(0,1))
+    c_err = (tr.std(c, dim=(0,1))/np.sqrt(tr.numel(c[:,:,0]) - 1))
+
+    #Single level integration
+    q=q0
+    nm = 10
+    for n in np.arange(nm):
+        #Discard some in between
+        q= sim.evolve_f(q, 25)
+        d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
+            
+        #Vector of time slice correlations
+        cl = sch.exact_Pion_Correlator(d_inv, s_range, p=p)
+
+        if n ==0:
+            c2= cl
+        else:
+            c2 = tr.cat((c2, cl),0)
         print(n)
 
 
     #Save produced correlator data
     #Average over all batches and configurations measured
-    c_avg = tr.mean(c, dim=0)
-    c_err = (tr.std(c, dim=0)/np.sqrt(tr.numel(c[:,0]) - 1))
+    c2_avg = tr.mean(c2, dim=0)
+    c2_err = (tr.std(c2, dim=0)/np.sqrt(tr.numel(c2[:,0]) - 1))
 
     #Write dataframe of data
 
-    df = pd.DataFrame([c_avg.detach().numpy(), c_err.detach().numpy()])
+    df = pd.DataFrame([c_avg.detach().numpy(), c_err.detach().numpy(), c2_avg.detach().numpy(), c2_err.detach().numpy()])
     #TODO: Write more descriptive datafile name
     df.to_csv("output.csv", index = False)
+
+    a = df.to_numpy()
+
+
+    #Fit data 
+    popt_2l, pcov_2l = sp.optimize.curve_fit(f_pi_triplet, np.arange(8,11), np.abs(a[0, 8:11]), sigma = np.abs(a[1, 8:11]))
+    print("Two level:")
+    print(popt_2l)
+    print(pcov_2l)
+
+    popt_1l, pcov_1l = sp.optimize.curve_fit(f_pi_triplet, np.arange(8,11), np.abs(a[2, 8:11]), sigma = np.abs(a[3, 8:11]))
+    print("One level:")
+    print(popt_1l)
+    print(pcov_1l)
+
+    fig, (ax1, ax2) = plt.subplots(2,1)
+
+    ax1.set_yscale('log', nonpositive='clip')
+    ax2.set_yscale('log', nonpositive='clip')
+
+    ax1.plot(np.linspace(0, 16, 100), f_pi_triplet(np.linspace(0, 16, 100), *popt_2l))
+    ax2.plot(np.linspace(0, 16, 100), f_pi_triplet(np.linspace(0, 16, 100), *popt_1l))
+
+    ax1.errorbar(np.arange(0, L), tr.abs(c_avg), tr.abs(c_err), ls="", marker=".", label=r'2-level')
+    ax2.errorbar(np.arange(0, L), tr.abs(c2_avg), tr.abs(c2_err), ls="", marker=".", label=r'1-level')
+    ax1.set_title(r'p= '+str(pm) + r'$\times \frac{2\pi}{L}$ pion correlator')
+
+    ax1.legend(loc='lower right')
+    ax2.legend(loc='lower right')
+
+    plt.show()
             
 
+def plot_Signal_To_Noise():
+    #Match filename
+    d = np.loadtxt('n0=10_n1=10.csv', delimiter=',')
 
+    fig, ax1 = plt.subplots(1,1)
 
+    ax1.set_yscale('log', nonpositive='clip')
+
+    level_2 = np.divide(np.abs(d[1,:]), d[2,:])
+    level_1 = np.divide(np.abs(d[3,:]), d[4,:])
+    print(level_2)
+
+    ax1.scatter(np.arange(16), level_2, label='2-level')
+    ax1.scatter(np.arange(16), level_1, label='1-level')
+    ax1.set_title(r'Signal to noise ratio for $p = 2 \times \frac{2 \pi}{L}$ pion')
+    ax1.legend(loc='lower right')
+    plt.show()
 
 #Plot exact/approx correlator difference from imported csv data
 def plot_correlator_difference():
@@ -779,7 +962,10 @@ def main():
     #compute_Pion_Mass_Correction()
     #import_correction_fit()
     #plot_correlator_difference()
-    multilevel_Integrator()
+    #dd_Integrator_dH()
+    #dd_Integrated_Action()
+    #multilevel_Integrator()
+    plot_Signal_To_Noise()
 
 
 

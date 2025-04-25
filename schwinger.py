@@ -300,10 +300,15 @@ class schwinger():
     
     #TODO: Testing allowing for non-zero momentum
     #Input: Inverse dirac operator, source timeslices to average over, spatial momentum
+    #timeslice max
     #Output: Batch x Vector of Correlation functions for each time slice
-    def exact_Pion_Correlator(self, d_inv, s_range, p=0.0):
+    def exact_Pion_Correlator(self, d_inv, s_range, p=0.0, ts_max = -1):
 
-        ev = tr.zeros([self.Bs, self.V[0]])
+        #Default timeslice max-set to full length of lattice
+        if ts_max==-1:
+            ts_max = self.V[0]
+
+        ev = tr.zeros([self.Bs, ts_max])
 
 
         #Set source on each selected timeslices and average later
@@ -311,7 +316,7 @@ class schwinger():
             #spacetime lattice index of source
             sx = self.V[1]*ts
 
-            for nt in np.arange(self.V[0]):
+            for nt in np.arange(ts_max):
                 c = tr.zeros(self.Bs)
                 for nx in np.arange(self.V[1]):
                     #Must be doubled to account for dirac space!
@@ -462,7 +467,7 @@ class schwinger():
     #Note assumes 2 subdomains for naive implementation
     def dd_Factorized_Propogator(self, q, xcut_1, xcut_2, bw):
 
-        bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2)
+        bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2,bw)
 
         bb_d = bb_d.to_dense()
         
@@ -483,7 +488,7 @@ class schwinger():
     #Input: inverse Schur complement, starting timeslice of boundarys, boundary width
     #range of source timeslices to average over
     #Output: Hadron correlator computed using inverse of exact Schur complement
-    def dd_Exact_Pion_Correlator(self, s_inv, xcut_1, xcut_2, bw, s_range):
+    def dd_Exact_Pion_Correlator(self, s_inv, xcut_1, xcut_2, bw, s_range, p=0.0):
 
         ev = tr.zeros([self.Bs, self.V[0]])
 
@@ -509,7 +514,7 @@ class schwinger():
                         s2 = tr.einsum('bxy, bzy -> bxz', s1, s1.conj())
 
                         #B length vector
-                        c = c - tr.sum(s2, dim=(1,2))
+                        c = c - np.exp(-1.0j*nx*p)*tr.sum(s2, dim=(1,2))
                         #Iterate to next spatial site
                         n += 2
 
@@ -702,6 +707,14 @@ class schwinger():
             bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2, bw)
             return self.dd_GaugeAction(q[0], xcut_1, xcut_2, bw) + \
             tr.abs(self.dd_FermionAction(bb_d, q[1], xcut_1, xcut_2, bw, r))
+
+    #Input: conjugate momentum tensor, boundary timeslices, boundary width
+    #Output: conjugate momentum with boundary timeslice momentum frozen   
+    def dd_Freeze_P(self, p, xcut_1, xcut_2, bw):
+        p[:, :, xcut_1:xcut_1+bw, :] =  0.0
+        p[:, :, xcut_2:xcut_2+bw, :] = 0.0
+        return p
+
         
     def dd_Force(self, q, xcut_1, xcut_2, bw, r=-1):
         #Compute gauge force as in the full model
@@ -734,11 +747,3 @@ class schwinger():
             #Quenched simulation only for now
             #TODO: Dynamical force with DD
             return 0
-
-
-
-
-            
-                
-        
-

@@ -111,9 +111,18 @@ class hmc:
                 q = (q[0], f_upd, q[2])
             q0 = tuple(q)
             p0 = self.T.refreshP()
-            H0 = self.T.kinetic(p0) + self.T.dd_Action(q0, xcut1, xcut2, bw)
+            #Freeze boundary momentum to freeze gauge links
+            p0 = self.T.dd_Freeze_P(p0, xcut1,xcut2,bw)
+
+            #H0 = self.T.kinetic(p0) + self.T.dd_Action(q0, xcut1, xcut2, bw)
+            H0 = self.T.kinetic(p0) + self.T.action(q0)
+
             p,q = self.I.dd_Integrate(p0,q, xcut1, xcut2, bw)
-            Hf = self.T.kinetic(p) + self.T.dd_Action(q,xcut1, xcut2, bw)
+            p = self.T.dd_Freeze_P(p, xcut1,xcut2,bw)
+
+            #Hf = self.T.kinetic(p) + self.T.dd_Action(q,xcut1, xcut2, bw)
+            Hf = self.T.kinetic(p) + self.T.action(q)
+            
             DH = Hf - H0
             acc_prob=tr.where(DH<0,tr.ones_like(DH),tr.exp(-DH))
             R=tr.rand_like(acc_prob)
