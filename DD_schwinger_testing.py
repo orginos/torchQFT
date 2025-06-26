@@ -45,9 +45,31 @@ def block_Diagonal_Check():
     plt.show()
 
     #Block diagonal
-    dd = sch.bb_DiracOperator(q, 2, 7)
-    plt.spy(dd.to_dense()[0,:,:])
+    dd = sch.bb_DiracOperator(q, 3, 8, 2).to_dense()
+    plt.spy(dd[0,:,:])
 
+    plt.show()
+
+    #Isolate sub matrices
+    #Assumes 2 width 2 timeslice boundaries
+    d00 = dd[0,0:4*2*L, 0:4*2*L]
+    d01 = dd[0, 0:4*2*L, 4*2*L:]
+    d10 = dd[0, 4*2*L:, 0:4*2*L]
+    d11 = dd[0, 4*2*L:, 4*2*L:]
+
+    #Schur complement
+    s11 = d11 - tr.einsum('ij, jk, km->im', d10, tr.inverse(d00), d01)
+
+
+    plt.spy(d11)
+    plt.show()
+
+    d11_inv = tr.inverse(d11)
+    plt.spy(d11_inv)
+    plt.show()
+
+    
+    plt.spy(tr.inverse(s11) - tr.inverse(d11))
     plt.show()
 
 #Checking if exact factorized propogator matches with traditional approach
@@ -71,7 +93,7 @@ def propogator_Comparison():
 
     q = (u, f, d)
 
-    s_inv = sch.dd_Factorized_Propogator(q, 3, 8, 2)
+    s_inv = sch.dd_Schur_Propogator(q, 3, 8, 2)
 
     #Compare propogator of first time slice of first subdomain
     # Very nearly match! Error of 10^-9
@@ -183,7 +205,7 @@ def approx_Propogator_Testing():
 
     d_inv = tr.inverse(d.to_dense())
 
-    s_inv = sch.dd_Factorized_Propogator(q, 3, 8)
+    s_inv = sch.dd_Schur_Propogator(q, 3, 8)
 
     #Does it match to the exact solution?- not very closely, only to ~10^-4
     #print(s_inv[0,0:60,40:42] - p[0,0:60,:])
@@ -243,7 +265,7 @@ def quenched_two_point_Comparison():
         #Discard some in between
         q= sim.evolve_f(q, 10)
         d = sch.diracOperator(q[0])
-        s_inv = sch.dd_Factorized_Propogator(q, xcut_1, xcut_2, bw)
+        s_inv = sch.dd_Schur_Propogator(q, xcut_1, xcut_2, bw)
         d_inv = tr.linalg.inv(d.to_dense())
 
             
@@ -351,7 +373,7 @@ def two_Point_Decay_Comparison():
         q= sim.evolve_f(q, 10)
         d = sch.diracOperator(q[0])
         d_inv = tr.linalg.inv(d.to_dense())
-        fp = sch.dd_Factorized_Propogator(q, xcut_1, xcut_2,bw)
+        fp = sch.dd_Schur_Propogator(q, xcut_1, xcut_2,bw)
 
             
         #Vector of time slice correlations
@@ -762,11 +784,13 @@ def dd_Integrated_Action():
     ax1.legend(loc='lower right')
     plt.show()
 
-#Testing implementation of multilevel integrator- quenched
-#TODO: In Development
-#Runs, but two-level integrator data isn't behaving as expected
-def multilevel_Integrator():
-    batch_size= 30
+
+
+#Compare gauge configuration correlation between 1-level and 2-level integrator produced configurations
+#TODO: Insufficient, ignores possibility of global gauge transformation that leaves the 
+#correlator invariant. Needs reworking
+def config_Correlation():
+    batch_size= 10
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
     mass= -0.08*lam
@@ -800,18 +824,21 @@ def multilevel_Integrator():
 
     # Two level integration
     #Level 0 configurations per batch
-    n0 = 10
+    n0 = 30
 
     #Level 1 configurations per batch
     n1 = 10
 
-    #Ensemble averaged correlation function data array:
-    c= tr.zeros(batch_size, n0*n1, L)
+    #Gauge config data arrays:
+    ad0 = tr.zeros(batch_size, n0*n1, L,L)
+    ad1 = tr.zeros(batch_size, n0*n1, L, L)
+
+    nd = 0
 
     for n in np.arange(n0):
 
         #Thermalize several steps between 2nd level integration
-        q = sim.evolve_f(q, 100)
+        q = sim.evolve_f(q, 50)
         q1 = tuple(q)
 
         for nx in np.arange(n1):
@@ -819,102 +846,90 @@ def multilevel_Integrator():
         #For each subdomain:
             # Evolve locally while maintaining boundaries
             # For quenched model, its actually more efficient to update the whole lattice
-            q = lvl2_sim.second_Level_Evolve(q, 10, xcut_1, xcut_2, bw)
-            s_inv = sch.dd_Factorized_Propogator(q, xcut_1,xcut_2, bw)
-            
-            # Measure locally in subdomains
-            cl = sch.dd_Exact_Pion_Correlator(s_inv,xcut_1,xcut_2, bw, s_range,p=p)
+            qc = tuple(q)
+            q = lvl2_sim.second_Level_Evolve(q, 50, xcut_1, xcut_2, bw)
+            #Measure config correlation:
+            ad0[:, nd, :, :] = tr.abs(tr.log(q[0][:, 0, :,:]) - tr.log(qc[0][:,0,:,:]))
+            ad1[:,nd,:,:] = tr.abs(tr.log(q[0][:, 1, :,:]) - tr.log(qc[0][:,1,:,:]))
+            nd += 1
 
-
-
-            c[:, n*n1+nx, :] = cl
 
         #Return to configuration before 2nd level integration
         q = tuple(q1)
 
         print(n)
 
-    #Save produced correlator data
-    #Average over all batches and configurations measured
-    c_avg = tr.mean(c, dim=(0,1))
-    c_err = (tr.std(c, dim=(0,1))/np.sqrt(tr.numel(c[:,:,0]) - 1))
+    #Average over all batches and samples measured
+    ad0_avg_2lvl = tr.mean(ad0, dim=(0,1))
+    ad1_avg_2lvl = tr.mean(ad1, dim=(0,1))
+
 
     #Single level integration
     q=q0
-    nm = 10
-    for n in np.arange(nm):
-        #Discard some in between
-        q= sim.evolve_f(q, 25)
-        d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
-            
-        #Vector of time slice correlations
-        cl = sch.exact_Pion_Correlator(d_inv, s_range, p=p)
+    nm = 300
 
-        if n ==0:
-            c2= cl
-        else:
-            c2 = tr.cat((c2, cl),0)
+    #Gauge config data arrays:
+    ad0 = tr.zeros(batch_size, nm, L,L)
+    ad1 = tr.zeros(batch_size, nm, L, L)
+
+    for n in np.arange(nm):
+        q0= tuple(q)
+        #Discard some in between
+        q= sim.evolve_f(q, 50)
+        ad0[:, n, :, :] = tr.abs(tr.log(q[0][:, 0, :,:]) - tr.log(qc[0][:,0,:,:]))
+        ad1[:,n,:,:] = tr.abs(tr.log(q[0][:, 1, :,:]) - tr.log(qc[0][:,1,:,:]))
+        
         print(n)
 
+    #Average over all batches and samples measured
+    ad0_avg_1lvl = tr.mean(ad0, dim=(0,1))
+    ad1_avg_1lvl = tr.mean(ad1, dim=(0,1))
 
-    #Save produced correlator data
-    #Average over all batches and configurations measured
-    c2_avg = tr.mean(c2, dim=0)
-    c2_err = (tr.std(c2, dim=0)/np.sqrt(tr.numel(c2[:,0]) - 1))
-
-    #Write dataframe of data
-
-    df = pd.DataFrame([c_avg.detach().numpy(), c_err.detach().numpy(), c2_avg.detach().numpy(), c2_err.detach().numpy()])
-    #TODO: Write more descriptive datafile name
-    df.to_csv("output.csv", index = False)
-
-    a = df.to_numpy()
+    s0 = tr.cat((ad0_avg_2lvl[:xcut_1, :], ad0_avg_2lvl[xcut_1+bw:xcut_2, :]), dim=0)
+    s1 = tr.cat((ad1_avg_2lvl[:xcut_1, :], ad1_avg_2lvl[xcut_1+bw:xcut_2, :]), dim=0)
+    print("Two Level: ")
+    print("Avg: ", tr.mean(s0), tr.mean(s1))
+    print("Std: ", tr.std(s0), tr.std(s1))
 
 
-    #Fit data 
-    popt_2l, pcov_2l = sp.optimize.curve_fit(f_pi_triplet, np.arange(8,11), np.abs(a[0, 8:11]), sigma = np.abs(a[1, 8:11]))
-    print("Two level:")
-    print(popt_2l)
-    print(pcov_2l)
+    print("One Level: ")
+    print("Avg: ", tr.mean(ad0_avg_1lvl), tr.mean(ad1_avg_1lvl))
+    print("Std: ", tr.std(ad0_avg_1lvl), tr.std(ad1_avg_1lvl))
 
-    popt_1l, pcov_1l = sp.optimize.curve_fit(f_pi_triplet, np.arange(8,11), np.abs(a[2, 8:11]), sigma = np.abs(a[3, 8:11]))
-    print("One level:")
-    print(popt_1l)
-    print(pcov_1l)
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2,2)
 
-    fig, (ax1, ax2) = plt.subplots(2,1)
+    axes = ((ax1, ax2), (ax3, ax4))
 
-    ax1.set_yscale('log', nonpositive='clip')
-    ax2.set_yscale('log', nonpositive='clip')
+    im = ax1.imshow(ad0_avg_1lvl, vmin=0.0, vmax = 2.0*np.pi)
+    im = ax2.imshow(ad1_avg_1lvl, vmin=0.0, vmax = 2.0*np.pi)
+    im = ax3.imshow(ad0_avg_2lvl, vmin=0.0, vmax = 2.0*np.pi)
+    im = ax4.imshow(ad1_avg_2lvl, vmin=0.0, vmax = 2.0*np.pi)
 
-    ax1.plot(np.linspace(0, 16, 100), f_pi_triplet(np.linspace(0, 16, 100), *popt_2l))
-    ax2.plot(np.linspace(0, 16, 100), f_pi_triplet(np.linspace(0, 16, 100), *popt_1l))
-
-    ax1.errorbar(np.arange(0, L), tr.abs(c_avg), tr.abs(c_err), ls="", marker=".", label=r'2-level')
-    ax2.errorbar(np.arange(0, L), tr.abs(c2_avg), tr.abs(c2_err), ls="", marker=".", label=r'1-level')
-    ax1.set_title(r'p= '+str(pm) + r'$\times \frac{2\pi}{L}$ pion correlator')
-
-    ax1.legend(loc='lower right')
-    ax2.legend(loc='lower right')
+    fig.subplots_adjust(right=0.8)
+    cbar_ax = fig.add_axes([0.85, 0.15, 0.05, 0.7])
+    fig.colorbar(im, cax=cbar_ax)
 
     plt.show()
+    
             
 
 def plot_Signal_To_Noise():
     #Match filename
-    d = np.loadtxt('n0=10_n1=10.csv', delimiter=',')
+    d = np.loadtxt('output.csv', delimiter=',')
+    L= 16
 
     fig, ax1 = plt.subplots(1,1)
 
     ax1.set_yscale('log', nonpositive='clip')
 
-    level_2 = np.divide(np.abs(d[1,:]), d[2,:])
-    level_1 = np.divide(np.abs(d[3,:]), d[4,:])
-    print(level_2)
+    #level_2 = np.divide(np.abs(d[1,:]), d[2,:])
+    level_2 = np.abs(d[1,:])
+    #level_1 = np.divide(np.abs(d[3,:]), d[4,:])
+    level_1 = np.abs(d[3,:])
 
-    ax1.scatter(np.arange(16), level_2, label='2-level')
-    ax1.scatter(np.arange(16), level_1, label='1-level')
-    ax1.set_title(r'Signal to noise ratio for $p = 2 \times \frac{2 \pi}{L}$ pion')
+    ax1.scatter(np.arange(L), level_2, label='2-level')
+    ax1.scatter(np.arange(L), level_1, label='1-level')
+    ax1.set_title(r'Signal to noise ratio for $p = 2 \times \frac{2 \pi}{L}$ singlet meson')
     ax1.legend(loc='lower right')
     plt.show()
 
@@ -947,7 +962,458 @@ def plot_correlator_difference():
     plt.show()
 
 
+#Compares autocorrelation time between one-level and two-level integrators
+#Uses hadronic correlator, topological charge, or avg. plaquette action
+def autocorrelation_Comparison():
+    batch_size= 200
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= -0.08*lam
+    L = 4
+    L2 = 4
+    pm = 0.0
+    p= pm*(2.0*np.pi/L)
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
+    #Boundary cut timeslices
+    xcut_1 = 7
+    xcut_2 = 14
+    bw=2
+
+    s_range= (3,)
+
+
+    u = sch.hotStart()
+
+    #Quenched theory
+    q = (u,)
+
+    im2 = i.minnorm2(sch.force,sch.evolveQ,30, 1.0)
+    lvl2_im2 = i.minnorm2(sch.dd_Force,sch.evolveQ,30, 1.0)
+    sim = h.hmc(sch, im2, False)
+    lvl2_sim = h.hmc(sch, lvl2_im2, False)
+
+    #Typical equilibration
+    q0 = sim.evolve_f(q, 200)
+    q = tuple(q0)
+
+    #Start with one-level integrator
+    nm = 50000
+    measures = tr.zeros(batch_size,nm)
+    #timeslice of measurement
+    ts = 0
+    print("One-level measurement:")
+    for n in np.arange(nm):
+        #Take one step and measure
+        q= sim.evolve_f(q, 1)
+        #d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
+            
+        #Vector of time slice pion correlator
+        #cl = sch.exact_Pion_Correlator(d_inv, s_range, p=p)
+
+        #measures[:,n] = cl[:,ts]
+
+        #Measuring topological charge
+        #charge = tr.sum(tr.real(tr.log(q[0])/1.0j) % (2.0*np.pi), dim=(1,2,3))/(2.0*np.pi*L*L2) - 1.0
+        #measures[:,n] = charge
+
+        #Measuring avg plaquette action:
+        measures[:,n]= sch.gaugeAction(q[0]) / float(L**2)
+
+
+        if (n % 100 == 0):
+            print(n)
+
+    np.savetxt("one_level_autoc_measurements.csv",measures.numpy(), delimiter=',')
+    #Compute autocorrelation across the chain
+    #For excluding last few autocorrelation measurements due to low statistics
+    cutoff = 20000
+
+    #Timeslice of measurement
+    ts = 0
+
+    print("Autocorrelation computation:")
+    m = tr.mean(measures, dim=1)
+    auto_corr = tr.zeros(batch_size, nm-cutoff)
+    auto_corr[:,0] = tr.var(measures, dim=1)
+
+    prod = measures * measures
+    auto_corr[:,0] = (tr.mean(prod, dim=1) - tr.mean(measures, dim=1)*tr.mean(measures, dim=1)) \
+        / tr.sqrt(tr.var(measures, dim=1)* tr.var(measures, dim=1))
+    #Computing autocorrelation:
+    #Exclude last several measurements due to low statistics
+    for t in np.arange(1, nm-cutoff):
+        #Product of measurements t steps apart
+        shifted = tr.roll(measures, -t, dims=1)
+        prod = measures * shifted
+        #Autocorrelation, cutting off elements which have
+        # rolled from opposite end of the vector
+        auto_corr[:,t] = (tr.mean(prod[:,:-t], dim=1) - tr.mean(measures[:,:-t], dim=1)*tr.mean(shifted[:,:-t], dim=1)) \
+        / tr.sqrt(tr.var(measures[:,:-t], dim=1)* tr.var(shifted[:,:-t], dim=1))
+    fig, ax1 = plt.subplots(1, 1)
+
+    ax1.set_yscale('log', nonpositive='clip')
+
+    # avg_autocorr = tr.mean(tr.abs(auto_corr)/tr.reshape(auto_corr[:,0], (-1, 1)), dim=0)
+    # err_autocorr = tr.std(tr.abs(auto_corr)/tr.reshape(auto_corr[:,0], (-1, 1)), dim=0)/np.sqrt(tr.numel(auto_corr[:,0]) - 1)
+    avg_autocorr = tr.mean(tr.abs(auto_corr), dim=0)
+    err_autocorr = tr.std(tr.abs(auto_corr), dim=0)/np.sqrt(tr.numel(auto_corr[:,0]) - 1)
+
+    ax1.errorbar(np.arange(nm-cutoff), avg_autocorr, err_autocorr, ls="", marker=".")
+
+    #ax1.plot(np.arange(nm-offset), tr.mean(auto_corr, dim=0)/auto_corr[0], label="1 Level")
+
+    ax1.set_title("Autocorrelation comparison")
+    ax1.set_ylabel(r"$Corr(X_0, X_t)$")
+    ax1.set_xlabel(r"HMC Step $t$")
+    ax1.legend(loc='upper right')
+
+
+    plt.show()
+
+    
+
+    #Two level integrator
+    q = tuple(q0)
+    twolvl_measures = tr.zeros(batch_size,nm)
+    print("Two-level measurement: ")
+    for n in np.arange(nm):
+        #Take one step
+        q= lvl2_sim.second_Level_Evolve(q, 1, xcut_1, xcut_2, bw)
+        # s_inv = sch.dd_Schur_Propogator(q, xcut_1,xcut_2, bw)
+            
+        # # Measure using schur complement
+        # cl = sch.dd_Exact_Pion_Correlator(s_inv,xcut_1,xcut_2, bw, s_range,p=p)
+
+        #d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
+            
+        #Vector of time slice correlations
+        #cl = sch.exact_Pion_Correlator(d_inv, s_range, p=p)
+
+        #twolvl_measures[n] = cl[0, ts]
+
+        #Measuring topological charge
+        #charge = tr.sum(tr.real(tr.log(q[0])/1.0j) % (2.0*np.pi), dim=(1,2,3))/(2.0*np.pi*L*L2) - 1.0
+        #twolvl_measures[n] = charge[0]
+
+        #Measuring avg plaquette action:
+        twolvl_measures[:,n]= sch.gaugeAction(q[0]) / float(L**2)
+
+        if (n % 100 == 0):
+            print(n)
+
+    #Compute autocorrelation across the chain
+    print("Autocorrelation computation:")
+    m = tr.mean(twolvl_measures, dim=1)
+    auto_corr2 = tr.zeros(batch_size, nm-cutoff)
+    auto_corr2[:, 0] = tr.var(twolvl_measures, dim=1)
+
+    prod = twolvl_measures * twolvl_measures
+    auto_corr2[:,0] = (tr.mean(prod, dim=1) - tr.mean(twolvl_measures, dim=1)*tr.mean(twolvl_measures, dim=1)) \
+        / tr.sqrt(tr.var(twolvl_measures, dim=1)* tr.var(twolvl_measures, dim=1))
+
+
+    #Computing autocorrelation:
+    #Exclude last several measurements due to low statistics
+    for t in np.arange(1, nm-cutoff):
+        #Product of measurements t steps apart
+        shifted = tr.roll(twolvl_measures, -t, dims=1)
+        prod = twolvl_measures * shifted
+        #Autocorrelation, cutting off elements which have
+        # rolled from opposite end of the vector
+        auto_corr2[:,t] = (tr.mean(prod[:,:-t], dim=1) - tr.mean(twolvl_measures[:,:-t], dim=1)*tr.mean(shifted[:,:-t], dim=1)) \
+        / tr.sqrt(tr.var(twolvl_measures[:,:-t], dim=1)* tr.var(shifted[:,:-t], dim=1))
+
+
+    avg_autocorr2 = tr.mean(tr.abs(auto_corr2), dim=0)
+    err_autocorr2 = tr.std(tr.abs(auto_corr2), dim=0)/np.sqrt(tr.numel(auto_corr2[:,0]) - 1)
+    
+    fig, ax1 = plt.subplots(1, 1)
+
+    ax1.set_yscale('log', nonpositive='clip')
+
+    #TODO: Fix plotting; align with one-level code
+
+    ax1.errorbar(np.arange(nm-cutoff), avg_autocorr, err_autocorr, ls="", marker=".", label="One Level")
+    ax1.errorbar(np.arange(nm-cutoff), avg_autocorr2, err_autocorr2, ls="", marker=".", label="Two Level")
+
+    ax1.set_title("Autocorrelation comparison")
+    ax1.set_ylabel(r"$\Gamma (X_0, X_t)$")
+    ax1.set_xlabel(r"HMC Step $t$")
+    ax1.legend(loc='upper right')
+
+
+    plt.show()
+
+
+def correlator_Dist():
+    #Import the files
+    two_lvl = tr.tensor(np.loadtxt("two_level_correlator.csv", delimiter=','))
+    one_lvl = tr.tensor(np.loadtxt("one_level_correlator.csv", delimiter=','))
+
+    fig, (ax1,ax2) = plt.subplots(2,1)
+
+    fig.suptitle("Timeslice 5")
+
+    # counts,bin_edges = np.histogram(one_lvl[:, 10],30)
+    # bin_centres = (bin_edges[:-1] + bin_edges[1:])/2.
+
+    # ax1.scatter(bin_centres, counts, marker='o')
+
+    # counts,bin_edges = np.histogram(two_lvl[:, 10],30)
+    # bin_centres = (bin_edges[:-1] + bin_edges[1:])/2.
+
+    # ax2.scatter(bin_centres, counts, marker='o')
+
+    ax1.hist(one_lvl[:, 5], bins=100)
+    ax2.hist(two_lvl[:, 5],bins=100)
+
+    ax1.set_title("One Level")
+    ax2.set_title("Two Level")
+    ax1.set_xlim(-0.08, 0.08)
+    ax2.set_xlim(-0.08, 0.08)
+    
+
+    plt.show()
+
+#Takes square matrix and produces a k-rank approximation of its inverse based on eigenvalue
+#Decomposition
+#Input: batch of square pytorch tensors, rank of approx
+# k = -1 input corresponds to exact inverse
+def eig_Inv_Approx(m, k):
+
+    if k == -1:
+        return tr.inverse(m)
+    
+    #We anticipate that the given matrix will be g5 hermitian:
+    id = tr.eye(int(m.size(dim=1)/2))
+    id = id.reshape((1, int(m.size(dim=1)/2), int(m.size(dim=1)/2)))
+    id = id.repeat(m.size(dim=0), 1, 1)
+
+    g5 = tr.tensor([[0, -1.0j], [1.0j, 0]])
+
+    g5m = tr.einsum('bxy, byz->bxz', tr.kron(id, g5), m)
+
+    L,V = tr.linalg.eig(g5m)
+    #print(V)
+    
+    inv_l = 1.0/L
+
+    A = tr.diag_embed(inv_l, dim1=1, dim2=2)
+
+    sorted_L, sorted_ind = tr.sort(tr.abs(inv_l), descending=True)
+
+    mask = tr.zeros_like(inv_l, dtype=tr.bool)
+    for b in np.arange(inv_l.size(dim=0)):
+        mask[b, :] =  tr.abs(inv_l[b,:]) >= sorted_L[b, k-1]
+    
+    #expand the mask to encapsulate full columns
+    exp_mask = tr.zeros([mask.size(0), mask.size(1), mask.size(1)], dtype=tr.bool)
+    for b in np.arange(mask.size(0)):
+        for x in np.arange(mask.size(1)):
+            exp_mask[b,:,x] = mask[b,x]
+
+    #mask = tr.abs(inv_l) >= sorted_L[:, k-1]
+
+    filtered_A = tr.where(exp_mask, A, tr.tensor(0))
+
+    #print(V)
+
+    #print(V_T)
+    filtered_V = tr.where(exp_mask, V, tr.tensor(0))
+    # return tr.einsum("bij, bjk, bkl -> bil", filtered_V,
+    #                 filtered_A, tr.transpose(filtered_V, 1,2))
+
+    #No filtering added- should match exact inverse exactly
+    return tr.einsum("bij, bjk, bkl, blm -> bim", filtered_V,
+                    filtered_A, tr.conj(tr.transpose(filtered_V, 1,2)), tr.kron(id, g5))
+
+
+def test_inv_approx():
+    batch_size=1
+    lam=1/10.0
+    mass= -0.08*lam
+    L = 2
+    L2 = 2
+    pm = 0.0
+    p= pm*(2.0*np.pi/L)
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    #Boundary cut timeslices
+    xcut_1 = 7
+    xcut_2 = 14
+    bw=2
+
+    s_range= (3,)
+
+
+    u = sch.hotStart()
+
+    d=sch.diracOperator(u).to_dense()
+
+    #Full eigenvalue decomp reproduces taking the inverse directly
+    print(tr.abs(tr.einsum("bxy, byz->bxz", d, eig_Inv_Approx(d, 8)) - 
+          tr.einsum("bxy, byz->bxz", d, eig_Inv_Approx(d, -1))) <0.000001)
+
+
+
+#TODO: In Development- needs error correction
+#2-lvl factorized observable with multilevel integration
+def quenched_Factorized_Twolvl_Observable():
+    batch_size= 5
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= -0.08*lam
+    L = 16
+    L2 = 16
+    pm = 2.0
+    p= pm*(2.0*np.pi/L)
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    #Boundary cut timeslices
+    xcut_1 = 6
+    xcut_2 = 14
+    bw=2
+
+    s_range= (3,)
+
+
+    u = sch.hotStart()
+
+    q = (u,)
+
+    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
+    lvl2_im2 = i.minnorm2(sch.dd_Force,sch.evolveQ,20, 1.0)
+    sim = h.hmc(sch, im2, False)
+    lvl2_sim = h.hmc(sch, lvl2_im2, False)
+
+    #Typical equilibration
+    q0 = sim.evolve_f(q, 200)
+    q = tuple(q0)
+
+
+    # Two level integration
+    #Level 0 configurations per batch
+    n0 = 20
+
+    #Level 1 configurations per batch
+    n1 = 10
+
+    #Ensemble averaged correlation function data array:
+    c= tr.zeros(batch_size, n0*n1*n1, L)
+    #index for adding correlator measurement to sample
+    cx = 0
+    for n in np.arange(n0):
+
+        #Thermalize several steps between 2nd level integration
+        q = sim.evolve_f(q, 50)
+        q1 = tuple(q)
+
+        bb_d = sch.bb_DiracOperator(q1, xcut_1, xcut_2, bw).to_dense()
+
+        d00 = bb_d[:,0:4*bw*L, 0:4*bw*L2]
+
+        #Approximate the inverse
+        #For testing use the exact inverse
+        d00_inv = eig_Inv_Approx(d00, 64)
+
+        #To store 2nd-level gauge configs for ensemble averaging
+        #batch, config no., lattice indexes
+        u_lvl2 = tr.zeros([batch_size, n1, 2, L, L2], dtype=tr.complex64)
+        for nx in np.arange(n1):
+            #For each subdomain:
+            # Evolve locally while maintaining boundaries
+            # For quenched model, its actually more efficient to update the whole lattice
+            #Save gauge config
+            q = lvl2_sim.second_Level_Evolve(q, 50, xcut_1, xcut_2, bw)
+            u_lvl2[:, nx, :, :, :] = q[0]
+
+        #Now ensemble average each combo of level 2 subdomains
+        u_measure = q[0].clone().detach()
+        for x in np.arange(n1):
+            u_measure[:, :, 0:xcut_1, :] = u_lvl2[:,x,:, 0:xcut_1,:]
+            for y in np.arange(n1):
+                u_measure[:, :, xcut_1+bw:xcut_2, :] = u_lvl2[:,y,:,xcut_1+bw:xcut_2,:]
+
+                #Measuring each spliced together config
+                q = (u_measure,)
+                s_inv = sch.dd_Schur_Propogator(q, xcut_1,xcut_2, bw, d00_inv)
+                cl = sch.dd_Exact_Pion_Correlator(s_inv,xcut_1,xcut_2, bw, s_range,p=p)
+                c[:, cx, :] = cl
+                cx +=1
+
+        #Return to configuration before 2nd level integration
+        q = tuple(q1)
+        print(n)
+
+    #Save produced correlator data for one batch
+    c_np = c[0,:,:].numpy()
+    np.savetxt("two_level_correlator.csv",c_np, delimiter=',')
+    #Average over all batches and configurations measured
+    c_avg = tr.mean(c, dim=(0,1))
+    c_err = (tr.std(c, dim=(0,1))/np.sqrt(tr.numel(c[:,:,0]) - 1))
+
+    #Single level integration
+    q=q0
+    nm = 200
+    c2= tr.zeros(batch_size, nm, L)
+    for n in np.arange(nm):
+        #Discard some in between
+        q= sim.evolve_f(q, 50)
+        d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
+            
+        #Vector of time slice correlations
+        cl = sch.exact_Pion_Correlator(d_inv, s_range, p=p)
+
+        c2[:, n, :] = cl
+
+        print(n)
+
+
+    #Save produced correlator data for one batch
+    c_np = c2[0,:,:].numpy()
+    np.savetxt("one_level_correlator.csv",c_np, delimiter=',')
+    #Average over all batches and configurations measured
+    c2_avg = tr.mean(c2, dim=(0,1))
+    c2_err = (tr.std(c2, dim=(0,1))/np.sqrt(tr.numel(c2[:,:,0]) - 1))
+
+    #Write dataframe of data
+
+    df = pd.DataFrame([c_avg.detach().numpy(), c_err.detach().numpy(), c2_avg.detach().numpy(), c2_err.detach().numpy()])
+    #TODO: Write more descriptive datafile name
+    df.to_csv("output.csv", index = False)
+
+    a = df.to_numpy()
+
+
+    #Fit data 
+    popt_2l, pcov_2l = sp.optimize.curve_fit(f_pi_triplet, np.arange(8,11), np.abs(a[0, 8:11]), sigma = np.abs(a[1, 8:11]))
+    print("Two level:")
+    print(popt_2l)
+    print(pcov_2l)
+
+    popt_1l, pcov_1l = sp.optimize.curve_fit(f_pi_triplet, np.arange(8,11), np.abs(a[2, 8:11]), sigma = np.abs(a[3, 8:11]))
+    print("One level:")
+    print(popt_1l)
+    print(pcov_1l)
+
+    fig, (ax1, ax2) = plt.subplots(2,1)
+
+    ax1.set_yscale('log', nonpositive='clip')
+    ax2.set_yscale('log', nonpositive='clip')
+
+    ax1.plot(np.linspace(0, L, 100), f_pi_triplet(np.linspace(0, L, 100), *popt_2l))
+    ax2.plot(np.linspace(0, L, 100), f_pi_triplet(np.linspace(0, L, 100), *popt_1l))
+
+    ax1.errorbar(np.arange(0, L), tr.abs(c_avg), tr.abs(c_err), ls="", marker=".", label=r'2-level')
+    ax2.errorbar(np.arange(0, L), tr.abs(c2_avg), tr.abs(c2_err), ls="", marker=".", label=r'1-level')
+    ax1.set_title(r'p= '+str(pm) + r'$\times \frac{2\pi}{L}$ pion correlator')
+
+    ax1.legend(loc='lower right')
+    ax2.legend(loc='lower right')
+
+    plt.show()
+    
 
 def main():
     #block_Diagonal_Check()
@@ -964,8 +1430,12 @@ def main():
     #plot_correlator_difference()
     #dd_Integrator_dH()
     #dd_Integrated_Action()
-    #multilevel_Integrator()
-    plot_Signal_To_Noise()
+    #plot_Signal_To_Noise()
+    #config_Correlation()
+    #autocorrelation_Comparison()
+    #correlator_Dist()
+    #factorized_observable()
+    quenched_Factorized_Twolvl_Observable()
 
 
 

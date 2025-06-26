@@ -1090,6 +1090,81 @@ def topological_Charge_Distribution():
 
     plt.show()
 
+#Determining pi plus mass in quenched approximation using effective mass curve
+def test_Singlet_Correlator():
+    #Measurement process -given function for correlator of pi plus
+    batch_size=100
+    #lam =np.sqrt(1.0/0.970)
+    lam = np.sqrt(1.0/10.0)
+    mass= -0.08*lam
+    L = 16
+    L2 = 16
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+    pm = 0.0
+    p= pm*(2.0*np.pi/L)
+
+    #Average correlation function for each lattice timeslice
+    c_list = []
+    c_err = []
+
+    u = sch.hotStart()
+    #Need to make a tuple
+    q =(u,)
+
+    #Tune integrator to desired step size
+    im2 = i.minnorm2(sch.force,sch.evolveQ,30, 1.0)
+    sim = h.hmc(sch, im2, False)
+    
+    #Bring lattice to equilibrium
+    q = sim.evolve_f(q, 100)
+
+
+
+    #Measurement process- n measurements on 1000 batches
+    for n in np.arange(10):
+        #Discard some in between
+        q= sim.evolve_f(q, 25)
+        d = sch.diracOperator(q[0])
+        d_inv = tr.linalg.inv(d.to_dense())
+
+
+        #Measure correlation function for different lengths
+        #for nt in np.arange(0, L):
+            
+        #Vector of time slice correlations
+        cl = sch.exact_Singlet_Correlator(d_inv, (3,),p=p)
+        cl2 = sch.exact_Pion_Correlator(d_inv, (3,), p=p)
+        if n ==0:
+            c = cl
+            c2 = cl2
+        else:
+            c= tr.cat((c, cl), 0)
+            c2= tr.cat((c2, cl2), 0)
+        print(n)
+
+    #Average over all batches and configurations measured
+    c_avg = tr.mean(c, dim=0)
+    c_err = (tr.std(c, dim=0)/np.sqrt(tr.numel(c[:,0]) - 1))
+
+    c2_avg = tr.mean(c2, dim=0)
+    c2_err = (tr.std(c2, dim=0)/np.sqrt(tr.numel(c2[:,0]) - 1))
+
+    m_eff = np.log(c_avg[:L-1]/c_avg[1:]) 
+
+    print(m_eff)
+
+
+    fig, ax1 = plt.subplots(1,1)
+
+    ax1.set_yscale('log', nonpositive='clip')
+
+
+    ax1.errorbar(np.arange(0, L), tr.abs(c_avg), tr.abs(c_err), ls="", marker=".")
+    ax1.errorbar(np.arange(0, L), tr.abs(c2_avg), tr.abs(c2_err), ls="", marker=".")
+    ax1.set_title(str(batch_size) + ' batch '+ str(L) + 'x' + str(L2) + r' lattice, $\beta$ = ' + str(1/lam**2) +' m=' + str(mass))
+
+    plt.show()
+
 
 
 def main():
@@ -1100,7 +1175,7 @@ def main():
     #pure_gauge_Savg()
     #trivial_D_inspect()
     #dynamical_action()
-    dynamical_dH_vs_eps2()
+    #dynamical_dH_vs_eps2()
     #pi_plus_mass()
     #autograd_test()
     #autograd_dH_vs_eps2()
@@ -1112,6 +1187,7 @@ def main():
     #fit_critical_mass()
     #FV_Fitting()
     #topological_Charge_Distribution()
+    test_Singlet_Correlator()
     
     #force_speed_test()
 

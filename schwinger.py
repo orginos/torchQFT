@@ -88,10 +88,16 @@ class schwinger():
 
     #Inputs:, self, Bx(VolxNd)x(VolxNd) dirac operator d
     #outputs: Bx(VolxNd) pseudofermion field
+    #TODO: complex x?
     def generate_Pseudofermions(self, d):
         
         #Scalar random numbers
-        x = tr.normal(0.0,1.0,[self.Bs, self.V[0]*self.V[1]*self.Nd],dtype=tr.complex64,device=self.device)
+        #x = tr.normal(0.0,1.0,[self.Bs, self.V[0]*self.V[1]*self.Nd],dtype=tr.complex64,device=self.device)
+
+        #random complex numbers
+        real = tr.randn([self.Bs, self.V[0]*self.V[1]*self.Nd], dtype=tr.float64)
+        imag = tr.randn([self.Bs, self.V[0]*self.V[1]*self.Nd], dtype=tr.float64)
+        x = tr.complex(real, imag)
         
         p = tr.einsum('bxy, by-> bx', d.to_dense(), x)
 
@@ -158,7 +164,6 @@ class schwinger():
 
     #Inputs: self, tuple of gauge field, fermion field, dirac operator
     #Output: force tensor for updating momentum tensor in HMC
-    #Faster implementation of force function for HMC
     def force(self, q):
         #Isolate gauge field
         u = q[0]
@@ -298,7 +303,6 @@ class schwinger():
             d_upd = self.diracOperator(u_upd)
             return (u_upd, Q[1], d_upd)
     
-    #TODO: Testing allowing for non-zero momentum
     #Input: Inverse dirac operator, source timeslices to average over, spatial momentum
     #timeslice max
     #Output: Batch x Vector of Correlation functions for each time slice
@@ -328,7 +332,6 @@ class schwinger():
                     #B length vector
                     c = c - np.exp(-1.0j*nx*p)*tr.sum(s2, dim=(1,2))
                 #BxL tensor
-                #TODO: See below- are values of c going to still be real?
                 # values of c are verified as real- cast them to real to avoid error message        
                 ev[:, nt] = ev[:, nt] +  tr.real(c)
 
@@ -403,10 +406,83 @@ class schwinger():
         ev = ev / (len(s_range))
 
         return ev / np.sqrt(1.0*self.V[1])
+    
+    #Input: Inverse dirac operator, source timeslices to average over, spatial momentum
+    #timeslice max
+    #Output: Batch x Vector of singlet Correlation functions for each time slice
+    #TODO: Needs testing
+    def exact_Singlet_Correlator(self, d_inv, s_range, p=0.0, ts_max = -1):
+
+        #Default timeslice max-set to full length of lattice
+        if ts_max==-1:
+            ts_max = self.V[0]
+
+        ev = tr.zeros([self.Bs, ts_max])
+
+
+        #Set source on each selected timeslices and average later
+        for ts in s_range:
+            #spacetime lattice index of source
+            sx = self.V[1]*ts
+
+            for nt in np.arange(ts_max):
+                c = tr.zeros(self.Bs)
+                for nx in np.arange(self.V[1]):
+                    #Must be doubled to account for dirac space!
+                    n = 2*(self.V[1] * nt + nx)
+
+                    s1 = d_inv[:, n:n+2, 2*sx:2*sx+2]
+                    s2 = tr.einsum('bxy, byz -> bxz', s1.conj().transpose(1,2), s1)
+                    s3 = tr.einsum('xy, byx-> b', g5, d_inv[:, n:n+2, n:n+2]) * \
+                    tr.einsum('xy, byx-> b', g5, d_inv[:, 2*sx:2*sx+2, 2*sx:2*sx+2])
+
+                    #B length vector
+                    c = c + np.exp(-1.0j*nx*p)*(-1.0*tr.sum(s2, dim=(1,2)) - 2.0*s3) 
+                #BxL tensor
+                #TODO: See below- are values of c going to still be real?
+                # values of c are verified as real- cast them to real to avoid error message        
+                ev[:, nt] = ev[:, nt] +  tr.real(c)
+
+        #Average over the sources
+        ev = ev / (len(s_range))
+
+        return ev / np.sqrt(1.0*self.V[1])
+    
+
 
 
 # Domain Decomposition Development *******************************************
 
+    #Input: Batch of square matrices, rank of approximation
+    #Output: Neumann series approximated inverse of matrix batch
+    def neumann_Inverse(self, m, r):
+
+        #rank 0 term- batch of identity matrices
+        x = tr.eye(m.size(dim=1), dtype=tr.complex64)
+        #x = x.reshape((1, m.size(dim=1), m.size(dim=1)))
+        x = x.repeat(self.Bs, 1, 1)
+
+        if r == 0:
+            return x
+
+        #rank 1 term - Identity minus matrix
+        base = x - m
+
+        sum = base + x
+
+        if r == 1:
+            return sum
+        
+        #rank 2 and higher terms
+        term = base
+        for i in np.arange(2, r+1):
+            term = tr.einsum('bxy, byz-> bxz', term, base)
+            sum = sum + term
+        
+        return sum
+
+
+# Block banded Dirac operator/Schur complement based observables
 
     #input: Lattice configuration, timeslice for domain boundaries, boundary width
     #Output: Domain Decompostion based block-banded Dirac operator
@@ -442,15 +518,7 @@ class schwinger():
 
         #Naive block banded construction
         i = 0
-        for n in ri:
-            #O(n) approach- in development
-            #Fill in Dirac space matrix at each re-ordered spacetime index
-            # bd_d[:, 2*i,0::2] = tr.index_select(d[:, 2*n, :], 1, 2*ri)
-            # bd_d[:,2*i, 1::2] = tr.index_select(d[:, 2*n, :], 1, 2*ri + 1)
-            # bd_d[:, 2*i+1,0::2] = tr.index_select(d[:, 2*n+1, :], 1, 2*ri)
-            # bd_d[:,2*i+1, 1::2] = tr.index_select(d[:, 2*n+1, :], 1, 2*ri + 1)
-
-            
+        for n in ri:  
             # #Naive O(n^2) algorithm
             j=0
             for m in ri:
@@ -463,28 +531,35 @@ class schwinger():
         return bd_d.to_sparse()
     
     #input: Lattice configuration, timeslice for domain boundaries, boundary width
+    #optional input for pre-computed/approximated d00 inverse
     #Output: Domain Decompostion based factorized propogator matrix between subdomains
     #Note assumes 2 subdomains for naive implementation
-    def dd_Factorized_Propogator(self, q, xcut_1, xcut_2, bw):
+    def dd_Schur_Propogator(self, q, xcut_1, xcut_2, bw, d00_inv=tr.zeros(2)):
 
         bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2,bw)
 
         bb_d = bb_d.to_dense()
         
         #Isolate sub matrices
-        #Assumes 2 width 2 timeslice boundaries
+        #Assumes 2 timeslice boundaries of width bw
         d00 = bb_d[:,0:4*bw*self.V[1], 0:4*bw*self.V[1]]
         d01 = bb_d[:, 0:4*bw*self.V[1], 4*bw*self.V[1]:]
         d10 = bb_d[:, 4*bw*self.V[1]:, 0:4*bw*self.V[1]]
         d11 = bb_d[:, 4*bw*self.V[1]:, 4*bw*self.V[1]:]
 
+        #If function is not given a matrix for the inverse of the boundary region,
+        #compute it exactly
+        if tr.numel(d00_inv)== 0:
+            d00_inv = tr.inverse(d00)
+
         #Schur complement
-        s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, tr.inverse(d00), d01)
+        s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, d00_inv, d01)
 
         #Factorized propogator for points in subdomains
         fp = tr.inverse(s11)
         return fp
     
+
     #Input: inverse Schur complement, starting timeslice of boundarys, boundary width
     #range of source timeslices to average over
     #Output: Hadron correlator computed using inverse of exact Schur complement
@@ -515,6 +590,51 @@ class schwinger():
 
                         #B length vector
                         c = c - np.exp(-1.0j*nx*p)*tr.sum(s2, dim=(1,2))
+                        #Iterate to next spatial site
+                        n += 2
+
+                    #BxL tensor      
+                    ev[:, nt] = ev[:, nt] + tr.real(c)
+
+        #Average over the sources
+        ev = ev / (len(s_range))
+
+        return ev / np.sqrt(1.0*self.V[1])
+    
+    #Input: inverse Schur complement, starting timeslice of boundarys, boundary width
+    #range of source timeslices to average over
+    #Output: Hadron correlator computed using inverse of exact Schur complement
+    #TODO: Needs testing
+    def dd_Exact_Singlet_Correlator(self, s_inv, xcut_1, xcut_2, bw, s_range, p=0.0):
+
+        ev = tr.zeros([self.Bs, self.V[0]])
+
+        for sx in s_range:
+            sx = self.V[1] * sx
+
+            #lattice site index of subdomains
+            n=0
+
+            #Corrected ordering of timeslices if neccesary
+            ts = np.arange(self.V[0])
+            if (xcut_2 + bw < self.V[0]):
+                ts = np.roll(ts, self.V[0] - (xcut_2+bw))
+
+            #Traverse each lattice site in subdomains
+            for nt in ts:
+                #Skip timeslice if its in boundary area
+                if (nt not in np.arange(xcut_1, xcut_1+bw) and nt not in np.arange(xcut_2, xcut_2+bw)):
+                    c = tr.zeros(self.Bs)
+                    #Each spatial index on a timeslice
+                    for nx in np.arange(self.V[1]):
+                        s1 = s_inv[:, n:n+2, 2*sx:2*sx+2]
+                        s2 = tr.einsum('bxy, bzy -> bxz', s1, s1.conj())
+                        s3 = tr.einsum('xy, byx-> b', g5, s_inv[:, n:n+2, n:n+2]) * \
+                        tr.einsum('xy, byx-> b', g5, s_inv[:, 2*sx:2*sx+2, 2*sx:2*sx+2])
+
+                        #B length vector
+                        c = c + np.exp(-1.0j*nx*p)*(-1.0*tr.sum(s2, dim=(1,2)) - 2.0*s3)
+
                         #Iterate to next spatial site
                         n += 2
 
@@ -575,34 +695,6 @@ class schwinger():
 
         return ev / np.sqrt(1.0*self.V[1])
  
-    #Input: Batch of square matrices, rank of approximation
-    #Output: Neumann series approximated inverse of matrix batch
-    def neumann_Inverse(self, m, r):
-
-        #rank 0 term- batch of identity matrices
-        x = tr.eye(m.size(dim=1), dtype=tr.complex64)
-        #x = x.reshape((1, m.size(dim=1), m.size(dim=1)))
-        x = x.repeat(self.Bs, 1, 1)
-
-        if r == 0:
-            return x
-
-        #rank 1 term - Identity minus matrix
-        base = x - m
-
-        sum = base + x
-
-        if r == 1:
-            return sum
-        
-        #rank 2 and higher terms
-        term = base
-        for i in np.arange(2, r+1):
-            term = tr.einsum('bxy, byz-> bxz', term, base)
-            sum = sum + term
-        
-        return sum
-    
 
     #input: block banded D operator, timeslice for domain boundaries, boundary width rank of approximation, source index
     #Output: Domain Decompostion based factorized propogator matrix between subdomains
@@ -621,17 +713,6 @@ class schwinger():
 
         #Schur complement
         s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, self.neumann_Inverse(d00, r), d01)
-
-        #Alternative- use an exact inverse of the approximated schur complement rather than
-        #using BICGStab
-        if(True):
-            inv_s = tr.inverse(s11)
-            #Adjust sx for boundary as needed-assumes just two boundaries
-            if(sx > xcut_2*self.V[1]):
-                sx = sx - 2*bw*self.V[1]
-            elif(sx > xcut_1*self.V[1]):
-                sx = sx - bw*self.V[1]
-            return inv_s[:, :, 2*sx:2*sx+2]
 
         # build batch of solution vectors for point source - one for each dirac index
         source_vec = tr.zeros(self.Bs, d11.size(dim=1))
@@ -664,50 +745,6 @@ class schwinger():
 
 # Two Level HMC Functions *******************************************
 
-    def dd_FermionAction(self, bb_d, p, xcut_1, xcut_2, bw, r=-1):
-        #Slice psuedofermion vector as appropriate
-        p_sd = tr.cat((p[:, 0:xcut_1*2*self.V[1]], p[:, (xcut_1+bw)*2*self.V[1]:xcut_2*2*self.V[1]]))
-
-        #Compute Schur complement
-        #Isolate sub matrices
-        #Assumes 2 width 2 timeslice boundaries
-        d00 = bb_d[:,0:4*bw*self.V[1], 0:4*bw*self.V[1]]
-        d01 = bb_d[:, 0:4*bw*self.V[1], 4*bw*self.V[1]:]
-        d10 = bb_d[:, 4*bw*self.V[1]:, 0:4*bw*self.V[1]]
-        d11 = bb_d[:, 4*bw*self.V[1]:, 4*bw*self.V[1]:]
-
-        #Schur complement
-        if r ==-1:
-            s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, tr.inverse(d00), d01)
-        else:
-            s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, self.neumann_Inverse(d00, r), d01)
-
-
-        #Compute action
-        s_inv = tr.inverse(s11)
-        s_dag_inv = tr.inverse(s11.conj().transpose(1,2))
-        return tr.einsum('bx, bxy, byz, bz', tr.conj(p_sd), s_dag_inv, s_inv, p_sd)
-
-    def dd_GaugeAction(self, u, xcut_1, xcut_2, bw):
-        #plaquette matrix
-        pl = u[:,0,:,:]*tr.roll(u[:,1,:,:], shifts=-1, dims=1) \
-            * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:])
-
-        #Only add plaquettes in the subdomains
-        pl1 = pl[:,:xcut_1,:]
-        pl2 = pl[:,xcut_1+bw:xcut_2, :]
-        s1 = (1/self.lam**2) *(tr.sum(tr.real(tr.ones_like(pl1) - pl1),dim=(1,2)))
-        s2 = (1/self.lam**2) *(tr.sum(tr.real(tr.ones_like(pl2) - pl2),dim=(1,2)))
-        return s1+s2
-
-    def dd_Action(self, q, xcut_1, xcut_2, bw, r=-1):
-        if len(q) == 1:
-            return self.dd_GaugeAction(q[0], xcut_1, xcut_2, bw)
-        else:
-            bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2, bw)
-            return self.dd_GaugeAction(q[0], xcut_1, xcut_2, bw) + \
-            tr.abs(self.dd_FermionAction(bb_d, q[1], xcut_1, xcut_2, bw, r))
-
     #Input: conjugate momentum tensor, boundary timeslices, boundary width
     #Output: conjugate momentum with boundary timeslice momentum frozen   
     def dd_Freeze_P(self, p, xcut_1, xcut_2, bw):
@@ -720,30 +757,30 @@ class schwinger():
         #Compute gauge force as in the full model
 
         #Isolate gauge field
-            u = q[0]
-            #A tensor of 'staples'
-            a = tr.zeros_like(q[0])
+        u = q[0]
+        #A tensor of 'staples'
+        a = tr.zeros_like(q[0])
 
-            
-            a[:,0,:,:]  = tr.roll(u[:,1,:,:], shifts=-1, dims=1) * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:]) \
-                        + tr.conj(tr.roll(u[:,1,:,:], shifts=(-1,1), dims= (1,2)))*tr.conj(tr.roll(u[:,0,:,:], shifts=1, dims=2)) * tr.roll(u[:,1,:,:], shifts=1, dims=2)
-            a[:,1,:,:] = tr.conj(tr.roll(u[:,0,:,:], shifts=(1,-1), dims=(1,2))) * tr.conj(tr.roll(u[:,1,:,:], shifts=1, dims=1)) * tr.roll(u[:,0,:,:], shifts=1, dims=1) \
-                        + tr.roll(u[:,0,:,:], shifts=-1, dims=2) * tr.conj(tr.roll(u[:,1,:,:], shifts=-1, dims=1)) * tr.conj(u[:,0,:,:])
-            #gauge action contribution
-            fg = (-1.0j* (1.0/self.lam**2)/2.0)* (u*a - tr.conj(a)*tr.conj(u))
+        
+        a[:,0,:,:]  = tr.roll(u[:,1,:,:], shifts=-1, dims=1) * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:]) \
+                    + tr.conj(tr.roll(u[:,1,:,:], shifts=(-1,1), dims= (1,2)))*tr.conj(tr.roll(u[:,0,:,:], shifts=1, dims=2)) * tr.roll(u[:,1,:,:], shifts=1, dims=2)
+        a[:,1,:,:] = tr.conj(tr.roll(u[:,0,:,:], shifts=(1,-1), dims=(1,2))) * tr.conj(tr.roll(u[:,1,:,:], shifts=1, dims=1)) * tr.roll(u[:,0,:,:], shifts=1, dims=1) \
+                    + tr.roll(u[:,0,:,:], shifts=-1, dims=2) * tr.conj(tr.roll(u[:,1,:,:], shifts=-1, dims=1)) * tr.conj(u[:,0,:,:])
+        #gauge action contribution
+        fg = (-1.0j* (1.0/self.lam**2)/2.0)* (u*a - tr.conj(a)*tr.conj(u))
 
-            #Zero out the force on the frozen links
-            fg[:,:,xcut_1:xcut_1+bw, :] = 0.0
-            fg[:,:,xcut_2:xcut_2+bw, :] = 0.0
+        #Zero out the force on the frozen links
+        fg[:,:,xcut_1:xcut_1+bw, :] = 0.0
+        fg[:,:,xcut_2:xcut_2+bw, :] = 0.0
 
-            #If fermions aren't present, simply return force of gauge field
-            if len(q) == 1:
-                #Force is already real, force cast for downstream errors
-                #Additional negative sign added from Hamilton's eqs.
-                return (-1.0)*tr.real(fg).type(self.dtype)
-            
-            
-            #Otherwise, compute force of the fermion fields
-            #Quenched simulation only for now
-            #TODO: Dynamical force with DD
-            return 0
+        #If fermions aren't present, simply return force of gauge field
+        if len(q) == 1:
+            #Force is already real, force cast for downstream errors
+            #Additional negative sign added from Hamilton's eqs.
+            return (-1.0)*tr.real(fg).type(self.dtype)
+        
+        #TODO: dynamical fermion implementation
+
+
+
+
