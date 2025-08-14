@@ -922,15 +922,18 @@ def plot_Signal_To_Noise():
 
     ax1.set_yscale('log', nonpositive='clip')
 
-    #level_2 = np.divide(np.abs(d[1,:]), d[2,:])
-    level_2 = np.abs(d[1,:])
-    #level_1 = np.divide(np.abs(d[3,:]), d[4,:])
-    level_1 = np.abs(d[3,:])
+    level_2 = np.divide(np.abs(d[1,3:]), d[2,3:])
+    #level_2 = np.abs(d[1,:])
+    level_1 = np.divide(np.abs(d[3,3:]), d[4,3:])
+    #level_1 = np.abs(d[3,:])
 
-    ax1.scatter(np.arange(L), level_2, label='2-level')
-    ax1.scatter(np.arange(L), level_1, label='1-level')
-    ax1.set_title(r'Signal to noise ratio for $p = 2 \times \frac{2 \pi}{L}$ singlet meson')
-    ax1.legend(loc='lower right')
+    ax1.scatter(np.arange(0,L-3), level_2, s=500, marker='o', c='red', label='DD-HMC')
+    ax1.scatter(np.arange(0,L-3), level_1, s=500, marker='o', c='black', label='HMC')
+    #ax1.set_title(r'Signal to noise ratio of a high momentum pion 2 point correlator', fontsize=36)
+    ax1.set_xlabel(r'$t$', fontsize=48)
+    ax1.set_ylabel(r'$\frac{C(t)}{\mathrm{err}[C(t)]}$', fontsize=48)
+    ax1.tick_params(axis='both', which='major', labelsize=24)
+    ax1.legend(loc='lower right', fontsize=30)
     plt.show()
 
 #Plot exact/approx correlator difference from imported csv data
@@ -1256,11 +1259,69 @@ def test_inv_approx():
           tr.einsum("bxy, byz->bxz", d, eig_Inv_Approx(d, -1))) <0.000001)
 
 
+def factorized_Observable_Systematic_Error_Test():
+    batch_size= 50
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= -0.08*lam
+    L = 16
+    L2 = 16
+    pm = 2.0
+    p= pm*(2.0*np.pi/L)
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    #Boundary cut timeslices
+    xcut_1 = 6
+    xcut_2 = 14
+    bw=2
+
+    s_range= (3,)
+
+
+    u = sch.hotStart()
+
+    q = (u,)
+
+    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
+    sim = h.hmc(sch, im2, False)
+
+    #Typical equilibration
+    q0 = sim.evolve_f(q, 200)
+    q = tuple(q0)
+
+    nm = 200
+    c= tr.zeros(batch_size, nm, L)
+    for n in np.arange(nm):
+        #Discard some in between
+        q= sim.evolve_f(q, 50)
+
+        bb_d = sch.bb_DiracOperator(q, xcut_1, xcut_2, bw).to_dense()
+        d00 = bb_d[:,0:4*bw*L, 0:4*bw*L2]
+
+        #Approximate the inverse
+        #For initial testing, use the exact inverse
+        d00_inv = tr.inverse(d00)
+        #d00_inv = eig_Inv_Approx(d00, 64)
+
+        sys_err, sys_err_err = sch.dd_Pion_Systematic_Error(q, xcut_1, xcut_2, bw, d00_inv, s_range, p)
+
+        d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
+
+        print(sys_err)
+        print(sys_err_err)
+            
+        #Vector of time slice correlations
+        cl = sch.exact_Pion_Correlator(d_inv, s_range, p=p)
+
+        c[:, n, :] = cl
+
+        print(n)
+
 
 #TODO: In Development- needs error correction
 #2-lvl factorized observable with multilevel integration
 def quenched_Factorized_Twolvl_Observable():
-    batch_size= 5
+    batch_size= 2
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
     mass= -0.08*lam
@@ -1314,7 +1375,7 @@ def quenched_Factorized_Twolvl_Observable():
         d00 = bb_d[:,0:4*bw*L, 0:4*bw*L2]
 
         #Approximate the inverse
-        #For testing use the exact inverse
+        #For initial testing, use the exact inverse
         d00_inv = eig_Inv_Approx(d00, 64)
 
         #To store 2nd-level gauge configs for ensemble averaging
@@ -1337,8 +1398,12 @@ def quenched_Factorized_Twolvl_Observable():
 
                 #Measuring each spliced together config
                 q = (u_measure,)
-                s_inv = sch.dd_Schur_Propogator(q, xcut_1,xcut_2, bw, d00_inv)
-                cl = sch.dd_Exact_Pion_Correlator(s_inv,xcut_1,xcut_2, bw, s_range,p=p)
+                #s_inv = sch.dd_Schur_Propogator(q, xcut_1,xcut_2, bw, d00_inv)
+                #cl = sch.dd_Exact_Pion_Correlator(s_inv,xcut_1,xcut_2, bw, s_range,p=p)
+                d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
+            
+                #Vector of time slice correlations
+                cl = sch.exact_Pion_Correlator(d_inv, s_range, p=p)
                 c[:, cx, :] = cl
                 cx +=1
 
@@ -1415,7 +1480,274 @@ def quenched_Factorized_Twolvl_Observable():
     plt.show()
     
 
+def d_Ddag_Spectral_Radius():
+    batch_size= 100
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= -0.08*lam
+    L = 16
+    L2 = 16
+    pm = 2.0
+    p= pm*(2.0*np.pi/L)
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    #Boundary cut timeslices
+    xcut_1 = 6
+    xcut_2 = 14
+    bw=2
+
+    s_range= (3,)
+
+
+    u = sch.hotStart()
+
+    q = (u,)
+
+    d = sch.diracOperator(q[0]).to_dense()
+    d_dag = tr.conj(d.transpose(dim0=1,dim1=2))
+    dd = tr.einsum('bxy, byz->bxz', d, d_dag)*1.0/7.0
+    eye = tr.eye(dd.size(dim=1))
+    for b in np.arange(d.size(dim=0)):
+        print(tr.max(tr.abs(tr.linalg.eigvals(eye -dd[b, :,:]))))
+
+
+
+def test_Naive_Localized_Fermion_Action():
+    batch_size= 5
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= -0.08*lam
+    L = 10
+    L2 = 10
+    pm = 2.0
+    p= pm*(2.0*np.pi/L)
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    #Boundary cut timeslices
+    xcut_1 = 3
+    xcut_2 = 8
+    bw=2
+
+    s_range= (1,)
+
+
+    u = sch.hotStart()
+
+    q = (u,)
+
+    d = sch.diracOperator(q[0])
+
+    f = sch.generate_Pseudofermions(d)
+
+    q = (u, f, d)
+
+     #Tune integrator to desired step size
+    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
+    sim = h.hmc(sch, im2, False)
+
+    q = sim.evolve_f(q, 50)
+    steps = 20
+    for n in np.arange(0, steps):
+        #Evolve, one HMC step
+        q = sim.evolve_f(q, 1)
+        sf = sch.fermionAction(q[2], q[1])
+        sf_prime = sch.localized_Fermion_Action(q[2],q[1])
+        print(sf)
+        print(sf_prime)
+
+
+#Testing to see if the dynamical two level integrator runs properly.
+#Just checking config generation, no measurements yet
+#TODO: Reweighting and measurements
+def dynamical_Twolvl_Integrator():
+    batch_size= 2
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= -0.08*lam
+    L = 10
+    L2 = 10
+    pm = 1.0
+    p= pm*(2.0*np.pi/L)
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    #Boundary cut timeslices
+    xcut_1 = 3
+    xcut_2 = 8
+    bw=2
+
+    s_range= (3,)
+
+
+    u = sch.hotStart()
+    d = sch.diracOperator(u)
+    f = sch.generate_Pseudofermions(d)
+
+    q = (u,f,d)
+
+    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
+    lvl2_im2 = i.minnorm2(sch.dd_Force,sch.evolveQ,30, 1.0)
+    sim = h.hmc(sch, im2, False)
+    lvl2_sim = h.hmc(sch, lvl2_im2, True)
+
+    #Typical equilibration
+    q0 = sim.evolve_f(q, 50)
+    q = tuple(q0)
+    print("Thermalized")
+
+
+    # Two level integration
+    #Level 0 configurations per batch
+    n0 = 10
+
+    #Level 1 configurations per batch
+    n1 = 10
+    for n in np.arange(n0):
+        #Thermalize several steps between 2nd level integration
+        q = sim.evolve_f(q, 5)
+        q1 = tuple(q)
+
+        #To store 2nd-level gauge configs for ensemble averaging
+        #batch, config no., lattice indexes
+        #u_lvl2 = tr.zeros([batch_size, n1, 2, L, L2], dtype=tr.complex64)
+        print(sch.action(q))
+        for nx in np.arange(n1):
+            #For each subdomain:
+            # Evolve locally while maintaining boundaries
+            # Update both subdomains for now
+            #Check how many pass
+            q = lvl2_sim.second_Level_Evolve(q, 5, xcut_1, xcut_2, bw)
+        q = tuple(q1)
+        print(n)
+        
+
+#Produces level. zero configurations generated and measures spectral radius
+# of non-local behavior
+def measure_Nonlocal_Spectral_Radius():
+    batch_size= 5
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= -0.08*lam
+    L = 10
+    L2 = 10
+    pm = 2.0
+    p= pm*(2.0*np.pi/L)
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    #Boundary cut timeslices
+    xcut_1 = 3
+    xcut_2 = 8
+    bw=2
+
+
+
+    u = sch.hotStart()
+    d = sch.diracOperator(u)
+    f = sch.generate_Pseudofermions(d)
+
+    q = (u,f,d)
+
+    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
+    sim = h.hmc(sch, im2, False)
+
+    #Typical equilibration
+    q = sim.evolve_f(q, 5)
+    print("Thermalized")
+
+    measurements=60
+    
+    for n in np.arange(measurements):
+        q = sim.evolve_f(q,5)
+        #Produce non-local matrix of interest
+        bb_d = sch.bb_DiracOperator(q, xcut_1, xcut_2, bw).to_dense()
+        d00 = bb_d[:,0:4*bw*L2, 0:4*bw*L2]
+        d01 = bb_d[:, 0:4*bw*L2, 4*bw*L2:]
+        d10 = bb_d[:, 4*bw*L2:, 0:4*bw*L2]
+        d11 = bb_d[:, 4*bw*L2:, 4*bw*L2:]
+
+        nlcl = tr.einsum("bij, bjk, bkl, blm->bim", tr.inverse(d11), d10, tr.inverse(d00),
+                         d01)
+        id = tr.eye(d11.size(dim=1)).reshape(1, d11.size(dim=1),d11.size(dim=1))
+        bt_id = id.repeat(batch_size, 1, 1)
+
+        #ms = bt_id - nlcl
+        ms = nlcl
+        L, V = tr.linalg.eig(ms)
+        
+        if n==0:
+            eigenvalues = L.flatten()
+        else:
+            eigenvalues = tr.cat([eigenvalues, L.flatten()])
+
+        print(n)
+
+    df = pd.DataFrame(eigenvalues.detach().numpy())
+    #TODO: Write more descriptive datafile name
+    df.to_csv("nonlocal_matrix_eigenvalues.csv", index = False)
+
+    fig, ax = plt.subplots(1,1)
+
+    ax.scatter(eigenvalues.real, eigenvalues.imag, c='red', marker='.')
+    
+    theta = np.linspace(0, 2*np.pi, 10000)
+    ax.plot(np.cos(theta), np.sin(theta), c='blue')
+
+    ax.set_title("Eigenvalues of the Non-locality Matrix, n=300")
+
+    ax.set_xlim(-1.5, 1.5)
+    ax.set_ylim(-1.5,1.5)
+
+
+    plt.show()
+
+        
+def test_tridiagonal():
+    batch_size= 5
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= -0.08*lam
+    L = 10
+    L2 = 10
+    pm = 2.0
+    p= pm*(2.0*np.pi/L)
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    #Boundary cut timeslices
+    xcut_1 = 3
+    xcut_2 = 8
+    bw=2
+    
+
+    u = sch.hotStart()
+    d = sch.diracOperator(u)
+    f = sch.generate_Pseudofermions(d)
+
+    q = (u,f,d)
+
+    bb_d = sch.bb_DiracOperator(q, xcut_1, xcut_2, bw).to_dense()
+    d00 = bb_d[:,0:4*bw*L2, 0:4*bw*L2]
+    d01 = bb_d[:, 0:4*bw*L2, 4*bw*L2:]
+    d10 = bb_d[:, 4*bw*L2:, 0:4*bw*L2]
+    d11 = bb_d[:, 4*bw*L2:, 4*bw*L2:]
+
+    correction = tr.einsum('bij, bjk, bkm->bim', d10, tr.inverse(d00), d01)
+    tri_correction = sch.schur_Tridiagonal(correction)
+
+
+    fig, ax = plt.subplots(1,1)
+
+    ax.spy(d11.to_dense()[0,:,:])
+    plt.show()
+    
+
+
+
+
 def main():
+    #test_tridiagonal()
+    #measure_Nonlocal_Spectral_Radius()
+    #dynamical_Twolvl_Integrator()
+    #d_Ddag_Spectral_Radius()
+    #test_Naive_Localized_Fermion_Action()
     #block_Diagonal_Check()
     #propogator_Comparison()
     #dirac_Operator_Norm()
@@ -1434,8 +1766,9 @@ def main():
     #config_Correlation()
     #autocorrelation_Comparison()
     #correlator_Dist()
+    factorized_Observable_Systematic_Error_Test()
     #factorized_observable()
-    quenched_Factorized_Twolvl_Observable()
+    #quenched_Factorized_Twolvl_Observable()
 
 
 

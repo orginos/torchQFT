@@ -115,13 +115,13 @@ class hmc:
             p0 = self.T.dd_Freeze_P(p0, xcut1,xcut2,bw)
 
             #H0 = self.T.kinetic(p0) + self.T.dd_Action(q0, xcut1, xcut2, bw)
-            H0 = self.T.kinetic(p0) + self.T.action(q0)
+            H0 = self.T.kinetic(p0) + self.T.dd_Action(q0,xcut1,xcut2,bw)
 
             p,q = self.I.dd_Integrate(p0,q, xcut1, xcut2, bw)
             p = self.T.dd_Freeze_P(p, xcut1,xcut2,bw)
 
             #Hf = self.T.kinetic(p) + self.T.dd_Action(q,xcut1, xcut2, bw)
-            Hf = self.T.kinetic(p) + self.T.action(q)
+            Hf = self.T.kinetic(p) + self.T.dd_Action(q,xcut1,xcut2,bw)
             
             DH = Hf - H0
             acc_prob=tr.where(DH<0,tr.ones_like(DH),tr.exp(-DH))

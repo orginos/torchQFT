@@ -362,7 +362,7 @@ def dynamical_action():
 
     #Tune integrator to desired step size
     im2 = i.minnorm2(sch.force,sch.evolveQ,25, 1.0)
-    sim = h.hmc(sch, im2, False)
+    sim = h.hmc(sch, im2, True)
 
     steps = 20
     for n in np.arange(0, steps):
@@ -1174,7 +1174,7 @@ def main():
     #fermion_force()
     #pure_gauge_Savg()
     #trivial_D_inspect()
-    #dynamical_action()
+    dynamical_action()
     #dynamical_dH_vs_eps2()
     #pi_plus_mass()
     #autograd_test()
@@ -1187,7 +1187,7 @@ def main():
     #fit_critical_mass()
     #FV_Fitting()
     #topological_Charge_Distribution()
-    test_Singlet_Correlator()
+    #test_Singlet_Correlator()
     
     #force_speed_test()
 

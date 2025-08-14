@@ -95,9 +95,9 @@ class schwinger():
         #x = tr.normal(0.0,1.0,[self.Bs, self.V[0]*self.V[1]*self.Nd],dtype=tr.complex64,device=self.device)
 
         #random complex numbers
-        real = tr.randn([self.Bs, self.V[0]*self.V[1]*self.Nd], dtype=tr.float64)
-        imag = tr.randn([self.Bs, self.V[0]*self.V[1]*self.Nd], dtype=tr.float64)
-        x = tr.complex(real, imag)
+        real = tr.randn([self.Bs, self.V[0]*self.V[1]*self.Nd], dtype=tr.float32)
+        imag = tr.randn([self.Bs, self.V[0]*self.V[1]*self.Nd], dtype=tr.float32)
+        x = tr.complex(real, imag).to(tr.complex64)
         
         p = tr.einsum('bxy, by-> bx', d.to_dense(), x)
 
@@ -530,6 +530,40 @@ class schwinger():
         #Return sparse, as that is how normal operator is treated
         return bd_d.to_sparse()
     
+    #Performs index reordering of the fermion vector to match the block banded
+    #Dirac operator
+    def bb_FermionVector(self, f, xcut_1, xcut_2, bw):
+        #enumeration of lattice sites-flat
+        p_f = tr.tensor(np.arange(self.V[0]*self.V[1]))
+        #Reshape to match lattice geometry
+        p =tr.reshape(p_f, (self.V[0], self.V[1]))
+
+        #define 2 width boundary region indices
+        b1 = p[xcut_1:xcut_1+bw, :].reshape(-1,)
+        b2 = p[xcut_2:xcut_2+bw, :].reshape(-1,)
+
+        #Subdomain indices
+        s1 = p[0:xcut_1, :].reshape(-1,)
+        s2 = p[xcut_1 + bw:xcut_2,:].reshape(-1,)
+        if (xcut_2 +bw != self.V[0]):
+            s1 = tr.cat((p[xcut_2+bw:, :].reshape(-1), s1), dim=0)
+
+        #Reordered indices for block-banded structure
+        ri = tr.cat([b1,b2,s1,s2])
+
+        #Block diagonal dirac operator
+        bb_f = tr.zeros_like(f)
+
+        #Naive block banded construction
+        i = 0
+        for n in ri:
+            bb_f[:, 2*i:2*i+2] = f[:, 2*n:2*n+2]
+            i += 1
+
+        #Return sparse, as that is how normal operator is treated
+        return bb_f
+
+    
     #input: Lattice configuration, timeslice for domain boundaries, boundary width
     #optional input for pre-computed/approximated d00 inverse
     #Output: Domain Decompostion based factorized propogator matrix between subdomains
@@ -558,6 +592,53 @@ class schwinger():
         #Factorized propogator for points in subdomains
         fp = tr.inverse(s11)
         return fp
+    
+
+    #Input: Lattice configuration, timeslice for boundaries, and boundary width
+    #Output:A low rank approximant version of the Schur complement of the Dirac matrix
+    #for points in subdomains
+    def dd_low_Rank_Schur_Complement(self, q, xcut_1, xcut_2, bw, d00_inv=tr.zeros(2)):
+
+        bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2,bw)
+
+        bb_d = bb_d.to_dense()
+        
+        #Isolate sub matrices
+        #Assumes 2 timeslice boundaries of width bw
+        d00 = bb_d[:,0:4*bw*self.V[1], 0:4*bw*self.V[1]]
+        d01 = bb_d[:, 0:4*bw*self.V[1], 4*bw*self.V[1]:]
+        d10 = bb_d[:, 4*bw*self.V[1]:, 0:4*bw*self.V[1]]
+        d11 = bb_d[:, 4*bw*self.V[1]:, 4*bw*self.V[1]:]
+
+        #If function is not given a matrix for the inverse of the boundary region,
+        #compute it exactly
+        if tr.numel(d00_inv)== 0:
+            d00_inv = tr.inverse(d00)
+
+        nlcl = tr.pca_lowrank(tr.einsum('bij, bjk, bkm->bim', d10, d00_inv, d01))
+        
+        s11 = d11 - tr.pca_lowrank(tr.einsum('bij, bjk, bkm->bim', nlcl[0], tr.diag_embed(nlcl[1]), nlcl[2]))
+
+        return s11
+    
+    #TODO: Compute systematic error between approx and full propogator approach
+    #Input: field configuration, frozen boundary timeslices and width, inverse of Dirac matrix in boundaries,
+    #source indices, pion momentum
+    #Output: systematic error of the pion correlator by timeslice
+    def dd_Pion_Systematic_Error(self, q, xcut_1, xcut_2, bw, d00_inv, s_range, p):
+        
+        d = self.diracOperator(q[0]).to_dense()
+        exact_correlator = self.exact_Pion_Correlator(tr.inverse(d), s_range,p)
+
+        s_inv = self.dd_Schur_Propogator(q, xcut_1, xcut_2, bw, d00_inv)
+
+        dd_correlator = self.dd_Exact_Pion_Correlator(s_inv, xcut_1, xcut_2, bw, s_range, p)
+
+        avg_diff = tr.mean(exact_correlator, dim=0) - tr.mean(dd_correlator, dim=0)
+        diff_err = tr.sqrt(tr.square(tr.std(exact_correlator, dim=0)) + tr.square(tr.std(dd_correlator, dim=0)))
+
+        return avg_diff, diff_err
+        
     
 
     #Input: inverse Schur complement, starting timeslice of boundarys, boundary width
@@ -697,7 +778,8 @@ class schwinger():
  
 
     #input: block banded D operator, timeslice for domain boundaries, boundary width rank of approximation, source index
-    #Output: Domain Decompostion based factorized propogator matrix between subdomains
+    #Output: Domain Decompostion based factorized propogator matrix between subdomains using BICGStab rather than 
+    #the exact inverse
     #Note: assumes 2 subdomains for naive implementation
     def dd_Approx_Propogator(self, bb_d, xcut_1, xcut_2, bw, r, sx):
 
@@ -748,14 +830,38 @@ class schwinger():
     #Input: conjugate momentum tensor, boundary timeslices, boundary width
     #Output: conjugate momentum with boundary timeslice momentum frozen   
     def dd_Freeze_P(self, p, xcut_1, xcut_2, bw):
-        p[:, :, xcut_1:xcut_1+bw, :] =  0.0
-        p[:, :, xcut_2:xcut_2+bw, :] = 0.0
+        p[:,:,xcut_1:xcut_1+bw -1, :] = 0.0
+        p[:,1,xcut_1+bw-1,:] = 0.0
+        p[:,:,xcut_2:xcut_2+bw-1, :] = 0.0
+        p[:,1,xcut_2+bw-1,:] = 0.0
         return p
 
-        
-    def dd_Force(self, q, xcut_1, xcut_2, bw, r=-1):
-        #Compute gauge force as in the full model
+    #Input: lattice configuration, frozen timeslices and boundary widths
+    #Output: Approximated action of the configuration based on a tridiagonalized 
+    #Schur complement
+    def dd_Action(self, q, xcut_1, xcut_2, bw):
+        #Check if fermions are part of theory
+        if len(q) == 1:
+            return self.gaugeAction(q[0]).type(self.dtype)
+        else:
+            #Absolute value for the slightly complex fermion action?
+            bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2, bw)
 
+            #For using a factorized approximate action- in development
+            #return self.gaugeAction(q[0]).type(self.dtype) + \
+            #tr.abs(self.blockdiagonal_Fermion_Action(bb_d, q[1], xcut_1, xcut_2, bw).type(self.dtype))
+
+            #Using the exact action for testing
+            return self.gaugeAction(q[0]).type(self.dtype) + tr.abs(self.fermionAction(q[2], q[1])).type(self.dtype)
+            
+
+    #Input:field configuration, frozen timeslice indices, boundary width, placeholder for nonlocal approx
+    #Output:Tensor of force for gauge field HMC
+    #nlf:Non-local force- may be used for cross-subdomain approximation in a parallelization scheme
+    # TODO:Finish development and write description of finalized function    
+    def dd_Force(self, q, xcut_1, xcut_2, bw, nlf=None):
+
+        #Compute gauge force as in the full model
         #Isolate gauge field
         u = q[0]
         #A tensor of 'staples'
@@ -770,17 +876,268 @@ class schwinger():
         fg = (-1.0j* (1.0/self.lam**2)/2.0)* (u*a - tr.conj(a)*tr.conj(u))
 
         #Zero out the force on the frozen links
-        fg[:,:,xcut_1:xcut_1+bw, :] = 0.0
-        fg[:,:,xcut_2:xcut_2+bw, :] = 0.0
+        # fg[:,:,xcut_1:xcut_1+bw, :] = 0.0
+        # fg[:,:,xcut_2:xcut_2+bw, :] = 0.0
+        # fg[:,0,xcut_1-1, :] = 0.0
+        # fg[:,0,xcut_2-1,:] = 0.0
+        fg[:,:,xcut_1:xcut_1+bw -1, :] = 0.0
+        fg[:,1,xcut_1+bw-1,:] = 0.0
+        fg[:,:,xcut_2:xcut_2+bw-1, :] = 0.0
+        fg[:,1,xcut_2+bw-1,:] = 0.0
 
         #If fermions aren't present, simply return force of gauge field
         if len(q) == 1:
             #Force is already real, force cast for downstream errors
             #Additional negative sign added from Hamilton's eqs.
             return (-1.0)*tr.real(fg).type(self.dtype)
+    
+        #TODO: dynamical fermion implementation- in progress
+
+        #Identify reordering of index points
+        #enumeration of lattice sites-flat
+        p_f = tr.tensor(np.arange(self.V[0]*self.V[1]))
+        #Reshape to match lattice geometry
+        p =tr.reshape(p_f, (self.V[0], self.V[1]))
+
+        #define 2 width boundary region indices
+        b1 = p[xcut_1:xcut_1+bw, :].reshape(-1,)
+        b2 = p[xcut_2:xcut_2+bw, :].reshape(-1,)
+
+        #Subdomain indices
+        s1 = p[0:xcut_1, :].reshape(-1,)
+        s2 = p[xcut_1 + bw:xcut_2,:].reshape(-1,)
+        if (xcut_2 +bw != self.V[0]):
+            s1 = tr.cat((p[xcut_2+bw:, :].reshape(-1), s1), dim=0)
+
+        #Reordered indices for block-banded structure
+        ri = tr.cat([b1,b2,s1,s2])
+
+
+        #Construct Dirac operator derivative as normal:
+        #Dirac Op. derivative- very similar to dirac operator itself without mass term:
+        #Empty bx2x(V)x(Vx2)x(Vx2)
+        dd = tr.zeros([self.Bs, self.Nd, self.V[0]*self.V[1], self.V[0]*self.V[1]*self.Nd, self.V[0]*self.V[1]*self.Nd], dtype=tr.complex64)
+       
+        #enumeration of lattice sites
+        p_f = tr.tensor(np.arange(self.V[0]*self.V[1]))
+        #Reshape to match lattice geometry
+        p =tr.reshape(p_f, (self.V[0], self.V[1]))
+
+        #Apply antiperiodic boundary condition in time to the gauge fields:
+        u_bc = u.clone().detach()
+        u_bc[:, 0, self.V[0]-1, :] = -1.0*u[:, 0, self.V[0]-1, :]
+
+        for mu in [0,1]:
+             #Forward shifted indices
+            p_s =  tr.roll(p, shifts = -1, dims=mu)
+            #Flatten the 2D reps of lattice/field to one dimension
+            p_sf = tr.reshape(p_s, (-1,))
+            u_f = tr.reshape(u_bc[:, mu, :, :], (self.Bs, self.V[0]*self.V[1]))
+            for i in np.arange(len(p_f)):
+                dd[:,mu, p_f[i], 2*p_f[i]:2*p_f[i]+2, 2*p_sf[i]:2*p_sf[i]+2] = dd[:,mu, p_f[i], 2*p_f[i]:2*p_f[i]+2, 2*p_sf[i]:2*p_sf[i]+2] + \
+                tr.einsum("b, xy -> bxy",u_f[:,i], (-0.5j*(tr.eye(2) - gamma[mu])))
+
+            #backward shifted indices
+            p_s =  tr.roll(p, shifts = +1, dims=mu)
+            #Flatten the 2D reps of lattice/field to one dimension
+            p_sf = tr.reshape(p_s, (-1,))
+            u_f = tr.reshape(tr.conj(tr.roll(u_bc[:, mu, :, :], shifts=1, dims=mu+1)), (self.Bs, self.V[0]*self.V[1]))
+            for i in np.arange(len(p_f)):
+                dd[:,mu, p_sf[i], 2*p_f[i]:2*p_f[i]+2, 2*p_sf[i]:2*p_sf[i]+2] = dd[:,mu, p_sf[i], 2*p_f[i]:2*p_f[i]+2, 2*p_sf[i]:2*p_sf[i]+2] + \
+                      tr.einsum("b, xy -> bxy",u_f[:,i], (0.5j*(tr.eye(2) + gamma[mu])))
+
+
+        #reorder the lattice indices of the derivative tensor
+        bb_dd = tr.zeros_like(dd, dtype=tr.complex64)
+        i = 0
+        for n in ri:  
+            # #Naive O(n^2) algorithm
+            j=0
+            for m in ri:
+                #Take 2x2 matrix of Dirac space for each index
+                bb_dd[:, :, :, 2*i:2*i+2, 2*j:2*j+2] = dd[:,:,:, 2*n:2*n+2, 2*m:2*m+2]
+                j+=1
+            i+=1       
+
+        #Now we want to peel off the pieces we are interested in and construct the  
+        #derivative of the Schur complement
         
-        #TODO: dynamical fermion implementation
+
+        bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2,bw)
+
+        bb_d = bb_d.to_dense()
+    
+        #Isolate sub matrices
+        #Assumes 2 timeslice boundaries of width bw
+        d00 = bb_d[:,0:4*bw*self.V[1], 0:4*bw*self.V[1]]
+        d01 = bb_d[:, 0:4*bw*self.V[1], 4*bw*self.V[1]:]
+        d10 = bb_d[:, 4*bw*self.V[1]:, 0:4*bw*self.V[1]]
+        d11 = bb_d[:, 4*bw*self.V[1]:, 4*bw*self.V[1]:]
 
 
+        #dd00 = bb_dd[:,:,:,0:4*bw*self.V[1], 0:4*bw*self.V[1]]
+        dd01 = bb_dd[:,:,:, 0:4*bw*self.V[1], 4*bw*self.V[1]:]
+        dd10 = bb_dd[:,:,:,4*bw*self.V[1]:, 0:4*bw*self.V[1]]
+        dd11 = bb_dd[:,:,:, 4*bw*self.V[1]:, 4*bw*self.V[1]:]
+
+        #If non-local force elements are given, use them, if not generate them
+        #For inserting an approximation for parallelization in later development
+        if nlf == None:
+            sd11 = dd11 - (tr.einsum('bimxy, byz, bza->bimxa', dd10, tr.inverse(d00), d01) +
+                        tr.einsum('bxy, byz, bimza->bimxa', d10, tr.inverse(d00), dd01))
+        else:
+            sd11 = dd11 - nlf
 
 
+        #Schur complement
+        s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, tr.inverse(d00), d01)
+
+        
+        #tri_s11 = self.schur_Tridiagonal(s11).to_dense()
+        tri_s11=s11
+        #tri_s11 = self.schur_Block_Diagonal(s11).to_dense()
+
+        bb_f = self.bb_FermionVector(q[1], xcut_1, xcut_2, bw)
+
+        #fermions for points inside subdomains
+        sd_f = bb_f[:, 4*bw*self.V[1]:]
+
+
+        #For now as progress, we just attempt to compute force on the whole lattice
+        #Will do separation for parallelization later
+
+        #SS^dagger inverse
+        ssi = tr.inverse(tr.einsum('bxy, bzy-> bxz', tri_s11, tri_s11.conj()))
+        v = tr.einsum('bxy, by-> bx', ssi, sd_f)
+
+        a = tr.einsum('bx, bimxy, bzy, bz-> bim', v.conj(), sd11, tri_s11.conj(), v)
+
+        ff = -1.0*(a + a.conj())
+
+
+        ff = tr.reshape(ff, [self.Bs, 2, self.V[0], self.V[1]]) 
+
+        #Zero out the force on the frozen links
+        ff[:,:,xcut_1:xcut_1+bw -1, :] = 0.0
+        ff[:,1,xcut_1+bw-1,:] = 0.0
+        ff[:,:,xcut_2:xcut_2+bw-1, :] = 0.0
+        ff[:,1,xcut_2+bw-1,:] = 0.0
+
+        #TODO: Check on the complex components of ff
+        return ((-1.0)*tr.real(fg+ ff).type(self.dtype))
+        
+
+    #input: Dirac operator, psuedofermion vector, rank of inverse approximation
+    #output:Approximated fermionic contribution to action
+    #approximation based on a block Schur complement
+    def blockdiagonal_Fermion_Action(self, bd, f, xcut_1, xcut_2, bw, d00_inv=tr.zeros(2)):
+        bb_d = bd.to_dense()
+        
+        #Isolate sub matrices
+        #Assumes 2 timeslice boundaries of width bw
+        d00 = bb_d[:,0:4*bw*self.V[1], 0:4*bw*self.V[1]]
+        d01 = bb_d[:, 0:4*bw*self.V[1], 4*bw*self.V[1]:]
+        d10 = bb_d[:, 4*bw*self.V[1]:, 0:4*bw*self.V[1]]
+        d11 = bb_d[:, 4*bw*self.V[1]:, 4*bw*self.V[1]:]
+
+        #reorder psuedofermion vector
+        bb_f = self.bb_FermionVector(f, xcut_1, xcut_2, bw)
+
+        #If function is not given a matrix for the inverse of the boundary region,
+        #compute it exactly
+        if d00_inv.count_nonzero()== 0:
+            d00_inv = tr.inverse(d00)
+
+        #Schur complement
+        s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, d00_inv, d01)
+
+        #tri_s11  = self.schur_Tridiagonal(s11)
+        #tri_s11 = s11
+        tri_s11 = self.schur_Block_Diagonal(s11)
+
+        tri_s11_inv = tr.inverse(tri_s11.to_dense())
+
+        #fermion vector in the subdomains
+        sd_f = bb_f[:, 4*bw*self.V[1]:]
+
+        return tr.einsum('bx, bxy, byz, bz->b', tr.conj(sd_f), tr.conj(tr.transpose(tri_s11_inv, 1,2))
+                         , tri_s11_inv, sd_f)
+    
+
+    #input: Block diagonal Dirac operator, psuedofermion vector, boundary
+    # timesslices and boundary width. Inverse of boundary dirac operator if already computed
+    #Output: Fermion action based on the 
+    def schur_Fermion_Action(self, bd, f, xcut_1, xcut_2, bw, d00_inv=tr.zeros(2)):
+        bb_d = bd.to_dense()
+        
+        #Isolate sub matrices
+        #Assumes 2 timeslice boundaries of width bw
+        d00 = bb_d[:,0:4*bw*self.V[1], 0:4*bw*self.V[1]]
+        d01 = bb_d[:, 0:4*bw*self.V[1], 4*bw*self.V[1]:]
+        d10 = bb_d[:, 4*bw*self.V[1]:, 0:4*bw*self.V[1]]
+        d11 = bb_d[:, 4*bw*self.V[1]:, 4*bw*self.V[1]:]
+
+        #reorder psuedofermion vector
+        bb_f = self.bb_FermionVector(f, xcut_1, xcut_2, bw) 
+
+        #If function is not given a matrix for the inverse of the boundary region,
+        #compute it exactly
+        if tr.numel(d00_inv)== 0:
+            d00_inv = tr.inverse(d00)
+
+        #Schur complement
+        s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, d00_inv, d01)
+
+        s11_inv = tr.inverse(s11)
+
+        #fermion vector in the subdomains
+        sd_f = bb_f[:, 4*bw.self.V[1]]
+
+        #TODO: Conjugate?
+        return tr.einsum('bx, bxy, byz, bz->b', tr.conj(sd_f), tr.transpose(s11_inv, 1,2)
+                         , s11_inv, sd_f)
+    
+    #Takes the Schur complement and returns the sparse tri-diagonal approximation of it
+    def schur_Tridiagonal(self, s):
+        mask = tr.zeros([s.size(dim=1), s.size(dim=1)], dtype=tr.bool)
+
+        #Construct a boolean block tridiagonal mask
+        for x in np.arange(0, s.size(dim=1), 2):
+            if x == 0:
+                mask[x:x+2, x:x+4] = True
+            elif x == s.size(dim=1) -2 :
+                mask[x:x+2, x-2:x+2] = True
+            else:
+                mask[x:x+2, x-2:x+4] = True
+            
+        mask = mask.unsqueeze(0)
+
+        batch_mask = mask.repeat(self.Bs, 1,1)
+
+        s_d = s.to_dense()
+
+        return tr.where(batch_mask, s_d, tr.zeros_like(s_d)).to_sparse()
+    
+    #Takes the Schur complement and discards elements non on the block diagonal
+    #corresponding to point pairs within subdomains
+    def schur_Block_Diagonal(self,s):
+        
+        m_int = tr.zeros([s.size(dim=1), s.size(dim=2)])
+
+        half = int(s.size(dim=1)/2)
+        #TODO: +1 on indexing below or not?
+        m_int[0:half, 0:half] = tr.ones_like(m_int[0:half, 0:half])
+        m_int[half:, half:] = tr.ones_like(m_int[half:, half:])
+
+        #mask = tr.tensor(m_int, dtype=tr.bool)
+        mask =m_int.to(dtype=tr.bool)
+
+        mask = mask.unsqueeze(0)
+
+        batch_mask = mask.repeat(self.Bs, 1,1)
+
+        s_d = s.to_dense()
+
+        return tr.where(batch_mask, s_d, tr.zeros_like(s_d)).to_sparse()
+
+            
