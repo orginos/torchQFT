@@ -922,13 +922,13 @@ def plot_Signal_To_Noise():
 
     ax1.set_yscale('log', nonpositive='clip')
 
-    level_2 = np.divide(np.abs(d[1,3:]), d[2,3:])
+    level_2 = np.divide(np.abs(d[1,:]), d[2,:])
     #level_2 = np.abs(d[1,:])
-    level_1 = np.divide(np.abs(d[3,3:]), d[4,3:])
+    level_1 = np.divide(np.abs(d[3,:]), d[4,:])
     #level_1 = np.abs(d[3,:])
 
-    ax1.scatter(np.arange(0,L-3), level_2, s=500, marker='o', c='red', label='DD-HMC')
-    ax1.scatter(np.arange(0,L-3), level_1, s=500, marker='o', c='black', label='HMC')
+    ax1.scatter(np.arange(0,L), level_2, s=500, marker='o', c='red', label='DD-HMC')
+    ax1.scatter(np.arange(0,L), level_1, s=500, marker='o', c='black', label='HMC')
     #ax1.set_title(r'Signal to noise ratio of a high momentum pion 2 point correlator', fontsize=36)
     ax1.set_xlabel(r'$t$', fontsize=48)
     ax1.set_ylabel(r'$\frac{C(t)}{\mathrm{err}[C(t)]}$', fontsize=48)
@@ -1260,7 +1260,7 @@ def test_inv_approx():
 
 
 def factorized_Observable_Systematic_Error_Test():
-    batch_size= 50
+    batch_size= 30
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
     mass= -0.08*lam
@@ -1289,8 +1289,9 @@ def factorized_Observable_Systematic_Error_Test():
     q0 = sim.evolve_f(q, 200)
     q = tuple(q0)
 
-    nm = 200
+    nm = 20
     c= tr.zeros(batch_size, nm, L)
+    err = tr.zeros(batch_size, nm, L)
     for n in np.arange(nm):
         #Discard some in between
         q= sim.evolve_f(q, 50)
@@ -1300,15 +1301,18 @@ def factorized_Observable_Systematic_Error_Test():
 
         #Approximate the inverse
         #For initial testing, use the exact inverse
-        d00_inv = tr.inverse(d00)
-        #d00_inv = eig_Inv_Approx(d00, 64)
+        #It comes out to a difference around machine error
+        #d00_inv = tr.inverse(d00)
 
-        sys_err, sys_err_err = sch.dd_Pion_Systematic_Error(q, xcut_1, xcut_2, bw, d00_inv, s_range, p)
+        #Lets try an actual approximation to the inverse
+        d00_inv = eig_Inv_Approx(d00, 36)
+
+        err[:, n, :] = sch.dd_Pion_Systematic_Error(q, xcut_1, xcut_2, bw, d00_inv, s_range, p)
 
         d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
 
-        print(sys_err)
-        print(sys_err_err)
+        #Example of an error reading
+        print(err[0,n, :])
             
         #Vector of time slice correlations
         cl = sch.exact_Pion_Correlator(d_inv, s_range, p=p)
@@ -1317,11 +1321,19 @@ def factorized_Observable_Systematic_Error_Test():
 
         print(n)
 
+        #Compute a systematic error to apply to the DD measurement per timeslice
+        avg_sys = tr.mean(err, dim=(0,1)) #Empty?!
+        err_sys = tr.std(err, dim=(0,1)) /np.sqrt(tr.numel(err[:,:,0]) - 1) # length 16
+
+
+    #Print the error to examine size when all measurements are completed
+    print("Computed systematic error: ",avg_sys, err_sys)
+
 
 #TODO: In Development- needs error correction
 #2-lvl factorized observable with multilevel integration
-def quenched_Factorized_Twolvl_Observable():
-    batch_size= 2
+def quenched_Global_Twolvl_Observable():
+    batch_size= 30
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
     mass= -0.08*lam
@@ -1364,6 +1376,10 @@ def quenched_Factorized_Twolvl_Observable():
     c= tr.zeros(batch_size, n0*n1*n1, L)
     #index for adding correlator measurement to sample
     cx = 0
+    #For measuring systematic error of approximate propogator
+    err = tr.zeros(batch_size, n0, L)
+
+
     for n in np.arange(n0):
 
         #Thermalize several steps between 2nd level integration
@@ -1375,8 +1391,11 @@ def quenched_Factorized_Twolvl_Observable():
         d00 = bb_d[:,0:4*bw*L, 0:4*bw*L2]
 
         #Approximate the inverse
-        #For initial testing, use the exact inverse
-        d00_inv = eig_Inv_Approx(d00, 64)
+        #d00_inv = eig_Inv_Approx(d00, 36)
+        d00_inv=tr.inverse(d00)
+
+        #Compute systematic error
+        err[:, n, :] = sch.dd_Pion_Systematic_Error(q, xcut_1, xcut_2, bw, d00_inv, s_range, p)
 
         #To store 2nd-level gauge configs for ensemble averaging
         #batch, config no., lattice indexes
@@ -1398,12 +1417,10 @@ def quenched_Factorized_Twolvl_Observable():
 
                 #Measuring each spliced together config
                 q = (u_measure,)
-                #s_inv = sch.dd_Schur_Propogator(q, xcut_1,xcut_2, bw, d00_inv)
-                #cl = sch.dd_Exact_Pion_Correlator(s_inv,xcut_1,xcut_2, bw, s_range,p=p)
-                d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
+                s_inv = sch.dd_Schur_Propogator(q, xcut_1,xcut_2, bw, d00_inv)
+                cl = sch.dd_Exact_Pion_Correlator(s_inv,xcut_1,xcut_2, bw, s_range,p=p)
             
                 #Vector of time slice correlations
-                cl = sch.exact_Pion_Correlator(d_inv, s_range, p=p)
                 c[:, cx, :] = cl
                 cx +=1
 
@@ -1417,6 +1434,19 @@ def quenched_Factorized_Twolvl_Observable():
     #Average over all batches and configurations measured
     c_avg = tr.mean(c, dim=(0,1))
     c_err = (tr.std(c, dim=(0,1))/np.sqrt(tr.numel(c[:,:,0]) - 1))
+
+    #Save systematic error and adjust measurement
+    #Compute a systematic error to apply to the DD measurement per timeslice
+    avg_sys = tr.mean(err, dim=(0,1))
+    err_sys = tr.std(err, dim=(0,1)) /np.sqrt(tr.numel(err[:,:,0]) - 1)
+    correction = pd.DataFrame([avg_sys, err_sys])
+    np.savetxt("two_level_correlator_systematic_error", correction.to_numpy(), delimiter=',')
+
+    adj_c_avg = tr.mean(c_avg + avg_sys)
+    adj_c_err = tr.sqrt(tr.square(c_err) + tr.square(err_sys))
+    print(adj_c_avg.size())
+    print(adj_c_err.size())
+
 
     #Single level integration
     q=q0
@@ -1443,8 +1473,8 @@ def quenched_Factorized_Twolvl_Observable():
     c2_err = (tr.std(c2, dim=(0,1))/np.sqrt(tr.numel(c2[:,:,0]) - 1))
 
     #Write dataframe of data
-
     df = pd.DataFrame([c_avg.detach().numpy(), c_err.detach().numpy(), c2_avg.detach().numpy(), c2_err.detach().numpy()])
+    #df = pd.DataFrame([adj_c_avg.detach().numpy(), adj_c_err.detach().numpy(), c2_avg.detach().numpy(), c2_err.detach().numpy()])
     #TODO: Write more descriptive datafile name
     df.to_csv("output.csv", index = False)
 
@@ -1478,6 +1508,124 @@ def quenched_Factorized_Twolvl_Observable():
     ax2.legend(loc='lower right')
 
     plt.show()
+
+def test_Factorized_Observable():
+    batch_size= 10
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= -0.08*lam
+    L = 32
+    L2 = 16
+    pm = 2.0
+    p= pm*(2.0*np.pi/L)
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    #Boundary cut timeslices
+    xcut_1 = 14
+    xcut_2 = 30
+    bw=2
+
+    s_range= (3,)
+
+
+    u = sch.hotStart()
+
+    q = (u,)
+
+    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
+    lvl2_im2 = i.minnorm2(sch.dd_Force,sch.evolveQ,20, 1.0)
+    sim = h.hmc(sch, im2, False)
+    lvl2_sim = h.hmc(sch, lvl2_im2, False)
+
+    #Typical equilibration
+    q0 = sim.evolve_f(q, 200)
+    q = tuple(q0)
+
+
+    # Two level integration
+    #Level 0 configurations per batch
+    n0 = 20
+
+    #Level 1 configurations per batch
+    n1 = 10
+
+    #set of intermediate points for ensemble avg.
+
+    base_1 = (xcut_1)*L2*2
+    base_2 = (xcut_2-bw-1)*L2*2
+
+    int1 = tr.arange((xcut_1)*L2, (xcut_1)*L2 + 16) * 2
+    int2 = tr.arange((xcut_2-bw-1)*L2, (xcut_2-bw-1)*L2 + 16) * 2
+
+    #nter = tr.tensor((base_1, base_1+4, base_1+6, base_1+12,base_2, base_2+4, base_2+6, base_2+12))
+    inter = tr.cat([int1, int2])
+    
+    source_x = 6*16 + 8
+    source_x = 2*source_x
+    sink_x = (xcut_1+6+bw)*16 + 8
+    sink_x = sink_x*2
+
+    factorized_L = tr.zeros([batch_size, n1, tr.numel(inter), 2, 2], dtype=tr.complex64)
+    factorized_R = tr.zeros([batch_size, n1, tr.numel(inter),2,2], dtype=tr.complex64)
+
+    #Ensemble averaged correlation function data array:
+    c= tr.zeros(batch_size, n0*n1*n1)
+    for n in np.arange(n0):
+
+        #Thermalize several steps between 2nd level integration
+        q = sim.evolve_f(q, 50)
+        q1 = tuple(q)
+
+        for nx in np.arange(n1):
+            #For each subdomain:
+            # Evolve locally while maintaining boundaries
+            # For quenched model, its actually more efficient to update the whole lattice
+            q = lvl2_sim.second_Level_Evolve(q, 50, xcut_1, xcut_2, bw)
+
+            #Measure subdomain local propogator
+            factorized_L[:, nx, :,:,:], factorized_R[:, nx, :,:,:] = sch.factorized_Propogator(q, xcut_1, xcut_2, bw, source_x, sink_x, inter)
+            #print(factorized_L[0, nx, :,:,:])
+            #print(factorized_R[0, nx, :,:,:])
+
+        #Ensemble average
+        for x1 in np.arange(n1):
+            for x2 in np.arange(n1):
+
+                #contributions = factorized_L[:, x1, :,:,:]* factorized_R[:, x2, :,:,:]
+                contributions = tr.einsum("baij, bajk->baik", factorized_L[:, x1, :,:,:], 
+                                          factorized_R[:, x2, :,:,:])
+
+                correlators = tr.sum(contributions, dim=1)
+                c[:, n*n1*n1 + x1*n1 + x2] = tr.sum(tr.einsum("bxy, bzy-> bxz", 
+                                                              correlators, correlators.conj()),dim=(1,2))
+                
+
+        print(n)
+    
+    print(tr.mean(c), tr.std(c)/(tr.numel(c)-1))
+
+    #Single level integration
+    q=q0
+    nm = 200
+    c2= tr.zeros(batch_size, nm)
+    for n in np.arange(nm):
+        #Discard some in between
+        q= sim.evolve_f(q, 50)
+        d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
+        propogator = d_inv[:, sink_x:sink_x+2, source_x:source_x+2]
+            
+
+        c2[:, n] = tr.sum(tr.einsum("bij, bkj->bik", propogator, propogator.conj()), dim=(1,2))
+
+        print(n)
+
+    print("One-level:")
+    print(tr.mean(c2), tr.std(c2)/(tr.numel(c2)-1))
+
+
+
+
+
     
 
 def d_Ddag_Spectral_Radius():
@@ -1533,9 +1681,9 @@ def test_Naive_Localized_Fermion_Action():
 
     u = sch.hotStart()
 
-    q = (u,)
+    #q = (u,)
 
-    d = sch.diracOperator(q[0])
+    d = sch.diracOperator(u)
 
     f = sch.generate_Pseudofermions(d)
 
@@ -1545,7 +1693,7 @@ def test_Naive_Localized_Fermion_Action():
     im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
     sim = h.hmc(sch, im2, False)
 
-    q = sim.evolve_f(q, 50)
+    q = sim.evolve_f(q, 30)
     steps = 20
     for n in np.arange(0, steps):
         #Evolve, one HMC step
@@ -1762,13 +1910,14 @@ def main():
     #plot_correlator_difference()
     #dd_Integrator_dH()
     #dd_Integrated_Action()
-    #plot_Signal_To_Noise()
+    plot_Signal_To_Noise()
     #config_Correlation()
     #autocorrelation_Comparison()
     #correlator_Dist()
-    factorized_Observable_Systematic_Error_Test()
+    #factorized_Observable_Systematic_Error_Test()
     #factorized_observable()
-    #quenched_Factorized_Twolvl_Observable()
+    #quenched_Global_Twolvl_Observable()
+    #test_Factorized_Observable()
 
 
 

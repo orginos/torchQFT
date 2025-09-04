@@ -621,10 +621,58 @@ class schwinger():
 
         return s11
     
+    #Input: lattice configuration, frozen timeslices, boundary width, source and sink indices
+    #of the Dirac operator, intermediate points
+    #Output:  batch x intermediate ensemble of factorized propogator contributions between specified points
+    # 2 tensors, one for each subdomain. Contains only first order contributions
+    #TODO: In progress
+    def factorized_Propogator(self, q, xcut_1, xcut_2, bw, source, sink, inter):
+
+        bb_d = self.bb_DiracOperator(q, xcut_1, xcut_2, bw).to_dense()
+
+
+        #Isolate sub matrices
+        #Assumes 2 timeslice boundaries of width bw
+        d00 = bb_d[:,0:4*bw*self.V[1], 0:4*bw*self.V[1]]
+        d01 = bb_d[:, 0:4*bw*self.V[1], 4*bw*self.V[1]:]
+        d10 = bb_d[:, 4*bw*self.V[1]:, 0:4*bw*self.V[1]]
+        d11 = bb_d[:, 4*bw*self.V[1]:, 4*bw*self.V[1]:]
+
+        d11_inv = tr.inverse(d11)
+        
+
+        boundary = tr.einsum('bij, bjk, bkm->bim', d10, tr.inverse(d00), d01)
+        
+        s11 = d11 - tr.einsum('bij, bjk, bkm->bim', d10, tr.inverse(d00), d01)
+
+        s11_inv = tr.inverse(s11)
+
+        
+
+        left = -1.0*tr.einsum('bij, bjk->bik', d11_inv, boundary)
+
+
+        #Handle case where source/sink are in the same domain
+
+        #Assumes source and sink are in opposite subdomains
+        sink = sink - 2*bw*self.V[1]
+        ensembleL = tr.zeros([self.Bs, tr.numel(inter), 2,2], dtype=tr.complex64)
+        ensembleR = tr.zeros([self.Bs, tr.numel(inter), 2,2], dtype=tr.complex64)
+        i = 0
+        for xi in inter:
+            #ensembleL[:, i, :,:] = left[:, source:source+2, xi:xi+2]
+            #ensembleR[:, i,:,:] = d11_inv[:, xi:xi+2, sink:sink+2]
+            ensembleL[:,i,:,:] = s11_inv[:, xi:xi+2, source:source+2]
+            ensembleR[:,i,:,:] = s11_inv[:,sink:sink+2, xi:xi+2]
+            i += 1
+        
+        return ensembleL, ensembleR
+
+
     #TODO: Compute systematic error between approx and full propogator approach
     #Input: field configuration, frozen boundary timeslices and width, inverse of Dirac matrix in boundaries,
     #source indices, pion momentum
-    #Output: systematic error of the pion correlator by timeslice
+    #Output: difference in the measurements, to be averaged later
     def dd_Pion_Systematic_Error(self, q, xcut_1, xcut_2, bw, d00_inv, s_range, p):
         
         d = self.diracOperator(q[0]).to_dense()
@@ -634,10 +682,10 @@ class schwinger():
 
         dd_correlator = self.dd_Exact_Pion_Correlator(s_inv, xcut_1, xcut_2, bw, s_range, p)
 
-        avg_diff = tr.mean(exact_correlator, dim=0) - tr.mean(dd_correlator, dim=0)
-        diff_err = tr.sqrt(tr.square(tr.std(exact_correlator, dim=0)) + tr.square(tr.std(dd_correlator, dim=0)))
+        #avg_diff = tr.mean(exact_correlator, dim=0) - tr.mean(dd_correlator, dim=0)
+        #diff_err = tr.sqrt(tr.square(tr.std(exact_correlator, dim=0)) + tr.square(tr.std(dd_correlator, dim=0)))
 
-        return avg_diff, diff_err
+        return exact_correlator - dd_correlator
         
     
 
@@ -835,6 +883,11 @@ class schwinger():
         p[:,:,xcut_2:xcut_2+bw-1, :] = 0.0
         p[:,1,xcut_2+bw-1,:] = 0.0
         return p
+    
+
+    def localized_Fermion_Action(self, d, f):
+        d = d.to_dense()
+        return tr.einsum('bx,bx->b', f.conj(), f) - tr.einsum('bi, bij, bkj, bk->b', f.conj(), d, d.conj(), f) 
 
     #Input: lattice configuration, frozen timeslices and boundary widths
     #Output: Approximated action of the configuration based on a tridiagonalized 
