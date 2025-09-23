@@ -50,6 +50,14 @@ def dexpo_old(X,Y):
     nX2= nX**2
     return tr.where(nX<tr.finfo(X.dtype).eps,Y.clone(),Y - (1-tr.cos(nX))/(nX2)*adj + (1 - tr.sin(nX)/nX)/(nX2) * ad(X,adj))
 
+def log(R):
+    Tr = tr.einsum('...ii->...',R).unsqueeze(-1).unsqueeze(-1)
+    cos = 0.5*(Tr-1)
+    theta = tr.acos(cos)
+    two_sin = tr.sqrt((3-Tr)*(1+Tr))+tr.finfo(R.dtype).eps
+    X = theta/two_sin*(R - R.transpose(-1,-2))
+    return X
+
 def check_expo_and_dexpo():
     from . import expo as taylor_expo
     from . import dexpo as taylor_dexpo
