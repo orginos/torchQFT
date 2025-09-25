@@ -1509,7 +1509,7 @@ def quenched_Global_Twolvl_Observable():
 
     plt.show()
 
-def test_Factorized_Observable():
+def test_Factorized_Propogator():
     batch_size= 10
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
@@ -1521,21 +1521,103 @@ def test_Factorized_Observable():
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     #Boundary cut timeslices
-    xcut_1 = 14
-    xcut_2 = 30
-    bw=2
-
-    s_range= (3,)
-
+    xcut_1 = 11
+    xcut_2 = 27
+    bw=5
 
     u = sch.hotStart()
 
     q = (u,)
 
     im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
-    lvl2_im2 = i.minnorm2(sch.dd_Force,sch.evolveQ,20, 1.0)
     sim = h.hmc(sch, im2, False)
-    lvl2_sim = h.hmc(sch, lvl2_im2, False)
+
+    #Typical equilibration
+    q0 = sim.evolve_f(q, 200)
+    q = tuple(q0)
+
+    #Level 0 configurations tested on
+    n0 = 10
+
+    #set of intermediate points for ensemble avg.
+
+    int1 = tr.arange((xcut_1)*L2+1, (xcut_1+bw)*L2)
+    
+    int2 = tr.arange((xcut_2)*L2+1, (xcut_2+bw)*L2)
+
+    #nter = tr.tensor((base_1, base_1+4, base_1+6, base_1+12,base_2, base_2+4, base_2+6, base_2+12))
+    inter = tr.cat([int1, int2])
+    
+    source_x = 5*L2 + 8
+    sink_x = (xcut_1+5+bw)*L2 + 8
+
+    #Ensemble averaged correlation function data array:
+    c= tr.zeros(batch_size, n0)
+    c2= tr.zeros(batch_size, n0)
+    for n in np.arange(n0):
+
+        #Thermalize several steps between 2nd level integration
+        q = sim.evolve_f(q, 50)
+        q1 = tuple(q)
+        factorized_L, factorized_R = sch.factorized_Propogator(q, xcut_1, xcut_2, bw, inter, True)
+
+        #left_std = tr.std(ensemble_L, dim=1)
+        #right_std = tr.std(ensemble_R, dim=1)
+
+
+        #Kronecker product of dirac entries by intermediate
+
+        left_avg = factorized_L.view(batch_size, tr.numel(inter), (xcut_1+2*bw)*L2, 2,2)
+        right_avg = factorized_R.view(batch_size, tr.numel(inter), (xcut_1+2*bw)*L2, 2,2)
+
+        combined = tr.einsum('bixag, biygd-> bixyad', left_avg, right_avg)
+
+        #Accounts for shifting of the lattice indices in the factorizing process
+        sink_adj = (xcut_1)*L2
+        source_adj = bw*L2
+        for x in tr.arange(tr.numel(inter)):
+            p1 = combined[:, x, sink_x-sink_adj, source_x+source_adj, :, :]
+            for y in tr.arange(tr.numel(inter)):
+                p2 = combined[:, y, sink_x-sink_adj, source_x+source_adj, :, :]
+                c[:, n] =  c[:, n] + tr.sum(tr.einsum("bij, bkj->bik", p1, p2.conj()), dim=(1,2))
+
+
+        # propogator= prop_matrix[:, sink_x-sink_adj, source_x+source_adj, :, :]
+
+        # c[:, n] = tr.sum(tr.einsum("bij, bkj->bik", propogator, propogator.conj()), dim=(1,2))
+
+        d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
+        propogator = d_inv[:, 2*sink_x:2*sink_x+2, 2*source_x:2*source_x+2]
+            
+
+        c2[:, n] = tr.sum(tr.einsum("bij, bkj->bik", propogator, propogator.conj()), dim=(1,2))
+        
+        print(n)
+    
+    print("Factorized: ",tr.mean(c), tr.std(c)/(tr.numel(c)-1))
+    print("Full: ", tr.mean(c2), tr.std(c2)/(tr.numel(c2)-1))
+
+
+def factorized_Pion_Comparison():
+    batch_size= 30
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= -0.12*lam
+    L = 32
+    L2 = 16
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    #Boundary cut timeslices
+    xcut_1 = 14
+    xcut_2 = 30
+    bw=2
+
+    u = sch.hotStart()
+
+    q = (u,)
+
+    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
+    sim = h.hmc(sch, im2, False)
 
     #Typical equilibration
     q0 = sim.evolve_f(q, 200)
@@ -1543,84 +1625,119 @@ def test_Factorized_Observable():
 
 
     # Two level integration
-    #Level 0 configurations per batch
-    n0 = 20
-
-    #Level 1 configurations per batch
-    n1 = 10
+    #Level 0 configurations tested on
+    n0 = 10
 
     #set of intermediate points for ensemble avg.
 
-    base_1 = (xcut_1)*L2*2
-    base_2 = (xcut_2-bw-1)*L2*2
-
-    int1 = tr.arange((xcut_1)*L2, (xcut_1)*L2 + 16) * 2
-    int2 = tr.arange((xcut_2-bw-1)*L2, (xcut_2-bw-1)*L2 + 16) * 2
-
-    #nter = tr.tensor((base_1, base_1+4, base_1+6, base_1+12,base_2, base_2+4, base_2+6, base_2+12))
+    #Intermediate based on overlap or not
+    overlap=False
+    if overlap:
+        int1 = tr.arange((xcut_1)*L2+1, (xcut_1+bw)*L2)
+        int2 = tr.arange((xcut_2)*L2+1, (xcut_2+bw)*L2)
+    else:
+        int1 = tr.arange((xcut_1)*L2, (xcut_1+1)*L2)
+        int2 = tr.arange((L-1)*L2, L*L2)
     inter = tr.cat([int1, int2])
     
-    source_x = 6*16 + 8
-    source_x = 2*source_x
-    sink_x = (xcut_1+6+bw)*16 + 8
-    sink_x = sink_x*2
-
-    factorized_L = tr.zeros([batch_size, n1, tr.numel(inter), 2, 2], dtype=tr.complex64)
-    factorized_R = tr.zeros([batch_size, n1, tr.numel(inter),2,2], dtype=tr.complex64)
+    source_x = 5*L2 + 8
 
     #Ensemble averaged correlation function data array:
-    c= tr.zeros(batch_size, n0*n1*n1)
+    c= tr.zeros(batch_size, n0, xcut_2-xcut_1 - bw)
+    c2= tr.zeros(batch_size, n0, xcut_2-xcut_1-bw)
     for n in np.arange(n0):
-
-        #Thermalize several steps between 2nd level integration
+        #Thermalize before measuring
         q = sim.evolve_f(q, 50)
-        q1 = tuple(q)
+        factorized_L, factorized_R = sch.factorized_Propogator(q, xcut_1, xcut_2, bw, inter, overlap)
 
-        for nx in np.arange(n1):
-            #For each subdomain:
-            # Evolve locally while maintaining boundaries
-            # For quenched model, its actually more efficient to update the whole lattice
-            q = lvl2_sim.second_Level_Evolve(q, 50, xcut_1, xcut_2, bw)
 
-            #Measure subdomain local propogator
-            factorized_L[:, nx, :,:,:], factorized_R[:, nx, :,:,:] = sch.factorized_Propogator(q, xcut_1, xcut_2, bw, source_x, sink_x, inter)
-            #print(factorized_L[0, nx, :,:,:])
-            #print(factorized_R[0, nx, :,:,:])
+        #Kronecker product of dirac entries by intermediate
 
-        #Ensemble average
-        for x1 in np.arange(n1):
-            for x2 in np.arange(n1):
+        #left_avg = factorized_L.view(batch_size, tr.numel(inter), (xcut_1+2*bw)*L2, 2,2)
+        left_avg = factorized_L
+        #right_avg = factorized_R.view(batch_size, tr.numel(inter), (xcut_1+2*bw)*L2, 2,2)
+        right_avg = factorized_R
 
-                #contributions = factorized_L[:, x1, :,:,:]* factorized_R[:, x2, :,:,:]
-                contributions = tr.einsum("baij, bajk->baik", factorized_L[:, x1, :,:,:], 
-                                          factorized_R[:, x2, :,:,:])
+        combined = tr.einsum('bixag, biygd-> bixyad', left_avg, right_avg)
+        
+        if overlap == True:
+            source_adj = bw*L2
+        else:
+            source_adj= L2
+        sink_adj = (xcut_1)*L2
 
-                correlators = tr.sum(contributions, dim=1)
-                c[:, n*n1*n1 + x1*n1 + x2] = tr.sum(tr.einsum("bxy, bzy-> bxz", 
-                                                              correlators, correlators.conj()),dim=(1,2))
-                
+        for nt in np.arange(xcut_1 + bw, xcut_2):
+            #Just one point in spatial dimension since full contraction is expensive
+            for nx in np.arange(8,9):
+                #Factorized propogator measurment
+                sink = nt*L2 + nx - sink_adj
+                for x in tr.arange(tr.numel(inter)):
+                    p1 = combined[:, x, sink, source_x+source_adj, :, :]
+                    for y in tr.arange(tr.numel(inter)):
+                        p2 = combined[:, y, sink, source_x+source_adj, :, :]
+                        c[:, n, nt-xcut_1 -bw] =  c[:, n, nt-xcut_1 -bw] + tr.sum(tr.einsum("bij, bkj->bik", p1, p2.conj()), dim=(1,2))
 
-        print(n)
-    
-    print(tr.mean(c), tr.std(c)/(tr.numel(c)-1))
+                d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
 
-    #Single level integration
-    q=q0
-    nm = 200
-    c2= tr.zeros(batch_size, nm)
-    for n in np.arange(nm):
-        #Discard some in between
-        q= sim.evolve_f(q, 50)
-        d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
-        propogator = d_inv[:, sink_x:sink_x+2, source_x:source_x+2]
-            
-
-        c2[:, n] = tr.sum(tr.einsum("bij, bkj->bik", propogator, propogator.conj()), dim=(1,2))
-
+                #Full propogator
+                sink = sink + sink_adj
+                propogator = d_inv[:, 2*sink:2*sink+2, 2*source_x:2*source_x+2]
+                c2[:, n, nt-xcut_1-bw] = tr.sum(tr.einsum("bij, bkj->bik", propogator, propogator.conj()), dim=(1,2))
         print(n)
 
-    print("One-level:")
-    print(tr.mean(c2), tr.std(c2)/(tr.numel(c2)-1))
+    print("Factorized: ",tr.mean(c, dim=(0,1)), tr.std(c, dim=(0,1))/(tr.numel(c[:,:,0])-1))
+    print("Full: ", tr.mean(c2, dim=(0,1)), tr.std(c2, dim=(0,1))/(tr.numel(c2[:,:,0])-1))
+
+    factorized_avg = tr.mean(c, dim=(0,1))
+    factorized_err = tr.std(c, dim=(0,1))/(tr.numel(c[:,:,0])-1)
+
+    full_avg = tr.mean(c2, dim=(0,1))
+    full_err = tr.std(c2, dim=(0,1))/(tr.numel(c2[:,:,0])-1)
+
+    bias = tr.abs(factorized_avg - full_avg)
+    bias_err = tr.sqrt(tr.square(factorized_err) + tr.square(full_err))
+
+    correlation = tr.mean(c*c2, dim=(0,1)) - tr.mean(c, dim=(0,1))*tr.mean(c2, dim=(0,1))
+
+    correlation = correlation /(tr.std(c, dim=(0,1)) * tr.std(c2, dim=(0,1)))
+
+    fig, (ax1, ax2) = plt.subplots(2,1)
+
+    ax1.errorbar(tr.arange(0, tr.numel(factorized_avg)) +xcut_1+bw, factorized_avg, factorized_err,
+                marker= '.', ms=12, label='factorized')
+    ax1.errorbar(tr.arange(0,tr.numel(full_avg))+xcut_1+bw, full_avg, full_err,
+                marker='.', ms=12, label='Full')
+    ax1.errorbar(tr.arange(tr.numel(bias))+xcut_1+bw, bias, bias_err,
+                marker= '.', ms=12, label="Bias")
+
+    ax2.plot(tr.arange(tr.numel(bias))+xcut_1+bw, correlation, marker='.', lw=2.0, ms=12)
+
+    ax1.set_yscale('log', nonpositive='clip')
+
+    ax1.legend(loc='lower right')
+    if overlap==True:
+        ax1.set_title('Thick overlap boundaries, n='+ str(batch_size*n0), fontsize=30)
+    else:
+        ax1.set_title('Thin boundaries, n='+ str(batch_size*n0), fontsize=30)
+
+    ax1.set_ylabel('2-pt Correlator magnitude',fontsize=20)
+    #ax1.set_xlabel("Timeslice in Subdomain 2", fontsize=30)
+
+    ax2.set_ylabel("Correlation",
+                   fontsize=20)
+    ax2.set_xlabel("Timeslice in Subdomain 2", fontsize=30)
+
+    #Save correlator data
+    factorized = tr.stack((factorized_avg, factorized_err), dim=0).numpy()
+    np.savetxt('factorized_data.csv', factorized, delimiter=',')
+    full = tr.stack((full_avg, full_err), dim=0).numpy()
+    np.savetxt('full_prop_data.csv', full, delimiter=',')
+
+
+    plt.show()
+
+        
+
 
 
 
@@ -1910,14 +2027,15 @@ def main():
     #plot_correlator_difference()
     #dd_Integrator_dH()
     #dd_Integrated_Action()
-    plot_Signal_To_Noise()
+    #plot_Signal_To_Noise()
     #config_Correlation()
     #autocorrelation_Comparison()
     #correlator_Dist()
     #factorized_Observable_Systematic_Error_Test()
     #factorized_observable()
     #quenched_Global_Twolvl_Observable()
-    #test_Factorized_Observable()
+    #test_Factorized_Propogator()
+    factorized_Pion_Comparison()
 
 
 
