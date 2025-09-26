@@ -1602,7 +1602,7 @@ def factorized_Pion_Comparison():
     batch_size= 30
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
-    mass= -0.12*lam
+    mass= -0.08*lam
     L = 32
     L2 = 16
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
@@ -1640,7 +1640,7 @@ def factorized_Pion_Comparison():
         int2 = tr.arange((L-1)*L2, L*L2)
     inter = tr.cat([int1, int2])
     
-    source_x = 5*L2 + 8
+    source_x = 7*L2 + 8
 
     #Ensemble averaged correlation function data array:
     c= tr.zeros(batch_size, n0, xcut_2-xcut_1 - bw)
@@ -1685,34 +1685,47 @@ def factorized_Pion_Comparison():
                 c2[:, n, nt-xcut_1-bw] = tr.sum(tr.einsum("bij, bkj->bik", propogator, propogator.conj()), dim=(1,2))
         print(n)
 
-    print("Factorized: ",tr.mean(c, dim=(0,1)), tr.std(c, dim=(0,1))/(tr.numel(c[:,:,0])-1))
-    print("Full: ", tr.mean(c2, dim=(0,1)), tr.std(c2, dim=(0,1))/(tr.numel(c2[:,:,0])-1))
-
     factorized_avg = tr.mean(c, dim=(0,1))
-    factorized_err = tr.std(c, dim=(0,1))/(tr.numel(c[:,:,0])-1)
+    factorized_err = tr.std(c, dim=(0,1))/np.sqrt(tr.numel(c[:,:,0]))
 
     full_avg = tr.mean(c2, dim=(0,1))
-    full_err = tr.std(c2, dim=(0,1))/(tr.numel(c2[:,:,0])-1)
+    full_err = tr.std(c2, dim=(0,1))/np.sqrt(tr.numel(c2[:,:,0]))
 
     bias = tr.abs(factorized_avg - full_avg)
-    bias_err = tr.sqrt(tr.square(factorized_err) + tr.square(full_err))
+    bias_err = tr.std(tr.abs(c-c2), dim=(0,1))/np.sqrt(tr.numel(c[:,:,0]))
 
     correlation = tr.mean(c*c2, dim=(0,1)) - tr.mean(c, dim=(0,1))*tr.mean(c2, dim=(0,1))
 
     correlation = correlation /(tr.std(c, dim=(0,1)) * tr.std(c2, dim=(0,1)))
 
-    fig, (ax1, ax2) = plt.subplots(2,1)
+    correlation_err = tr.sqrt((1-tr.square(correlation))/(tr.numel(c[:,:,0]) - 2))
+
+    fig=plt.figure()
+    
+    gs = plt.GridSpec(3,1, figure= fig)
+
+    ax1 = fig.add_subplot(gs[:2, 0])
+    ax2 = fig.add_subplot(gs[2,0])
 
     ax1.errorbar(tr.arange(0, tr.numel(factorized_avg)) +xcut_1+bw, factorized_avg, factorized_err,
-                marker= '.', ms=12, label='factorized')
+                marker= '.', ms=12, label='Factorized')
     ax1.errorbar(tr.arange(0,tr.numel(full_avg))+xcut_1+bw, full_avg, full_err,
                 marker='.', ms=12, label='Full')
     ax1.errorbar(tr.arange(tr.numel(bias))+xcut_1+bw, bias, bias_err,
                 marker= '.', ms=12, label="Bias")
+    
+    ax1.plot(tr.arange(0, tr.numel(factorized_avg)) +xcut_1+bw, factorized_err,
+                marker= '.', ms=12, label='Factorized Err.')
+    ax1.plot(tr.arange(0,tr.numel(full_avg))+xcut_1+bw, full_err,
+                marker='.', ms=12, label='Full Prop. Err.')
+    ax1.plot(tr.arange(tr.numel(bias))+xcut_1+bw, bias_err,
+                marker= '.', ms=12, label="Bias Err.")
 
-    ax2.plot(tr.arange(tr.numel(bias))+xcut_1+bw, correlation, marker='.', lw=2.0, ms=12)
+    ax2.errorbar(tr.arange(tr.numel(bias))+xcut_1+bw, tr.abs(correlation), correlation_err,
+                  marker='.', lw=2.0, ms=12)
 
     ax1.set_yscale('log', nonpositive='clip')
+    ax2.set_yscale('log', nonpositive='clip')
 
     ax1.legend(loc='lower right')
     if overlap==True:
@@ -1720,25 +1733,77 @@ def factorized_Pion_Comparison():
     else:
         ax1.set_title('Thin boundaries, n='+ str(batch_size*n0), fontsize=30)
 
-    ax1.set_ylabel('2-pt Correlator magnitude',fontsize=20)
+    ax1.set_ylabel('Magnitude',fontsize=20)
     #ax1.set_xlabel("Timeslice in Subdomain 2", fontsize=30)
+
+
+    ax2.set_ylabel("Correlation",
+                   fontsize=20)
+
+    ax2.set_xlabel("Timeslice in Subdomain 2", fontsize=30)
+
+    #Save correlator data
+    factorized = tr.stack((tr.arange(0,tr.numel(full_avg))+xcut_1+bw,
+                           factorized_avg, factorized_err, full_avg,
+                           full_err, bias, bias_err, correlation, correlation_err), dim=0).numpy()
+    np.savetxt('factorized_data.csv', factorized, delimiter=',')
+
+
+    plt.show()
+        
+
+def plot_Factorized_Correlator_Data():
+    data = np.loadtxt('factorized_data.csv',delimiter=',')
+    n_configs=300
+
+    fig = plt.figure()
+    
+    #fig, (ax1, ax2, ax3) = plt.subplots(3,1)
+
+    gs = plt.GridSpec(3,1, figure= fig)
+
+    ax1 = fig.add_subplot(gs[:2, 0])
+    ax2 = fig.add_subplot(gs[2,0])
+
+    ax1.errorbar(data[0,:], data[1,:], data[2,:],
+                marker= '.', ms=12, label='factorized')
+    ax1.errorbar(data[0,:], data[3,:], data[4,:],
+                marker='.', ms=12, label='Full Prop.')
+    ax1.errorbar(data[0,:], data[5,:], data[6,:],
+                marker= '.', ms=12, label="Bias")
+    
+    ax1.plot(data[0,:], data[2,:],
+                marker= '.', ms=12, label='Factorized Err.')
+    ax1.plot(data[0,:], data[4,:],
+                marker='.', ms=12, label='Full Prop. Err.')
+    ax1.plot(data[0,:], data[6,:],
+                marker= '.', ms=12, label="Bias Err.")
+
+    ax2.errorbar(data[0,:], tr.abs(data[7,:]), data[8,:], marker='.', lw=2.0, ms=12)
+
+    ax1.set_yscale('log', nonpositive='clip')
+    ax2.set_yscale('log', nonpositive='clip')
+
+    ax1.legend(loc='lower right')
+    ax1.set_title('Thin boundaries, n='+ str(300), fontsize=30)
+    # if overlap==True:
+    #     ax1.set_title('Thick overlap boundaries, n='+ str(batch_size*n0), fontsize=30)
+    # else:
+    #     ax1.set_title('Thin boundaries, n='+ str(batch_size*n0), fontsize=30)
+
+    ax1.set_ylabel('Magnitude',fontsize=20)
+    #ax1.set_xlabel("Timeslice in Subdomain 2", fontsize=30)
+
+    #ax2.legend(loc='lower right')
+
+    #ax2.set_ylabel("Error",
+    #               fontsize=20)
 
     ax2.set_ylabel("Correlation",
                    fontsize=20)
     ax2.set_xlabel("Timeslice in Subdomain 2", fontsize=30)
 
-    #Save correlator data
-    factorized = tr.stack((factorized_avg, factorized_err), dim=0).numpy()
-    np.savetxt('factorized_data.csv', factorized, delimiter=',')
-    full = tr.stack((full_avg, full_err), dim=0).numpy()
-    np.savetxt('full_prop_data.csv', full, delimiter=',')
-
-
     plt.show()
-
-        
-
-
 
 
 
@@ -2036,6 +2101,7 @@ def main():
     #quenched_Global_Twolvl_Observable()
     #test_Factorized_Propogator()
     factorized_Pion_Comparison()
+    #plot_Factorized_Correlator_Data()
 
 
 
