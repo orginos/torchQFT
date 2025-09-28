@@ -106,7 +106,7 @@ jC2p   = np.array(jackknife(lC2p))
 j_xi = correlation_length(lat[0],jchi_m,jC2p)
 
 m_xi,e_xi = average(j_xi)
-
+e_xi *= (j_xi.shape[0]-1) # fix the jackknife error
 
 print("The correlation length from jackknife is is: ",m_xi," +/- ", e_xi)
 

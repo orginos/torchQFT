@@ -34,6 +34,7 @@ class Observables:
     xi: Optional[float] = None            # correlation length
     energy: Optional[float] = None        # action density or energy
     extras: Optional[Dict[str, Any]] = None
-
+    configs: Optional[Any] = None # configurations
+    
     def to_json(self) -> str:
         return json.dumps({k:v for k,v in self.__dict__.items()}, indent=2)

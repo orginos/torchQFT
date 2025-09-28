@@ -160,7 +160,7 @@ class Psi11_l(FlowActionTerm):
     def lapl(self,s,t):
         return -12.0*self.action(s,t)
     
-class Psi11(FlowActionTerm):
+class Psi11t(FlowActionTerm):
     def __init__(self,cc=[1.0]):
         FlowActionTerm.__init__(self,cc,EvenOdd=False)
 
@@ -211,6 +211,30 @@ class Psi11(FlowActionTerm):
         #print(A)
         A *= self.Coeff(t) 
         return A-10.0*self.action(s,t)
+
+
+#this is now an eigenfunction of the Lie Laplacian.
+# NOTE: I found all the coefficients experimentaly and they are not equal to those in the old notes...
+# I will fix the algebra so that I get the right answer...
+class Psi11(FlowActionTerm):
+    def __init__(self,cc=[1.0]):
+        FlowActionTerm.__init__(self,cc,EvenOdd=False)
+        self.p11t = Psi11t([1.0])
+        self.p11l = Psi11_l([1.0])
+        self.psi2 = Psi2([1.0])
+        
+        
+    def action(self,s,t):
+        V = np.prod(list(s.shape[2:s.dim()]))
+        A = self.p11t.action(s,t) -2.0*self.p11l.action(s,t) - 2.0/3.0*self.psi2.action(s,t) - 4.0/3.0*V
+        
+        return self.Coeff(t)*A
+
+    def grad(self,s,t):
+        return self.Coeff(t)*(self.p11t.grad(s,t) -2.0*self.p11l.grad(s,t) -2.0/3.0*self.psi2.grad(s,t))
+
+    def lapl(self,s,t):
+        return self.Coeff(t)*(self.p11t.lapl(s,t) -2.0*self.p11l.lapl(s,t) -2.0/3.0*self.psi2.lapl(s,t))
 
 class FlowAction(nn.Module):
     def __init__(self,cc=[Psi0([1.0])]):
