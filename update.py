@@ -32,8 +32,15 @@ class hmc:
             q0=q.clone() # copy the q
             p0 = self.T.refreshP()
             H0 = self.T.kinetic(p0) + self.T.action(q0)
+            if p0.isnan().any():
+                print("NaN detected before force,p0 in HMC, evolve")
+            if q0.isnan().any():
+                print("NaN detected before force,q0 in HMC, evolve")
             p,q = self.I.integrate(p0,q0)
+            self.qtest = q
+            self.ptest = p
             Hf = self.T.kinetic(p) + self.T.action(q)
+            
             DH = Hf - H0
             acc_prob=tr.where(DH<0,tr.ones_like(DH),tr.exp(-DH))
             R=tr.rand_like(acc_prob)

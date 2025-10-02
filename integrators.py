@@ -10,7 +10,12 @@ Copied from pyQFT
 
 import numpy as np
 def simple_evolveP(dt,F,P):
-    return P+dt*F
+    try:
+        return P+dt*F
+    except RuntimeError:
+        print("RuntimeError in simple_evolveP")
+        print("dt:",dt,"F:",F.shape,"P:",P.shape)
+        return P+dt*F
 
 class integrator():
     def __init__(self,force,evolveQ,Nmd,t,evolveP):
@@ -45,14 +50,40 @@ class minnorm2(integrator):
     def integrate(self,p,q):
         for t in range(0,self.Nmd):
             #p = p + self.force(q)*self.dt*self.lam
+            if q.isnan().any():
+                print("NaN detected first, q in minnorm2", t)
+            if p.isnan().any():
+                print("NaN detected first, p in minnorm2", t)
+            if self.force(q).isnan().any():
+                print("NaN detected first, force(q) in minnorm2", t)
+                print(self.force(q).shape)
             p=self.evolveP(self.dt*self.lam,self.force(q),p)
             q = self.evolveQ(0.5*self.dt,p,q) #q + 0.5*self.dt*p
+            self.qtest = q
+            self.ptest = p
+            if q.isnan().any():
+                print("NaN detected second, q in minnorm2 ", t)
+            if p.isnan().any():
+                print("NaN detected second, p in minnorm2 ", t)
+            if self.force(q).isnan().any():
+                print("NaN detected second, force(q) in minnorm2", t )
+                print("location of NAN:",self.force(q).isnan().nonzero(),self.force(q)[self.force(q).isnan()])
             #p = p + self.force(q)*self.dt*(1.0-2.0*self.lam)
             p=self.evolveP(self.dt*(1.0-2.0*self.lam),self.force(q),p)
             q = self.evolveQ(0.5*self.dt,p,q) #q + 0.5*self.dt*p
+            self.qtest1 = q
+            self.ptest1 = p
+            if q.isnan().any():
+                print("NaN detected third, q in minnorm2 ", t)
+            if p.isnan().any():
+                print("NaN detected third, p in minnorm2 ", t)
+            if self.force(q).isnan().any():
+                print("NaN detected third, force(q) in minnorm2", t )
+                print("location of NAN:",self.force(q).isnan().nonzero(),self.force(q)[self.force(q).isnan()])
             #p = p + self.force(q)*self.dt*self.lam
             p=self.evolveP(self.dt*self.lam,self.force(q),p)
-                       
+            self.ptest2 = p
+
         return p,q
     
 class minnorm4pf4(integrator):

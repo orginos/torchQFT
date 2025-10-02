@@ -56,6 +56,75 @@ class phi4():
             self.dtype=dtype
 
 
+class phi4_c1:
+    def action(self,phi_c):
+        rphis=[]
+        rphis.append(phi_c)
+        iii=0
+        for pi in reversed(self.pics):
+            #print(pi.shape)
+            rphi = self.rg.refine(rphis[iii],pi)
+            rphis.append(rphi)
+            iii+=1
+        phi_f = rphis[-1]
+        #evaluate coarse field in action of rg
+        #print(phi_f.shape,"shape of fine field")
+        return self.sg.action(phi_f)
+        #if I dont add the .sum() I got a grad for the batch system, it seems to me that we include that in the force property the batch is summed?
+
+    def force(self,phi_c):
+        #phi_c.requires_grad_(True)
+        x_tensor = phi_c.clone()
+        x_tensor.requires_grad_()
+        SS = self.action(x_tensor)
+
+        SS.sum().backward()
+
+        if tr.isnan(SS).any():#torch derivative of the action
+            print("nan locations:",tr.isnan(SS).nonzero())
+            self.phi_fail=phi_c
+        return -x_tensor.grad
+    
+    def refreshP(self):
+        P = tr.normal(0.0,1.0,self.phis[-1].shape)#only difference with fine level
+        return P
+
+    def evolveQ(self,dt,P,Q):
+        return Q + dt*P
+    
+    def kinetic(self,P):
+        return tr.einsum('bxy,bxy->b',P,P)/2.0
+
+    def generate_cfg_levels(self,phi11,level):#run every time we need to contruct deeper or superficial levels
+        #run a configuration
+        self.level=level
+        phis=[]
+        pis=[]
+        phicopy=phi11.clone()
+        print("shape of the original field",phicopy.shape)
+        phis.append(phicopy)
+        for _ in range(level):
+            print("coarsening level ",_," field shape ",phicopy.shape)
+            phic,pic = self.rg.coarsen(phicopy)
+            phis.append(phic)
+            pis.append(pic)
+            phicopy=phic
+        self.phis=phis
+        self.pics=pis
+
+        #reversed
+        rphis=[]
+        rphis.append(phis[-1])
+        for phics,pis in zip(reversed(phis),reversed(pis)):
+            rphi = self.rg.refine(phics,pis)
+            rphis.append(rphi)
+        self.rphis=rphis
+
+    def __init__(self,sgg,rgg):
+        self.sg = sgg#theory? in the finest level
+        self.rg = rgg#projector to coarse level
+
+
 
 def main():
     import time

@@ -211,8 +211,9 @@ class BijectorFactory():
 # this is an invertible RG transformation
 # it preseves the residual fine degrees of freedom
 class RGlayer(nn.Module):
-    def __init__(self,transformation_type="select"):
+    def __init__(self,transformation_type="select",batch_size=1):
         super(RGlayer, self).__init__()
+        self.batch_size = batch_size
         if(transformation_type=="select"):
             mask_c = [[1.0,0.0],[0.0,0.0]]
             mask_r = [[1.0,1.0],[1.0,1.0]]
@@ -235,15 +236,25 @@ class RGlayer(nn.Module):
 
         
     def coarsen(self,f):
+        #print(f.shape)
         ff = f.view(f.shape[0],1,f.shape[1],f.shape[2])
         c = self.restrict(ff)
         r = ff-self.prolong(c)
-        return c.squeeze(),r.squeeze()
+        #print(c.shape,r.shape,"c and r shapes")
+        if self.batch_size==1:
+            return c.squeeze(1),r.squeeze(1)
+        else:
+            return c.squeeze(),r.squeeze()
     
     def refine(self,c,r):
+        #print(c.shape,r.shape,"c and r shapes in refine")
         cc = c.view(c.shape[0],1,c.shape[1],c.shape[2])
         rr = r.view(c.shape[0],1,r.shape[1],r.shape[2])
-        return (self.prolong(cc)+rr).squeeze()
+        #print(cc.shape,rr.shape,"cc and rr shapes in refine")
+        if self.batch_size==1:
+            return (self.prolong(cc)+rr).squeeze(1)
+        else:
+            return (self.prolong(cc)+rr).squeeze()
 
 
 #works only with power of 2 sizes
