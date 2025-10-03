@@ -621,7 +621,79 @@ class schwinger():
 
         return s11
     
-    #Input: lattice configuration, frozen timeslices, boundary width, source and sink indices
+    
+    #Input lattice configuration, frozen timeslices beginnings, boundary width, projection vectors, overlap T/F
+    #Output:  batch x intermediate ensemble of factorized propogator contributions to all points on the lattice, one for each subdomain. Contains only first order contributions
+    #New version of function based on projectors
+    #TODO: Outputs results which do not match original approach or gets close to the
+    #'true' results produced by the full propogator- needs bugfixing
+    def factorized_Propogator_Proj(self, q, xcut_1, xcut_2, bw, projs, overlap):
+        #First seperate sections of the Dirac operator
+        d = self.diracOperator(q[0]).to_dense()
+
+
+        #Contains all dirac matrix points within the first subdomain
+        #roll the entire end boundary if working with a thick overlap,
+        #Only the edge of the boundary for no overlap
+        if overlap == True:
+            rolled_d = d.roll(shifts=(bw*self.V[1]*2, bw*self.V[1]*2), dims=(1,2))
+            s1 = rolled_d[:, :(xcut_1+2*bw)*self.V[1]*2, :(xcut_1+2*bw)*self.V[1]*2]
+        else:
+            rolled_d = d.roll(shifts=(self.V[1]*2, self.V[1]*2), dims=(1,2))        
+            s1 = d[:, :(xcut_1+2)*self.V[1]*2, :(xcut_1+2)*self.V[1]*2]
+        #Contains second subdomain and both frozen boundaries
+
+        bulk = d[:,xcut_1*self.V[1]*2:, xcut_1*self.V[1]*2:]
+
+        s1_inv = tr.inverse(s1)
+        bulk_inv = tr.inverse(bulk)
+
+        #Construct Dirac matrix for boundary by zeroing all entries outside boundaries
+        boundary_d = tr.clone(bulk)
+
+        boundary_d[:, bw*self.V[1]*2:(xcut_2-xcut_1)*self.V[1]*2, 
+                   bw*self.V[1]*2:(xcut_2-xcut_1)*self.V[1]*2] = 0.0
+        
+        diags = tr.diagonal(boundary_d, dim1=1, dim2=2)
+        boundary_mat = tr.diag_embed(diags)
+
+
+
+        #Needs to be boundary dirac matrix points only.
+        #bulk_prod = tr.einsum('bxy, byz-> bxz', bulk_inv, boundary_d)
+        bulk_prod = tr.einsum('bxy, byz->bxz', bulk_inv, boundary_mat)
+
+        #Will be same for each of the equal sized overlapping subdomains
+        #Dirac indices remain layered into spatial indices here
+        subdomain_index_ct = tr.numel(s1[0,0,:])
+        bulk_index_ct = tr.numel(bulk[0,0,:])
+
+        ensembleL = tr.zeros([self.Bs, tr.numel(projs[:,0]), bulk_index_ct], dtype=tr.complex64)
+        ensembleR = tr.zeros([self.Bs, tr.numel(projs[:,0]), subdomain_index_ct], dtype=tr.complex64)
+
+        for xi in tr.arange(tr.numel(projs[:,0])):
+            p = projs[xi, :]
+
+            #Need to adjust projection vector based on L/R indexing
+            p_left = p[xcut_1*self.V[1]*2:]
+            if overlap == True:
+                rolled_p = p.roll(shifts=bw*self.V[1]*2)
+                p_right = rolled_p[:(xcut_1+2*bw)*self.V[1]*2]
+            else:
+                rolled_p = p.roll(shifts=self.V[1]*2)        
+                p_right = rolled_p[:(xcut_1+2*bw)*self.V[1]*2]
+
+            ensembleR[:, xi, :] = tr.einsum('x, bxy->by', tr.conj(p_right), s1_inv)
+
+            ensembleL[:, xi, :] = tr.einsum('bxy, y-> bx', bulk_prod, p_left)
+        
+        return ensembleL, ensembleR
+
+
+
+    
+    
+    #Input: lattice configuration, frozen timeslices, boundary width, intermediate indices, overlap T/F
     #of the Dirac operator, intermediate points
     #Output:  batch x intermediate ensemble of factorized propogator contributions to all points on the lattice, one for each subdomain. Contains only first order contributions
     #TODO: In progress
@@ -637,6 +709,8 @@ class schwinger():
 
 
         #Contains all dirac matrix points within the first subdomain
+        #roll the entire end boundary if working with a thick overlap,
+        #Only the edge of the boundary for no overlap
         if overlap == True:
             rolled_d = d.roll(shifts=(bw*self.V[1]*2, bw*self.V[1]*2), dims=(1,2))
             s1 = rolled_d[:, :(xcut_1+2*bw)*self.V[1]*2, :(xcut_1+2*bw)*self.V[1]*2]
@@ -646,6 +720,7 @@ class schwinger():
         #Contains second subdomain and both frozen boundaries
 
         bulk = d[:,xcut_1*self.V[1]*2:, xcut_1*self.V[1]*2:]
+
 
         s1_inv = tr.inverse(s1)
         bulk_inv = tr.inverse(bulk)

@@ -1608,9 +1608,9 @@ def factorized_Pion_Comparison():
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     #Boundary cut timeslices
-    xcut_1 = 14
-    xcut_2 = 30
-    bw=2
+    xcut_1 = 11
+    xcut_2 = 27
+    bw=5
 
     u = sch.hotStart()
 
@@ -1631,16 +1631,18 @@ def factorized_Pion_Comparison():
     #set of intermediate points for ensemble avg.
 
     #Intermediate based on overlap or not
-    overlap=False
+    overlap=True
     if overlap:
-        int1 = tr.arange((xcut_1)*L2+1, (xcut_1+bw)*L2)
-        int2 = tr.arange((xcut_2)*L2+1, (xcut_2+bw)*L2)
+        #int1 = tr.arange((xcut_1)*L2+1, (xcut_1+bw)*L2)
+        #int2 = tr.arange((xcut_2)*L2+1, (xcut_2+bw)*L2)
+        int1 = tr.arange((xcut_1+2)*L2, (xcut_1+3)*L2)
+        int2 = tr.arange((xcut_2+2)*L2, (xcut_2+3)*L2)
     else:
         int1 = tr.arange((xcut_1)*L2, (xcut_1+1)*L2)
         int2 = tr.arange((L-1)*L2, L*L2)
     inter = tr.cat([int1, int2])
     
-    source_x = 7*L2 + 8
+    source_x = 5*L2 + 8
 
     #Ensemble averaged correlation function data array:
     c= tr.zeros(batch_size, n0, xcut_2-xcut_1 - bw)
@@ -1664,6 +1666,7 @@ def factorized_Pion_Comparison():
             source_adj = bw*L2
         else:
             source_adj= L2
+
         sink_adj = (xcut_1)*L2
 
         for nt in np.arange(xcut_1 + bw, xcut_2):
@@ -1751,6 +1754,110 @@ def factorized_Pion_Comparison():
 
     plt.show()
         
+
+#Testing that the projector based factorization approach reproduces
+#results of the naive indexing approach 
+def compare_Factorizations():
+    batch_size= 30
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= -0.07*lam
+    L = 32
+    L2 = 16
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    #Boundary cut timeslices
+    xcut_1 = 11
+    xcut_2 = 27
+    bw=5
+
+    u = sch.hotStart()
+
+    q = (u,)
+
+    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
+    sim = h.hmc(sch, im2, False)
+
+    #Typical equilibration
+    q0 = sim.evolve_f(q, 200)
+    q = tuple(q0)
+
+    #Intermediate based on overlap or not
+    overlap=True
+    if overlap:
+        int1 = tr.arange((xcut_1)*L2+1, (xcut_1+bw)*L2)
+        int2 = tr.arange((xcut_2)*L2+1, (xcut_2+bw)*L2)
+        #int1 = tr.arange((xcut_1+2)*L2, (xcut_1+3)*L2)
+        #int2 = tr.arange((xcut_2+2)*L2, (xcut_2+3)*L2)
+    else:
+        int1 = tr.arange((xcut_1)*L2, (xcut_1+1)*L2)
+        int2 = tr.arange((L-1)*L2, L*L2)
+    inter = tr.cat([int1, int2])
+
+    #inter = tr.tensor(((xcut_1)*L2 + 1,))
+    
+    source_x = 10*L2 + 8
+    sink_x = (xcut_1+1+bw)*L2 + 8
+
+ 
+    factorized_L, factorized_R = sch.factorized_Propogator(q, xcut_1, xcut_2, bw, inter, overlap)
+    np.savetxt("factorized_R.csv", factorized_R[0,0, 0,:,:])
+
+    combined = tr.einsum('bixag, biygd-> bixyad', factorized_L, factorized_R)
+
+    #Accounts for shifting of the lattice indices in the factorizing process
+    sink_adj = (xcut_1)*L2
+    source_adj = bw*L2
+    
+    summed = -1.0*tr.sum(combined, dim=1)
+
+    s_prop = summed[:, sink_x-sink_adj, source_x+source_adj, :,:]
+    corr1 = tr.sum(tr.einsum("bij, bkj->bik", s_prop, s_prop.conj()), dim=(1,2))
+
+    #Now try the projection approach
+
+    #Generate projectors
+    projs = tr.zeros(2*(tr.numel(inter)), 2*L*L2, dtype=tr.complex64)
+    ct=0
+    for x in tr.arange((xcut_1)*L2*2+2, (xcut_1+bw)*L2*2):
+        projs[ct, x] = 1.0
+        ct += 1
+    for x in tr.arange((xcut_2)*L2*2+2, (xcut_2+bw)*L2*2):
+        projs[ct, x] = 1.0
+        ct += 1
+    # projs = tr.zeros((1, 2*L*L2), dtype=tr.complex64)
+    # projs[0,(xcut_1)*L2*2+2] = 1.0
+    
+
+    factorized_L2, factorized_R2 = sch.factorized_Propogator_Proj(q, xcut_1, xcut_2,
+                                                                  bw, projs, overlap)
+    
+    np.savetxt("factorized_R2.csv", factorized_R2[0,0, :])
+    
+    combined2 = tr.einsum('bix, biy-> bixy', factorized_L2, factorized_R2)
+
+    sum2 = -1.0*tr.sum(combined2, dim=1)
+
+
+    #Accounts for shifting of the lattice indices in the factorizing process
+    sink_adj = 2*(xcut_1)*L2
+    source_adj = 2*bw*L2
+
+    prop = sum2[:, 2*sink_x-sink_adj:2*sink_x-sink_adj+2, 
+            2*source_x+source_adj:2*source_x+source_adj + 2]
+    
+    corr2 = tr.sum(tr.einsum("bij, bkj->bik", prop, prop.conj()), dim=(1,2))
+
+    d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
+    propogator = d_inv[:, 2*sink_x:2*sink_x+2, 2*source_x:2*source_x+2]
+    correct = tr.sum(tr.einsum("bij, bkj->bik", propogator, propogator.conj()), dim=(1,2))
+    
+    
+    print("Index result: ", tr.mean(corr1), tr.std(corr1))
+    print("Projector Result: ", tr.mean(corr2), tr.std(corr2))
+    print("Full Propogator: ", tr.mean(correct), tr.std(correct))
+
+
 
 def plot_Factorized_Correlator_Data():
     data = np.loadtxt('factorized_data.csv',delimiter=',')
@@ -2100,8 +2207,9 @@ def main():
     #factorized_observable()
     #quenched_Global_Twolvl_Observable()
     #test_Factorized_Propogator()
-    factorized_Pion_Comparison()
+    #factorized_Pion_Comparison()
     #plot_Factorized_Correlator_Data()
+    compare_Factorizations()
 
 
 
