@@ -650,7 +650,6 @@ class schwinger():
 
         #Construct Dirac matrix for boundary by zeroing all entries outside boundaries
         boundary_d = tr.clone(bulk)
-
         boundary_d[:, bw*self.V[1]*2:(xcut_2-xcut_1)*self.V[1]*2, 
                    bw*self.V[1]*2:(xcut_2-xcut_1)*self.V[1]*2] = 0.0
         
@@ -659,8 +658,8 @@ class schwinger():
 
 
 
+
         #Needs to be boundary dirac matrix points only.
-        #bulk_prod = tr.einsum('bxy, byz-> bxz', bulk_inv, boundary_d)
         bulk_prod = tr.einsum('bxy, byz->bxz', bulk_inv, boundary_mat)
 
         #Will be same for each of the equal sized overlapping subdomains
@@ -670,6 +669,7 @@ class schwinger():
 
         ensembleL = tr.zeros([self.Bs, tr.numel(projs[:,0]), bulk_index_ct], dtype=tr.complex64)
         ensembleR = tr.zeros([self.Bs, tr.numel(projs[:,0]), subdomain_index_ct], dtype=tr.complex64)
+        summed = tr.zeros([self.Bs, bulk_index_ct, subdomain_index_ct])
 
         for xi in tr.arange(tr.numel(projs[:,0])):
             p = projs[xi, :]
@@ -681,13 +681,17 @@ class schwinger():
                 p_right = rolled_p[:(xcut_1+2*bw)*self.V[1]*2]
             else:
                 rolled_p = p.roll(shifts=self.V[1]*2)        
-                p_right = rolled_p[:(xcut_1+2*bw)*self.V[1]*2]
+                p_right = rolled_p[:(xcut_1+2)*self.V[1]*2]
+
 
             ensembleR[:, xi, :] = tr.einsum('x, bxy->by', tr.conj(p_right), s1_inv)
 
             ensembleL[:, xi, :] = tr.einsum('bxy, y-> bx', bulk_prod, p_left)
+
+            summed = summed + tr.einsum('bx, by-> bxy', ensembleL[:, xi, :], 
+                                        ensembleR[:, xi, :])
         
-        return ensembleL, ensembleR
+        return ensembleL, ensembleR, summed
 
 
 
@@ -729,34 +733,38 @@ class schwinger():
         subdomain_index_ct = int(tr.numel(s1[0,0,:])/2)
         bulk_index_ct = int(tr.numel(bulk[0,0,:])/2)
 
-        ensembleL = tr.zeros([self.Bs, tr.numel(inter), bulk_index_ct,2, 2], dtype=tr.complex64)
-        ensembleR = tr.zeros([self.Bs, tr.numel(inter), subdomain_index_ct, 2, 2], dtype=tr.complex64)
+        ensembleL = tr.zeros([self.Bs, tr.numel(inter), bulk_index_ct,2], dtype=tr.complex64)
+        ensembleR = tr.zeros([self.Bs, tr.numel(inter), subdomain_index_ct, 2], dtype=tr.complex64)
+        summed = tr.zeros([self.Bs, bulk_index_ct, subdomain_index_ct, 2, 2])
         for xi in tr.arange(tr.numel(inter)):
 
             if overlap == True:
-                if inter[xi] > xcut_2*self.V[1]:
-                    adj_inter = inter[xi] - (self.V[0] - bw)*self.V[1]
+                if inter[xi] > 2*xcut_2*self.V[1]:
+                    adj_inter = inter[xi] - 2*(self.V[0] - bw)*self.V[1]
                 else:
-                    adj_inter = inter[xi] + bw*self.V[1]
+                    adj_inter = inter[xi] + 2*bw*self.V[1]
             else:
-                if inter[xi] > xcut_2*self.V[1]:
-                    adj_inter = inter[xi] - (self.V[0]-1)*self.V[1]
+                if inter[xi] > 2*xcut_2*self.V[1]:
+                    adj_inter = inter[xi] - 2*(self.V[0]-1)*self.V[1]
                 else:
-                    adj_inter = inter[xi]
+                    adj_inter = inter[xi] +2*self.V[1]
 
-            ensembleR[:,xi, :, :] = s1_inv[:, :, 2*adj_inter:2*adj_inter+2].view((self.Bs, subdomain_index_ct, 2, 2))
+            ensembleR[:,xi, :, :] = s1_inv[:, adj_inter, :].view((self.Bs, subdomain_index_ct, 2))
 
             #Isolate intermediate Dirac entry for boundary crossing
-            d_int=d[:, 2*inter[xi]:2*inter[xi]+2, 2*inter[xi]:2*inter[xi]+2]
+            d_int=d[:, inter[xi], inter[xi]]
 
             #Compute offset for bulk matrix
             offset = 2*(xcut_1)*self.V[1]
             
-            ensembleL[:, xi, :, :] = tr.einsum('bxij, bjk->bxik', bulk_inv[:, :, 2*inter[xi]-offset:2*inter[xi]-offset+2].view(
-                (self.Bs, bulk_index_ct, 2, 2)),
+            ensembleL[:, xi, :, :] = tr.einsum('bxi, b->bxi', bulk_inv[:, :, inter[xi]-offset].view(
+                (self.Bs, bulk_index_ct, 2)),
                                   d_int)
             
-        return ensembleL, ensembleR
+            summed = summed + tr.einsum('bxa, byc-> bxyac', ensembleL[:, xi, :, :],
+                                        ensembleR[:, xi, :, :])
+            
+        return ensembleL, ensembleR, summed
     
     
     #Input: Ensemble on the left and right side of factorized propogator samples

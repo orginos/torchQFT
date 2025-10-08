@@ -1783,33 +1783,29 @@ def compare_Factorizations():
     q = tuple(q0)
 
     #Intermediate based on overlap or not
-    overlap=True
+    #Use only a single dirac index and lattice index combo for intermediate
+    overlap=False
     if overlap:
-        int1 = tr.arange((xcut_1)*L2+1, (xcut_1+bw)*L2)
-        int2 = tr.arange((xcut_2)*L2+1, (xcut_2+bw)*L2)
-        #int1 = tr.arange((xcut_1+2)*L2, (xcut_1+3)*L2)
-        #int2 = tr.arange((xcut_2+2)*L2, (xcut_2+3)*L2)
+        int1 = tr.arange((xcut_1+2)*L2*2+2, (xcut_1+3)*2*L2)
+        int2 = tr.arange((xcut_2+2)*L2*2+2, (xcut_2+3)*2*L2)
     else:
-        int1 = tr.arange((xcut_1)*L2, (xcut_1+1)*L2)
-        int2 = tr.arange((L-1)*L2, L*L2)
+        int1 = tr.arange((xcut_1)*L2*2, (xcut_1+1)*L2*2)
+        int2 = tr.arange((L-1)*L2*2, L*L2*2)
     inter = tr.cat([int1, int2])
 
-    #inter = tr.tensor(((xcut_1)*L2 + 1,))
     
-    source_x = 10*L2 + 8
-    sink_x = (xcut_1+1+bw)*L2 + 8
+    source_x = 5*L2 + 8
+    sink_x = (xcut_1+5+bw)*L2 + 8
 
  
-    factorized_L, factorized_R = sch.factorized_Propogator(q, xcut_1, xcut_2, bw, inter, overlap)
-    np.savetxt("factorized_R.csv", factorized_R[0,0, 0,:,:])
-
-    combined = tr.einsum('bixag, biygd-> bixyad', factorized_L, factorized_R)
+    factorized_L, factorized_R, summed = sch.factorized_Propogator(q, xcut_1, xcut_2, bw, inter, overlap)
+    # print(factorized_L.size())
+    # print(factorized_R.size())
 
     #Accounts for shifting of the lattice indices in the factorizing process
     sink_adj = (xcut_1)*L2
     source_adj = bw*L2
     
-    summed = -1.0*tr.sum(combined, dim=1)
 
     s_prop = summed[:, sink_x-sink_adj, source_x+source_adj, :,:]
     corr1 = tr.sum(tr.einsum("bij, bkj->bik", s_prop, s_prop.conj()), dim=(1,2))
@@ -1817,33 +1813,38 @@ def compare_Factorizations():
     #Now try the projection approach
 
     #Generate projectors
-    projs = tr.zeros(2*(tr.numel(inter)), 2*L*L2, dtype=tr.complex64)
+    projs = tr.zeros((tr.numel(inter)), 2*L*L2, dtype=tr.complex64)
     ct=0
-    for x in tr.arange((xcut_1)*L2*2+2, (xcut_1+bw)*L2*2):
-        projs[ct, x] = 1.0
-        ct += 1
-    for x in tr.arange((xcut_2)*L2*2+2, (xcut_2+bw)*L2*2):
-        projs[ct, x] = 1.0
-        ct += 1
-    # projs = tr.zeros((1, 2*L*L2), dtype=tr.complex64)
-    # projs[0,(xcut_1)*L2*2+2] = 1.0
+    if overlap:
+        for x in tr.arange((xcut_1+2)*L2*2+2, (xcut_1+3)*L2*2):
+            projs[ct, x] = 1.0
+            ct += 1
+        for x in tr.arange((xcut_2+2)*L2*2+2, (xcut_2+3)*L2*2):
+            projs[ct, x] = 1.0
+            ct += 1
+    else:
+        for x in tr.arange((xcut_1)*L2*2, (xcut_1+1)*L2*2):
+            projs[ct, x] = 1.0
+            ct += 1
+        for x in tr.arange((L-1)*L2*2, (L)*L2*2):
+            projs[ct, x] = 1.0
+            ct += 1
+
     
 
-    factorized_L2, factorized_R2 = sch.factorized_Propogator_Proj(q, xcut_1, xcut_2,
+    factorized_L2, factorized_R2, summed2 = sch.factorized_Propogator_Proj(q, xcut_1, xcut_2,
                                                                   bw, projs, overlap)
     
-    np.savetxt("factorized_R2.csv", factorized_R2[0,0, :])
-    
-    combined2 = tr.einsum('bix, biy-> bixy', factorized_L2, factorized_R2)
 
-    sum2 = -1.0*tr.sum(combined2, dim=1)
+    # print(factorized_L2.size())
+    # print(factorized_R2.size())
 
 
     #Accounts for shifting of the lattice indices in the factorizing process
     sink_adj = 2*(xcut_1)*L2
     source_adj = 2*bw*L2
 
-    prop = sum2[:, 2*sink_x-sink_adj:2*sink_x-sink_adj+2, 
+    prop = summed2[:, 2*sink_x-sink_adj:2*sink_x-sink_adj+2, 
             2*source_x+source_adj:2*source_x+source_adj + 2]
     
     corr2 = tr.sum(tr.einsum("bij, bkj->bik", prop, prop.conj()), dim=(1,2))
