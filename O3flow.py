@@ -13,9 +13,8 @@ import torch.nn as nn
 
 import numpy as np
 
-import O3 as o3
-
-dtype = tr.float32
+#dtype = tr.float32
+dtype = tr.get_default_dtype()   # respects global default
 device = "cpu"
 L=tr.tensor([0.0])
 def reset_L():
@@ -30,7 +29,13 @@ def reset_L():
                      [ 0,  0,  0]]],
                    dtype=dtype,
                    device=device)
-L = reset_L()
+L = reset_L().to(dtype=dtype)       # create with current default
+
+def _L_like(s):
+    global L
+    if L.dtype != s.dtype or L.device != s.device:
+        L = reset_L().to(dtype=s.dtype, device=s.device)
+    return L
 
 # multiplies an O(3) matrix to a vector
 def GxV(R,Q):
@@ -39,6 +44,23 @@ def GxV(R,Q):
 # multiplies two group  elements
 def GxG(R,Q):
     return tr.einsum('bkjxy,bjmxy->bkmxy',R,Q)
+
+
+def so3_expo(P):
+        E=tr.eye(3,3,dtype=P.dtype,device=P.device).view(1,3,3,1,1)
+        #print(E.shape)
+        norm = tr.sqrt(tr.einsum('baxy,baxy->bxy',P,P))
+        sin = tr.sin(norm)/norm
+        sin2 = 2*(tr.sin(norm/2)/norm)**2
+        #build the matrix A
+        A  = tr.einsum('ija,baxy->bijxy',L,P)
+        AA = tr.einsum('bikxy,bkjxy->bijxy',A,A)
+        R= E + tr.einsum('bijxy,bxy->bijxy',A,sin) +  tr.einsum('bijxy,bxy->bijxy',AA,sin2)
+        return R
+
+def so3_evolve(dt,P,Q):
+        R = so3_expo(dt*P)
+        return  tr.einsum('bsrxy,brxy->bsxy',R,Q)
 
 from abc import ABC, abstractmethod
 
@@ -60,11 +82,16 @@ class Functional(ABC):
         """Compute the gradient at x."""
         raise NotImplementedError
 
+    def mgrad(self,x):
+        return -self.grad(x)
+    
     @abstractmethod
     def lapl(self, x):
         """Compute the Laplacian at x."""
         raise NotImplementedError
 
+    def mlapl(self,x): # minus the laplacian
+        return self.lapl(x) 
     
 class Psi0(Functional):
     def action(self,s):
@@ -74,7 +101,7 @@ class Psi0(Functional):
         for mu in range(2,s.dim()):
             A += tr.einsum('bsxy,bsxy->b',s,tr.roll(s,shifts=-1,dims=mu))
         return 2.0*A # matches the paper definition with +/- sums
-
+    
     def grad(self,s):
         F = tr.zeros_like(s)
         Lsig = -tr.einsum('bsxy,sra->braxy',s,L)
@@ -82,7 +109,7 @@ class Psi0(Functional):
             F+=tr.roll(s,shifts= 1,dims=mu)+tr.roll(s,shifts=-1,dims=mu)
         F=tr.einsum('bsaxy,bsxy->baxy',Lsig,F)
         
-        return -2.0*F
+        return 2.0*F
 
     # this one is simple... it is an eigenfunction of the laplacian
     def lapl(self,s):
@@ -118,7 +145,7 @@ class Psi2(Functional):
             F+=tr.roll(s1,shifts= 1,dims=mu)+tr.roll(s1,shifts=-1,dims=mu)
         F=tr.einsum('bsaxy,bsxy->baxy',Lsig,F)
         
-        return -2.0*F # matches the paper definition with +/- sums
+        return 2.0*F # matches the paper definition with +/- sums
 
     # this one is simple... it is an eigenfunction of the laplacian
     def lapl(self,s):
@@ -150,37 +177,52 @@ class Psi11_l(Functional):
             F+=tr.einsum('bsxy,bxy->bsxy',tr.roll(s,shifts=-1,dims=mu),bp)
         F=tr.einsum('bsaxy,bsxy->baxy',Lsig,F)
         
-        return -4.0*F # 2 for the power and 2 the to match the paper definition with +/- sums
+        return 4.0*F # 2 for the power and 2 the to match the paper definition with +/- sums
 
     # this one is simple... it is an eigenfunction of the laplacian
     def lapl(self,s):
         return -12.0*self.action(s)
     
 class Psi11t(Functional):
-    def action(self,s):
-        # first make the bonds
-        b = tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=2) + tr.roll(s,shifts=1,dims=2))
-        for mu in range(3,s.dim()):
-            b += tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=mu) + tr.roll(s,shifts=1,dims=mu))
-        
-        return tr.einsum('bxy,bxy->b',b,b)
 
-    def grad(self,s):
-        # first make the bonds
-        b = tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=2) + tr.roll(s,shifts=1,dims=2))
-        for mu in range(3,s.dim()):
-            b += tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=mu) + tr.roll(s,shifts=1,dims=mu))
-        bs = tr.einsum('bsxy,bxy->bsxy',s,b)
-        Fs = tr.zeros_like(s)
-        Fbs = tr.zeros_like(s)
-        Lsig = -tr.einsum('bsxy,sra->braxy',s,L)
-        for mu in range(2,s.dim()):
-            Fs +=tr.roll(s ,shifts= 1,dims=mu)+tr.roll(s ,shifts=-1,dims=mu)
-            Fbs+=tr.roll(bs,shifts= 1,dims=mu)+tr.roll(bs,shifts=-1,dims=mu) 
-        F = tr.einsum('baxy,bxy->baxy',Fs,b) + Fbs
-        F=tr.einsum('bsaxy,bsxy->baxy',Lsig,F)
+#    def action(self,s):
+#        # first make the bonds
+#        b = tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=2) + tr.roll(s,shifts=1,dims=2))
+#        for mu in range(3,s.dim()):
+#            b += tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=mu) + tr.roll(s,shifts=1,dims=mu))
         
-        return -2.0*F
+#        return tr.einsum('bxy,bxy->b',b,b)
+
+#slow
+#    def grad(self,s):
+#        # first make the bonds
+#        b = tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=2) + tr.roll(s,shifts=1,dims=2))
+#        for mu in range(3,s.dim()):
+#            b += tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=mu) + tr.roll(s,shifts=1,dims=mu))
+#        bs = tr.einsum('bsxy,bxy->bsxy',s,b)
+#        Fs = tr.zeros_like(s)
+#        Fbs = tr.zeros_like(s)
+#        Lsig = -tr.einsum('bsxy,sra->braxy',s,L)
+#        for mu in range(2,s.dim()):
+#            Fs +=tr.roll(s ,shifts= 1,dims=mu)+tr.roll(s ,shifts=-1,dims=mu)
+#            Fbs+=tr.roll(bs,shifts= 1,dims=mu)+tr.roll(bs,shifts=-1,dims=mu) 
+#        F = tr.einsum('baxy,bxy->baxy',Fs,b) + Fbs
+#        F=tr.einsum('bsaxy,bsxy->baxy',Lsig,F)
+#        
+#        return -2.0*F
+
+    def action(self,s):
+        M = dot3(s,s1_field(s)).unsqueeze(1)
+        return (M*M).flatten(1).sum(-1)
+    
+    def grad(self,s):
+        s1 = s1_field(s)
+        M = dot3(s,s1).unsqueeze(1)
+        sM = s*M
+        V = s1_field(sM)+ s1*M   
+        return 2*tr.cross(s,V, dim=1)
+   
+
 
     # this one is not simple...
     # I experimentally found the right constant to subract
@@ -255,7 +297,7 @@ class Psi3(Functional):
         for x1,y1 in DIRS:
             for x2,y2 in DIRS:
                 for x3,y3 in DIRS:
-                    f -= tr.cross(s,roll(s,x1+x2+x3, y1+y2+y3),dim=1)
+                    f -= tr.cross(roll(s,x1+x2+x3, y1+y2+y3),s,dim=1)
         return 2.0*f
     
     def lapl(self,s):
@@ -280,11 +322,11 @@ class Psi21(Functional):
         d2 = dot3(s,s2).unsqueeze(1)
         V  = s2*d1+sum(roll(sum(roll(s*d1,x,y) for x,y in DIRS),x,y) for x,y in DIRS)
         V += s1*d2 + sum(roll(s*d2,x,y) for x,y in DIRS) 
-        f = tr.cross(V,s,dim=1)
+        f = tr.cross(s,V,dim=1)
         return f
     
     def lapl(self,s):
-        return -4.0*self.action(s)*0 # WRONG
+        return -(10*self.action(s) - 2*Psi3().action(s) -16*Psi0().action(s))
 
 
 class Psi12d(Functional):
@@ -298,11 +340,11 @@ class Psi12d(Functional):
         Q = dot3(s1,s1).unsqueeze(1)
         M = dot3(s,s1).unsqueeze(1)
         V = s1*Q + sum(roll(Q*s+2.0*M*s1,x,y) for x,y in DIRS)
-        f = tr.cross(V,s,dim=1)
+        f = tr.cross(s,V,dim=1)
         return f
     
     def lapl(self,s):
-        return -4.0*self.action(s)*0 # WRONG
+        return -(8*self.action(s) -32*Psi0().action(s) +4*Psi12l().action(s))
 
 class Psi111(Functional):
     def action(self,s):
@@ -314,11 +356,11 @@ class Psi111(Functional):
         s1 = s1_field(s)
         M2 = dot3(s,s1).unsqueeze(1)**2
         V = s1*M2 + sum(roll(s*M2,x,y) for x,y in DIRS)
-        f = 3.0*tr.cross(V,s,dim=1)
+        f = 3.0*tr.cross(s,V,dim=1)
         return f
     
     def lapl(self,s):
-        return -4.0*self.action(s)*0 # WRONG
+        return -(18*self.action(s) - 6*Psi12d().action(s) -24*Psi0().action(s) + 6*Psi1l1().action(s))
 
 class Psi111c(Functional):
     def action(self,s):
@@ -375,31 +417,27 @@ class Psi111c(Functional):
                     V = V + roll(to_y3, -(dx1 + dx2 + dx3), -(dy1 + dy2 + dy3))
 
         # Lie components: ∂^a psi = (L^a s)·V = (s × V)_a
-        return tr.cross(V, s, dim=1)  # [B, 3, Lx, Ly]
+        return tr.cross(s,V, dim=1)  # [B, 3, Lx, Ly]
 
     
     def lapl(self,s):
-        return -4.0*self.action(s)*0 # WRONG
+        return -(16*self.action(s) -4*Psi21().action(s) -16*Psi0().action(s) -4*Psi12l().action(s) + 8*Psi1l1().action(s))
 
 
 class Psi12l(Functional):
+
     def action(self,s):
-        s1 = s1_field(s)
-        M = dot3(s,s1).unsqueeze(1)
-        sM = s*M
-        act = dot3(s,s1_field(sM))
-        
-        return act.flatten(1).sum(-1)
+        return sum(dot3(s,roll(s,x,y))*sum(dot3(s,roll(s,x+w,y+z)) for w,z in DIRS) for x,y in DIRS).flatten(1).sum(-1)
     
     def grad(self,s):
-        s1 = s1_field(s)
-        M = dot3(s,s1).unsqueeze(1)
-        sM = s*M
-        V = s1_field(sM)+ s1*M   
-        return 2*tr.cross(V, s, dim=1)
-    
+        V  = sum(roll(s,x,y)*sum(dot3(s,roll(s,x+w,y+z)).unsqueeze(1) for w,z in DIRS) for x,y in DIRS)
+        V += sum(roll(s,x,y)*sum(dot3(roll(s,x,y),roll(s,w,z)).unsqueeze(1) for w,z in DIRS) for x,y in DIRS)
+        V += sum((dot3(s,roll(s,x,y)).unsqueeze(1)*sum(roll(s,x+w,y+z) for w,z in DIRS)) for x,y in DIRS)
+        V += s1_field(sum((dot3(s,roll(s,x,y)).unsqueeze(1)*roll(s,x,y)) for x,y in DIRS))
+        return tr.cross(s,V, dim=1)
+        
     def lapl(self,s):
-        return -4.0*self.action(s)*0 # WRONG
+        return -(10*self.action(s) - 12*Psi0().action(s))
   
 class Psi1l1(Functional):
     def action(self,s):
@@ -418,10 +456,10 @@ class Psi1l1(Functional):
         V += K*s1
         V += sum((2*self.B(s,x,y)*roll(M,x,y)+ roll(K,x,y))*roll(s,x,y) for x,y in DIRS)
         
-        return tr.cross(V, s, dim=1)
+        return tr.cross(s,V, dim=1)
    
     def lapl(self,s):
-        return -4.0*self.action(s)*0 # WRONG
+        return -(20*self.action(s) -4*Psi12l().action(s) +4*Psi111l().action(s) -20*Psi0().action(s))
 
 class Psi111l(Functional):
     def action(self,s):
@@ -433,10 +471,10 @@ class Psi111l(Functional):
 
     def grad(self,s):
         V = sum(self.B(s,x,y)**2*roll(s,x,y) + self.B(s,-x,-y)**2*roll(s,-x,-y) for x,y in DIRS)  
-        return 3.0*tr.cross(V, s, dim=1)     
+        return 3.0*tr.cross(s,V, dim=1)     
        
     def lapl(self,s):
-        return -4.0*self.action(s)*0 # WRONG
+        return -(24*self.action(s) - 12*Psi0().action(s))
  
     
 class FlowAction(nn.Module):
@@ -466,7 +504,7 @@ def LieDeriv(func,s):
     #print(r.shape)
     F = func(r)
     g = tr.autograd.grad(F,r,grad_outputs=tr.ones_like(F), create_graph=True)[0]
-    return tr.cross(g, s, dim=1)
+    return tr.cross(s, g, dim=1)
     #return tr.einsum('bi...,aij,bj...->ba...',g,L,s) # slower
 
 def _distance_R_coloring(Lx, Ly, R=2, pbc=True):
@@ -685,8 +723,7 @@ def LieLaplacian_stoch(
 
 def NumericalLaplacian(s,action,eps):
     #print(s.size()[2:4])
-    o = o3.O3(s.size()[2:4],1.0,batch_size=s.size()[0],device=device)
-
+    
     Lap = tr.zeros(s.shape[0],device=device)
     A = action(s,1.0);
     for a in range(3):
@@ -695,14 +732,20 @@ def NumericalLaplacian(s,action,eps):
                 f = tr.ones_like(s)*1.0e-15
                 f[:,a,x,y]= tr.ones(s.shape[0],device=device)
                 #print(f.size())
-                sp = o.evolveQ(eps,f,s)
-                sm = o.evolveQ(-eps,f,s)
+                sp = so3_evolveQ(eps,f,s)
+                sm = so3_evolveQ(-eps,f,s)
                 Ap = action(sp,1.0)
                 Am = action(sm,1.0)
                 #print(Am,Ap,A)
                 Lap += (Ap + Am - 2*A)/eps**2
     return Lap
 
+def uniform_spin(batch,lat):
+    shape = list((batch,3,*lat))
+    s = tr.randn(shape)
+    s = s/s.norm(dim=1,keepdim=True).clamp_min(1e-14)
+    return s
+    
 import time
 def testDeriv(*Funcs):
     beta=1.2345
@@ -710,8 +753,7 @@ def testDeriv(*Funcs):
     Nd = len(lat)
     Vol = np.prod(lat)
     Bs = 32
-    o = o3.O3(lat,beta,batch_size=Bs)
-    sigma = o.hotStart()
+    sigma = uniform_spin(Bs,lat).to(dtype=dtype)
 
     print("Working lattice: ",sigma.shape)
 
@@ -721,6 +763,14 @@ def testDeriv(*Funcs):
         r = (autoG-g).norm()/g.norm()
         print("Testing gradient for: ",f.__class__.__name__,r.item())
 
+    h = 0.01
+    for f in Funcs:
+        g=f.grad(sigma)
+        rs = so3_evolve(h,g,sigma)
+        delta = ((f.action(rs) - f.action(sigma))/h).detach()
+        sign = (delta/delta.abs()).mean().item()
+        print("Testing gradient sign for: ",f.__class__.__name__,sign)
+                 
     for f in Funcs:
         tic = time.perf_counter()
         for k in range(1000):
@@ -735,14 +785,13 @@ def testLaplacian():
     Nd = len(lat)
     Vol = np.prod(lat)
     Bs = 32
-    o = o3.O3(lat,beta,batch_size=Bs)
-    sigma = o.hotStart()
+    sigma = uniform_spin(Bs,lat)
 
     print("Working lattice: ",sigma.shape)
     colors, ncolors = _distance_R_coloring(lat[0], lat[1], R=3)  # [Lx,Ly]
     colors = colors.to(dtype=tr.int64, device=sigma.device)
 
-    for f in (Psi0(),Psi2(),Psi11_l(),Psi11t(),Psi11(),Psi3()):
+    for f in (Psi0(),Psi2(),Psi11_l(),Psi11t(),Psi11(),Psi3(),Psi21(),Psi12d(),Psi111(),Psi111l(),Psi12l(),Psi111c(),Psi1l1()):
         autoLap = LieLaplacian(f.action,sigma,colors)
         lap = f.lapl(sigma)
         r = (autoLap+lap).norm()/lap.norm()
@@ -774,6 +823,9 @@ class Starget:
 
     def grad(self,s):
         return self.coef*Psi0().grad(s)
+
+    def mgrad(self,s,t):
+        return -self.grad(s,t)
     
     def mlapl(self,s):
         return -self.coef*Psi0.lapl(s)
@@ -791,6 +843,9 @@ class Sflow0:
 
     def grad(self,s):
         return self.coef*Psi0().grad(s)
+
+    def mgrad(self,s,t):
+        return -self.grad(s,t)
     
     def mlapl(self,s):
         return -self.coef*Psi0().lapl(s)
@@ -818,12 +873,69 @@ class Sflow1:
         for c, p in zip(self.c, self.psi):
             r += c * p.grad(s)
         return r
+
+    def mgrad(self,s,t):
+        return -self.grad(s,t)
     
     def mlapl(self,s):
         r = tr.zeros(s.shape[0],dtype=s.dtype,device=s.device)
         for c, p in zip(self.c, self.psi):
             r -= c * p.lapl(s)
         return r
+
+
+@dataclass
+class Sflow2:
+    beta   : float
+    lat    : List[int]
+    c      : List[float] = field(init=False)
+    psi    : List = field(init=False)
+    colors : tr.Tensor = field(init=False)
+    
+    def __post_init__(self):
+        coef = self.beta**3/8.0
+        self.c = [-1489.0/3000.0*coef, 
+                  +  29.0/ 200.0*coef, 
+                  -  11.0/ 100.0*coef,
+                  -   1.0/  30.0*coef,
+                  +   2.0/  90.0*coef,
+                  +   1.0/  40.0*coef,
+                  +  41.0/1500.0*coef,
+                  -   7.0/ 300.0*coef,
+                  +   7.0/1800.0*coef
+                  ]
+        self.psi = [Psi0(),
+                    Psi3(),
+                    Psi21(),
+                    Psi12d(),
+                    Psi111(),
+                    Psi111c(),
+                    Psi12l(),
+                    Psi1l1(),
+                    Psi111l()]
+
+        self.colors, ncolors = _distance_R_coloring(self.lat[0], self.lat[1], R=3)  # [Lx,Ly]
+        
+    def __call__(self,s):
+        r = tr.zeros(s.shape[0],dtype=s.dtype,device=s.device)
+        for c, p in zip(self.c, self.psi):
+            r += c * p.action(s)
+        return r
+
+
+    def grad(self,s):
+        r = tr.zeros_like(s)
+        for c, p in zip(self.c, self.psi):
+            r += c * p.grad(s)
+        return r
+
+    def mgrad(self,s,t):
+        return -self.grad(s,t)
+    
+    def mlapl(self,s):
+        colors = self.colors.to(dtype=tr.int64, device=s.device)
+        autoLap = LieLaplacian(self.__call__,s,colors)
+        return autoLap
 
 
 @dataclass
@@ -841,9 +953,36 @@ class SflowO1:
 
     def grad(self,s,t):
         return self.S0.grad(s) + t*self.S1.grad(s)
+
+    def mgrad(self,s,t):
+        return -self.grad(s,t)
     
     def mlapl(self,s,t):
         return self.S0.mlapl(s) + t*self.S1.mlapl(s)
+
+@dataclass
+class SflowO2:
+    beta : float
+    lat  : List[int]
+    S0 : Sflow0 = field(init=False)
+    S1 : Sflow1 = field(init=False)
+    S2 : Sflow2 = field(init=False)
+    def __post_init__(self):
+        self.S0 = Sflow0(self.beta)
+        self.S1 = Sflow1(self.beta)
+        self.S2 = Sflow2(self.beta,self.lat)
+        
+    def __call__(self,s,t):
+        return self.S0(s) + t*(self.S1(s) + t*self.S2(s))
+
+    def grad(self,s,t):
+        return self.S0.grad(s) + t*(self.S1.grad(s)+ t*self.S2.grad(s))
+
+    def mgrad(self,s,t):
+        return -self.grad(s,t)
+    
+    def mlapl(self,s,t):
+        return self.S0.mlapl(s) + t*(self.S1.mlapl(s)+ t*self.S2.mlapl(s))
     
     
 def testLuscher0():
@@ -853,8 +992,7 @@ def testLuscher0():
     Nd = len(lat)
     Vol = np.prod(lat)
     Bs = 32
-    o = o3.O3(lat,beta,batch_size=Bs)
-    sigma = o.hotStart()
+    sigma=uniform_spin(Bs,lat)
 
     colors, ncolors = _distance_R_coloring(lat[0], lat[1], R=1)  # [Lx,Ly]
     colors = colors.to(dtype=tr.int64, device=sigma.device)
@@ -881,9 +1019,8 @@ def testLuscher1():
     Nd = len(lat)
     Vol = np.prod(lat)
     Bs = 32
-    o = o3.O3(lat,beta,batch_size=Bs)
-    sigma = o.hotStart()
-
+    sigma=uniform_spin(Bs,lat)
+    
     colors, ncolors = _distance_R_coloring(lat[0], lat[1], R=2)  # [Lx,Ly]
     colors = colors.to(dtype=tr.int64, device=sigma.device)
 
@@ -898,16 +1035,45 @@ def testLuscher1():
     #print(r)
     print("Residual: ",(r.norm()/rhs.norm()).item())
 
-    
-def testLuscher():
-    print("Testing 1st Luscher equation using O(1) flow")
+
+
+def testLuscher2():
+    print("Testing 2nd order Luscher equation")
     beta=1.2345
     lat = [8,8]
     Nd = len(lat)
     Vol = np.prod(lat)
     Bs = 32
-    o = o3.O3(lat,beta,batch_size=Bs)
-    sigma = o.hotStart()
+    sigma=uniform_spin(Bs,lat)
+    
+    print("Working lattice: ",sigma.shape)
+    St = Starget(beta)
+    #Sf0 = Sflow0(beta)
+    Sf1 = Sflow1(beta)
+    Sf2 = Sflow2(beta,lat)
+    #C1 = - 2.0/3.0 * beta**2 * Vol
+    C2  = 0 
+    rhs = (Sf1.grad(sigma)*St.grad(sigma)).sum(tuple(range(1,sigma.dim())))
+    #r = LieLaplacian(Sf1,sigma,colors) + rhs -C1
+    lap = Sf2.mlapl(sigma)
+    r = lap + rhs
+    #r -= r.min()
+    print("mLap: ",lap)
+    print("dot : ",rhs)
+    print("res : ",r)
+    print("std res: ",r.std().item())
+    print("Residual: ",(r.norm()/rhs.norm()).item())
+
+    
+def testLuscher():
+    print("Testing Luscher equation using O(1) flow")
+    beta=1.2345
+    lat = [8,8]
+    Nd = len(lat)
+    Vol = np.prod(lat)
+    Bs = 64
+    sigma=uniform_spin(Bs,lat)
+    
     print("Working lattice: ",sigma.shape)
     St = Starget(beta)
     Sf = SflowO1(beta)
@@ -917,10 +1083,11 @@ def testLuscher():
     ftime = np.linspace(0,1.0,20)
     for t in ftime:
         rr = St(sigma) + Sf.mlapl(sigma,t) + t*(St.grad(sigma)*Sf.grad(sigma,t)).sum(tuple(range(1,sigma.dim())))-t*C1
-        r.append(rr.norm().item())
-        std.append(rr.std().item())
+        r.append(rr.norm().item()/sigma.shape[0])
+        std.append(rr.std().item()/np.sqrt(sigma.shape[0]))
     print(ftime,r,std)
     p = np.polyfit(ftime, r, deg=2)
+    print("Fitted polynomium: ",p)
     x = np.linspace(0,1.0,100)
     y = np.polyval(p,x)
     sp = np.polyfit(ftime,std,deg=2)
@@ -929,6 +1096,29 @@ def testLuscher():
     plt.plot(x,y,color='orange')
     # plot shaded error band
     plt.fill_between(x, y - dy, y + dy, color='orange', alpha=0.3)
+    plt.plot(ftime, r,'.',color='red')
+    
+    #plt.show()
+
+    #second order action
+    print("Testing Luscher equation using O(2) flow")
+    Sf2 = SflowO2(beta,lat)
+    r=[]
+    std=[]
+    for t in ftime:
+        rr = St(sigma) + Sf2.mlapl(sigma,t) + t*(St.grad(sigma)*Sf2.grad(sigma,t)).sum(tuple(range(1,sigma.dim())))-t*C1
+        r.append(rr.norm().item()/sigma.shape[0])
+        std.append(rr.std().item()/np.sqrt(sigma.shape[0]))
+    
+    p = np.polyfit(ftime, r, deg=3)
+    x = np.linspace(0,1.0,100)
+    y = np.polyval(p,x)
+    sp = np.polyfit(ftime,std,deg=3)
+    dy = np.polyval(sp,x)
+    print("Fitted polynomium: ",p)
+    plt.plot(x,y,color='cyan')
+    # plot shaded error band
+    plt.fill_between(x, y - dy, y + dy, color='cyan', alpha=0.3)
     plt.plot(ftime, r,'.',color='blue')
     
     plt.show()
@@ -971,6 +1161,8 @@ if __name__ == "__main__":
         testLuscher0()
     elif(args.t=='l1'):
         testLuscher1()
+    elif(args.t=='l2'):
+        testLuscher2()
     elif(args.t=='luscher'):
         testLuscher()
         
@@ -984,3 +1176,395 @@ if __name__ == "__main__":
     
 
     
+# =============================================================================
+# Lie–group Munthe–Kaas integrators for O(3) spins (S^2) with Jacobian tracking
+# Convention: grad(s,t) -> ω(s,t) in so(3); step: s -> exp(h*hat(ω)) s
+# mlapl(s,t) = -ΔS; ascent ⇒ div f = +Δ = -mlapl
+# =============================================================================
+
+import torch as tr
+
+def _unit_retract(s, eps=1e-12):
+    n = tr.clamp(tr.norm(s, dim=1, keepdim=True), min=eps)
+    return s / n
+
+def _rotate_by_omega(s, omega, h, eps=1e-12):
+    a = h * omega
+    theta = tr.clamp(tr.norm(a, dim=1, keepdim=True), min=eps)
+    u = a / theta
+    c = tr.cos(theta)
+    si = tr.sin(theta)
+    ux = tr.cross(u, s, dim=1)
+    uds = (u * s).sum(dim=1, keepdim=True)
+    return s * c + ux * si + u * uds * (1.0 - c)
+
+def _dexpinv_so3(v, w):
+    vw  = tr.cross(v, w, dim=1)
+    vvw = tr.cross(v, vw, dim=1)
+    return w - 0.5 * vw + (1.0/12.0) * vvw
+
+def _call_maybe_t(obj, name, s, t):
+    fn = getattr(obj, name)
+    with tr.enable_grad():
+        try:    return fn(s, t)
+        except TypeError: return fn(s)
+
+def _rkmk_step_lie(flow, s, t, h, butcher):
+    stages = len(butcher["b"])
+    ks = []
+    for i in range(stages):
+        v_i = tr.zeros_like(s) if i == 0 else sum(butcher["a"][i][j] * ks[j] for j in range(i))
+        s_i = _rotate_by_omega(s, v_i, 1.0)
+        t_i = t + butcher["c"][i] * h
+        omega_i = _call_maybe_t(flow, "grad", s_i, t_i)
+        k_i = _dexpinv_so3(v_i, h * omega_i)
+        ks.append(k_i)
+    v = sum(butcher["b"][i] * ks[i] for i in range(stages))
+    s_next = _rotate_by_omega(s, v, 1.0)
+    return _unit_retract(s_next)
+
+def integrate_rkmk2(flow, s0, *, t0=0.0, t1=1.0, n_steps=200):
+    butcher = {"c":[0.0,0.5],
+               "a":[[0.0,0.0],[0.5,0.0]],
+               "b":[0.0,1.0]}
+    s=_unit_retract(s0); h=(t1-t0)/float(n_steps); t=t0
+    t_grid = tr.linspace(t0,t1,n_steps+1, device=s.device, dtype=s.dtype)
+    with tr.no_grad():
+        for _ in range(n_steps):
+            s = _rkmk_step_lie(flow,s,t,h,butcher); t += h
+    return s, t_grid
+
+# ========= Lie–group implicit midpoint (time-reversible, 2nd order) =========
+# Solve u from:  u = h * ω( exp(0.5*u) s_n , t + 0.5*h )
+# Advance:       s_{n+1} = exp(u) s_n
+# Self-adjoint ⇒ Ψ_h^{-1} = Ψ_{-h} (to solver tolerance).
+def _lgim_solve_u(flow, s, t, h, *, tol=1e-10, max_iters=50, damping=1.0):
+    """
+    Fixed-point iteration for u in algebra (same shape as s):
+        u = h * omega( exp(0.5 u) s , t+0.5 h )
+    'damping' in (0,1] for robustness; 1.0 is standard.
+    """
+    u = tr.zeros_like(s)
+    th = t + 0.5 * h
+    for _ in range(max_iters):
+        s_mid = _rotate_by_omega(s, u, 0.5)                  # exp(0.5*u) s
+        omega_mid = _call_maybe_t(flow, "grad", s_mid, th)   # ω(s_mid, t+0.5h)
+        u_new = damping * (h * omega_mid) + (1.0 - damping) * u
+        # termination on algebra increment change
+        if tr.max(tr.norm(u_new - u, dim=1)) < tol:
+            u = u_new
+            break
+        u = u_new
+    return u
+
+def integrate_lgim(flow, s0, *, t0=0.0, t1=1.0, n_steps=200, tol=1e-10, max_iters=50, damping=1.0):
+    s = _unit_retract(s0); h = (t1 - t0) / float(n_steps); t = t0
+    t_grid = tr.linspace(t0, t1, n_steps + 1, device=s.device, dtype=s.dtype)
+    with tr.no_grad():
+        for _ in range(n_steps):
+            u = _lgim_solve_u(flow, s, t, h, tol=tol, max_iters=max_iters, damping=damping)
+            s = _unit_retract(_rotate_by_omega(s, u, 1.0))
+            t += h
+    return s, t_grid
+
+def integrate_lgim_with_logdet(flow, s0, *, t0=0.0, t1=1.0, n_steps=200, tol=1e-10, max_iters=50, damping=1.0):
+    # ascent + mlapl=-Δ  ⇒  div f = +Δ = -mlapl, evaluated at the midpoint
+    s = _unit_retract(s0); h = (t1 - t0) / float(n_steps); t = t0
+    B = s.size(0); logdet = tr.zeros(B, device=s.device, dtype=s.dtype)
+    with tr.no_grad():
+        for _ in range(n_steps):
+            u = _lgim_solve_u(flow, s, t, h, tol=tol, max_iters=max_iters, damping=damping)
+            s_mid = _rotate_by_omega(s, u, 0.5)
+            tau_mid = - _call_maybe_t(flow, "mlapl", s_mid, t + 0.5*h)  # [B]
+            logdet = logdet + h * tau_mid
+            s = _unit_retract(_rotate_by_omega(s, u, 1.0))
+            t += h
+    return s, logdet
+
+# Back to higher orderd RK type integrators
+def integrate_rkmk3(flow, s0, *, t0=0.0, t1=1.0, n_steps=200):
+    butcher = {"c":[0.0,0.5,1.0],
+               "a":[[0,0,0],[0.5,0,0],[-1,2,0]],
+               "b":[1/6,2/3,1/6]}
+    s=_unit_retract(s0); h=(t1-t0)/float(n_steps); t=t0
+    t_grid = tr.linspace(t0,t1,n_steps+1, device=s.device, dtype=s.dtype)
+    with tr.no_grad():
+        for _ in range(n_steps):
+            s = _rkmk_step_lie(flow,s,t,h,butcher); t += h
+    return s, t_grid
+
+def integrate_rkmk4(flow, s0, *, t0=0.0, t1=1.0, n_steps=200):
+    butcher = {"c":[0.0,0.5,0.5,1.0],
+               "a":[[0,0,0,0],[0.5,0,0,0],[0,0.5,0,0],[0,0,1,0]],
+               "b":[1/6,1/3,1/3,1/6]}
+    s=_unit_retract(s0); h=(t1-t0)/float(n_steps); t=t0
+    t_grid = tr.linspace(t0,t1,n_steps+1, device=s.device, dtype=s.dtype)
+    with tr.no_grad():
+        for _ in range(n_steps):
+            s = _rkmk_step_lie(flow,s,t,h,butcher); t += h
+    return s, t_grid
+
+integrate_rk4 = integrate_rkmk4  # alias
+
+# ========= Gauss–Legendre 2-stage collocation (order 4), symmetric =========
+# Stages at c = 1/2 ± sqrt(3)/6; A = [[1/4, 1/4 - r],[1/4 + r, 1/4]], b=[1/2,1/2], r = sqrt(3)/6.
+# MK formulation:
+#   v_i = sum_j A_{ij} k_j
+#   k_i = dexp^{-1}_{v_i}( h * ω( exp(v_i) s_n , t + c_i h ) )
+# Then v = sum_i b_i k_i, s_{n+1} = exp(v) s_n.
+
+def _rkmk_gl4_step(flow, s, t, h, *, tol=1e-10, max_iters=50, damping=1.0):
+    r = (3.0 ** 0.5) / 6.0
+    A11, A12 = 0.25, 0.25 - r
+    A21, A22 = 0.25 + r, 0.25
+    c1, c2 = 0.5 - r, 0.5 + r
+    b1 = b2 = 0.5
+
+    k1 = tr.zeros_like(s)
+    k2 = tr.zeros_like(s)
+
+    for _ in range(max_iters):
+        v1 = A11 * k1 + A12 * k2
+        v2 = A21 * k1 + A22 * k2
+        s1 = _rotate_by_omega(s, v1, 1.0)
+        s2 = _rotate_by_omega(s, v2, 1.0)
+        t1 = t + c1 * h
+        t2 = t + c2 * h
+        w1 = _call_maybe_t(flow, "grad", s1, t1)
+        w2 = _call_maybe_t(flow, "grad", s2, t2)
+        k1_new = _dexpinv_so3(v1, h * w1)
+        k2_new = _dexpinv_so3(v2, h * w2)
+        # damped Picard update
+        dk1 = k1_new - k1
+        dk2 = k2_new - k2
+        k1 = k1 + damping * dk1
+        k2 = k2 + damping * dk2
+        if max(tr.max(tr.norm(dk1, dim=1)).item(), tr.max(tr.norm(dk2, dim=1)).item()) < tol:
+            break
+
+    v = b1 * k1 + b2 * k2
+    s_next = _unit_retract(_rotate_by_omega(s, v, 1.0))
+    return s_next
+
+def integrate_rkmk_gl4(flow, s0, *, t0=0.0, t1=1.0, n_steps=200, tol=1e-10, max_iters=50, damping=1.0):
+    s = _unit_retract(s0); h = (t1 - t0) / float(n_steps); t = t0
+    t_grid = tr.linspace(t0, t1, n_steps + 1, device=s.device, dtype=s.dtype)
+    with tr.no_grad():
+        for _ in range(n_steps):
+            s = _rkmk_gl4_step(flow, s, t, h, tol=tol, max_iters=max_iters, damping=damping)
+            t += h
+    return s, t_grid
+
+def integrate_rkmk_gl4_with_logdet(flow, s0, *, t0=0.0, t1=1.0, n_steps=200, tol=1e-10, max_iters=50, damping=1.0):
+    # ascent + mlapl=-Δ  ⇒  per-step τ = h * (b1*tau1 + b2*tau2), tau_i = -mlapl(s_i, t_i)
+    r = (3.0 ** 0.5) / 6.0
+    A11, A12 = 0.25, 0.25 - r
+    A21, A22 = 0.25 + r, 0.25
+    c1, c2 = 0.5 - r, 0.5 + r
+    b1 = b2 = 0.5
+
+    s = _unit_retract(s0); h = (t1 - t0) / float(n_steps); t = t0
+    B = s.size(0); logdet = tr.zeros(B, device=s.device, dtype=s.dtype)
+    with tr.no_grad():
+        for _ in range(n_steps):
+            # coupled stage solve
+            k1 = tr.zeros_like(s); k2 = tr.zeros_like(s)
+            for _it in range(max_iters):
+                v1 = A11 * k1 + A12 * k2
+                v2 = A21 * k1 + A22 * k2
+                s1 = _rotate_by_omega(s, v1, 1.0)
+                s2 = _rotate_by_omega(s, v2, 1.0)
+                t1 = t + c1 * h
+                t2 = t + c2 * h
+                w1 = _call_maybe_t(flow, "grad", s1, t1)
+                w2 = _call_maybe_t(flow, "grad", s2, t2)
+                k1_new = _dexpinv_so3(v1, h * w1)
+                k2_new = _dexpinv_so3(v2, h * w2)
+                dk1 = k1_new - k1; dk2 = k2_new - k2
+                k1 = k1 + damping * dk1; k2 = k2 + damping * dk2
+                if max(tr.max(tr.norm(dk1, dim=1)).item(), tr.max(tr.norm(dk2, dim=1)).item()) < tol:
+                    break
+            # accumulate divergence at stage states
+            tau1 = - _call_maybe_t(flow, "mlapl", s1, t1)  # [B]
+            tau2 = - _call_maybe_t(flow, "mlapl", s2, t2)  # [B]
+            logdet = logdet + h * (b1 * tau1 + b2 * tau2)
+            # advance
+            v = b1 * k1 + b2 * k2
+            s = _unit_retract(_rotate_by_omega(s, v, 1.0))
+            t += h
+    return s, logdet
+
+# ---------- with log|det J| ----------
+_FLOW_SIGN_FOR_LOGDET = -1.0  # ascent with mlapl = -Δ
+
+def _rkmk_step_lie_with_logdet(flow, s, t, h, butcher):
+    ks, taus = [], []
+    stages = len(butcher["b"])
+    for i in range(stages):
+        v_i = tr.zeros_like(s) if i==0 else sum(butcher["a"][i][j]*ks[j] for j in range(i))
+        s_i = _rotate_by_omega(s, v_i, 1.0)
+        t_i = t + butcher["c"][i]*h
+        omega_i = _call_maybe_t(flow, "grad", s_i, t_i)
+        k_i = _dexpinv_so3(v_i, h*omega_i)
+        ks.append(k_i)
+        tau_i = _FLOW_SIGN_FOR_LOGDET * _call_maybe_t(flow, "mlapl", s_i, t_i)  # [B]
+        taus.append(tau_i)
+    v = sum(butcher["b"][i]*ks[i] for i in range(stages))
+    s_next = _unit_retract(_rotate_by_omega(s, v, 1.0))
+    tau_step = sum(butcher["b"][i]*taus[i] for i in range(stages))  # [B]
+    return s_next, tau_step
+
+def integrate_rkmk2_with_logdet(flow, s0, *, t0=0.0, t1=1.0, n_steps=200):
+    butcher = {"c":[0.0,0.5],
+               "a":[[0.0,0.0],[0.5,0.0]],
+               "b":[0.0,1.0]}
+    s=_unit_retract(s0); h=(t1-t0)/float(n_steps); t=t0
+    logdet = tr.zeros(s.size(0), device=s.device, dtype=s.dtype)
+    with tr.no_grad():
+        for _ in range(n_steps):
+            s, tau = _rkmk_step_lie_with_logdet(flow, s, t, h, butcher)
+            logdet = logdet + h * tau
+            t += h
+    return s, logdet
+
+def integrate_rkmk3_with_logdet(flow, s0, *, t0=0.0, t1=1.0, n_steps=200):
+    butcher = {"c":[0.0,0.5,1.0],
+               "a":[[0,0,0],[0.5,0,0],[-1,2,0]],
+               "b":[1/6,2/3,1/6]}
+    s=_unit_retract(s0); h=(t1-t0)/float(n_steps); t=t0
+    logdet = tr.zeros(s.size(0), device=s.device, dtype=s.dtype)
+    with tr.no_grad():
+        for _ in range(n_steps):
+            s, tau = _rkmk_step_lie_with_logdet(flow, s, t, h, butcher)
+            logdet = logdet + h * tau
+            t += h
+    return s, logdet
+
+def integrate_rkmk4_with_logdet(flow, s0, *, t0=0.0, t1=1.0, n_steps=200):
+    butcher = {"c":[0.0,0.5,0.5,1.0],
+               "a":[[0,0,0,0],[0.5,0,0,0],[0,0.5,0,0],[0,0,1,0]],
+               "b":[1/6,1/3,1/3,1/6]}
+    s=_unit_retract(s0); h=(t1-t0)/float(n_steps); t=t0
+    logdet = tr.zeros(s.size(0), device=s.device, dtype=s.dtype)
+    with tr.no_grad():
+        for _ in range(n_steps):
+            s, tau = _rkmk_step_lie_with_logdet(flow, s, t, h, butcher)
+            logdet = logdet + h * tau
+            t += h
+    return s, logdet
+
+# ---------- Dormand–Prince 5(4) MK (adaptive) ----------
+def integrate_rkmk_dp5(flow, s0, *, t0=0.0, t1=1.0, rtol=1e-5, atol=1e-7,
+                        h_init=None, h_min=None, h_max=None, safety=0.9,
+                        max_steps=100000, record=False):
+    c = [0.0, 1/5, 3/10, 4/5, 8/9, 1.0, 1.0]
+    a = [[0,0,0,0,0,0,0],
+         [1/5,0,0,0,0,0,0],
+         [3/40,9/40,0,0,0,0,0],
+         [44/45,-56/15,32/9,0,0,0,0],
+         [19372/6561,-25360/2187,64448/6561,-212/729,0,0,0],
+         [9017/3168,-355/33,46732/5247,49/176,-5103/18656,0,0],
+         [35/384,0,500/1113,125/192,-2187/6784,11/84,0]]
+    b5 = [35/384,0,500/1113,125/192,-2187/6784,11/84,0]
+    b4 = [5179/57600,0,7571/16695,393/640,-92097/339200,187/2100,1/40]
+
+    s=_unit_retract(s0); device, dtype=s.device, s.dtype
+    t=t0; direction=1.0 if t1>=t0 else -1.0; T=abs(t1-t0)
+
+    if h_init is None: h = T/50.0 if T>0 else 1.0
+    else: h = abs(h_init)
+    if h_min is None: h_min = T/10_000.0 if T>0 else 1e-6
+    if h_max is None: h_max = T/5.0 if T>0 else 1.0
+
+    steps=0
+    ts=[t] if record else None
+    states=[s.clone()] if record else None
+
+    with tr.no_grad():
+        while (t-t0)*direction < T and steps < max_steps:
+            h = min(h, (t1-t)*direction)
+            ks=[]
+            for i in range(7):
+                v_i = sum(a[i][j]*ks[j] for j in range(i)) if i>0 else tr.zeros_like(s)
+                s_i = _rotate_by_omega(s, v_i, 1.0)
+                t_i = t + c[i]*h
+                omega_i = _call_maybe_t(flow, "grad", s_i, t_i)
+                k_i = _dexpinv_so3(v_i, h*omega_i)
+                ks.append(k_i)
+
+            v5 = sum(b5[i]*ks[i] for i in range(7))
+            v4 = sum(b4[i]*ks[i] for i in range(7))
+            e_v = v5 - v4
+            scale = atol + rtol * tr.maximum(tr.norm(v5, dim=1, keepdim=True), tr.tensor(1.0, device=device, dtype=dtype))
+            err = tr.sqrt(tr.mean(((e_v/scale)**2)))
+
+            accept = (err<=1.0) or (abs(h)<=1.01*abs(h_min))
+            if accept:
+                s = _unit_retract(_rotate_by_omega(s, v5, 1.0))
+                t = t + h
+                steps += 1
+                if record:
+                    ts.append(t); states.append(s.clone())
+
+            factor = 2.0 if err==0.0 else safety * float(err ** (-1.0/5.0))
+            h = min(max(h_min, abs(h) * max(0.2, min(5.0, factor))), h_max)
+            h *= direction
+
+    info={"n_steps":steps,"t_final":t,"accepted":(abs(t-t1)<1e-12)}
+    if record: return s, (tr.tensor(ts,dtype=dtype,device=device), states), info
+    return s, info
+
+def integrate_rkmk_dp5_with_logdet(flow, s0, *, t0=0.0, t1=1.0, rtol=1e-5, atol=1e-7,
+                                   h_init=None, h_min=None, h_max=None, safety=0.9,
+                                   max_steps=100000):
+    c = [0.0, 1/5, 3/10, 4/5, 8/9, 1.0, 1.0]
+    a = [[0,0,0,0,0,0,0],
+         [1/5,0,0,0,0,0,0],
+         [3/40,9/40,0,0,0,0,0],
+         [44/45,-56/15,32/9,0,0,0,0],
+         [19372/6561,-25360/2187,64448/6561,-212/729,0,0,0],
+         [9017/3168,-355/33,46732/5247,49/176,-5103/18656,0,0],
+         [35/384,0,500/1113,125/192,-2187/6784,11/84,0]]
+    b5 = [35/384,0,500/1113,125/192,-2187/6784,11/84,0]
+    b4 = [5179/57600,0,7571/16695,393/640,-92097/339200,187/2100,1/40]
+
+    s=_unit_retract(s0); device, dtype=s.device, s.dtype
+    t=t0; direction=1.0 if t1>=t0 else -1.0; T=abs(t1-t0)
+    logdet = tr.zeros(s.size(0), device=device, dtype=dtype)
+
+    if h_init is None: h = T/50.0 if T>0 else 1.0
+    else: h = abs(h_init)
+    if h_min is None: h_min = T/10_000.0 if T>0 else 1e-6
+    if h_max is None: h_max = T/5.0 if T>0 else 1.0
+
+    steps=0
+    with tr.no_grad():
+        while (t-t0)*direction < T and steps < max_steps:
+            h = min(h, (t1-t)*direction)
+            ks=[]; taus=[]
+            for i in range(7):
+                v_i = sum(a[i][j]*ks[j] for j in range(i)) if i>0 else tr.zeros_like(s)
+                s_i = _rotate_by_omega(s, v_i, 1.0)
+                t_i = t + c[i]*h
+                omega_i = _call_maybe_t(flow, "grad", s_i, t_i)
+                k_i = _dexpinv_so3(v_i, h*omega_i)
+                ks.append(k_i)
+                tau_i = (-1.0) * _call_maybe_t(flow, "mlapl", s_i, t_i)  # ascent: div = -mlapl
+                taus.append(tau_i)
+            v5 = sum(b5[i]*ks[i] for i in range(7))
+            v4 = sum(b4[i]*ks[i] for i in range(7))
+            e_v = v5 - v4
+            scale = atol + rtol * tr.maximum(tr.norm(v5, dim=1, keepdim=True), tr.tensor(1.0, device=device, dtype=dtype))
+            err = tr.sqrt(tr.mean(((e_v/scale)**2)))
+            accept = (err<=1.0) or (abs(h)<=1.01*abs(h_min))
+            if accept:
+                s = _unit_retract(_rotate_by_omega(s, v5, 1.0))
+                tau_step = sum(b5[i]*taus[i] for i in range(7))
+                logdet = logdet + h * tau_step
+                t = t + h
+                steps += 1
+            factor = 2.0 if err==0.0 else 0.9 * float(err ** (-1.0/5.0))
+            h = min(max(h_min, abs(h) * max(0.2, min(5.0, factor))), h_max); h *= direction
+
+    info={"n_steps":steps,"t_final":t,"accepted":(abs(t-t1)<1e-12)}
+    return s, logdet, info
