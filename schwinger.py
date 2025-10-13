@@ -766,107 +766,67 @@ class schwinger():
             
         return ensembleL, ensembleR, summed
     
+    #Input:Batch of factorized propogators
+    #Output: Measurements of two point correlator binned by timeslice separation
+    def measure_Factorized_Two_Point_Correlator(self, q, f_propogator, xcut_1, xcut_2, bw, overlap):
+        
+        d_inv = tr.inverse(self.diracOperator(q[0]).to_dense())
+        max_length = int((self.V[0])/2)
+        
+        #1/2 for middle, then x2 for dirac space
+        mid_x = self.V[1]
+
+        #Accounts for shifting of the lattice indices in the factorizing process
+        sink_adj = -2*(xcut_1)*self.V[1]
+        if overlap == True:
+            source_adj = 2*bw*self.V[1]
+        else:
+            source_adj = 2*self.V[1]
+        
+        sink_ts = xcut_1 + bw
+
+        #factorized_corr_magnitude = tr.zeros((max_length - 1, self.Bs))
+        factorized_corr_magnitude = [None]* (max_length-bw)
+        corr_magnitude = [None] * (max_length-bw)
+        #corr_magnitude = tr.zeros((max_length - 1, self.Bs))
+        while sink_ts < xcut_2:
+            source_ts = 0
+            while source_ts < xcut_1:
+                source_x = mid_x + 2*self.V[1]*source_ts + source_adj
+                sink_x = mid_x + 2*self.V[1]*sink_ts + sink_adj
+                factorized_prop = f_propogator[:, sink_x:sink_x+2, source_x:source_x+2]
+                factorized_corr = tr.sum(tr.einsum('bij, bkj-> bik', factorized_prop, factorized_prop.conj()), dim=(1,2))
+
+                #Take an unfactorized measurement as well
+                source_x = source_x - source_adj
+                sink_x = sink_x - sink_adj
+                prop = d_inv[:, sink_x:sink_x+2, source_x:source_x+2]
+                corr = tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2))
+
+                #Save correlator measurements to matrix
+                #First record distance between timeslices
+                dist = min(sink_ts - source_ts, source_ts + self.V[0] - sink_ts)
+                if corr_magnitude[dist-bw-1] == None:
+                    factorized_corr_magnitude[dist- bw -1] = factorized_corr
+                    corr_magnitude[dist- bw - 1] = corr
+                else:
+                    temp = tr.cat((factorized_corr_magnitude[dist- bw -1], factorized_corr), 0)
+                    factorized_corr_magnitude[dist-bw -1] = temp
+                    #factorized_corr_magnitude[dist - 1, :] = tr.cat((factorized_corr_magnitude[dist - 1, :],
+                    #                                                      factorized_corr), dim=0)
+                    temp = tr.cat((corr_magnitude[dist-bw -1], corr), 0)
+                    corr_magnitude[dist-bw -1] = temp
+                    #corr_magnitude[dist - 1, :] = tr.cat((corr_magnitude[dist - 1, :],
+                    #                                                      corr), dim=0)
+                source_ts += 1
+            print("sink position: ", sink_ts)
+            sink_ts += 1
+
+
+
+        return factorized_corr_magnitude, corr_magnitude
+
     
-    #Input: Ensemble on the left and right side of factorized propogator samples
-    #Output: Pion correlator computed from factorized sample measurements, ensemble averaged
-    #and propogated error from subdomain averaging
-    #TODO: Check propogation of error is correct
-    def factorized_Pion(self, ensemble_L, ensemble_R, inter,  s_range, p):
-
-        #Assume enesemble L/R comes in batch, level 2 config, intermediate, dirac spinor
-        #entries
-
-        left_avg = tr.mean(ensemble_L, dim=1)
-        right_avg = tr.mean(ensemble_R, dim=1)
-
-        left_std = tr.std(ensemble_L, dim=1)
-        right_std = tr.std(ensemble_R, dim=1)
-
-
-        #Kronecker product of dirac entries by intermediate
-        combined = tr.einsum('bix, biy-> bixy', left_avg, right_avg).view((self.Bs, tr.numel(inter),
-                                                                        self.V[0]*self.V[1]*2,
-                                                                        self.V[0]*self.V[1]*2))
-        
-        combined_std = tr.zeros_like(combined)
-        for x in np.arange(tr.numel(right_std)):
-            for y in np.arange(tr.numel(left_std)):
-                combined_std[:, :, y, x] = combined[:, :, y, x]* \
-                tr.sqrt(tr.square(right_std[:, :, x]/right_avg[:,:,x]) + 
-                        tr.square(left_std[:,:,y] / left_avg[:, :, y]))
-        
-        prop_matrix = tr.sum(combined, dim=1)
-
-        #Propogate error through 1st order contribution summing
-        prop_matrix_var = tr.zeros_like(prop_matrix)
-        for i in np.arange(tr.numel(inter)):
-            prop_matrix_var = prop_matrix_var + tr.square(combined_std[:, i, :,:])
-
-        prop_matrix_std = tr.sqrt(prop_matrix_var)
-        
-
-        ev = tr.zeros([self.Bs, self.V[0]])
-        ev_err = tr.zeros_like(ev)
-
-        for ts in s_range:
-            #spacetime lattice index of source
-            sx = self.V[1]*ts
-
-            for nt in np.arange(self.V[0]):
-                c = tr.zeros(self.Bs)
-                var_c = tr.zeros_like(c)
-                for nx in np.arange(self.V[1]):
-                    #Must be doubled to account for dirac space!
-                    n = 2*(self.V[1] * nt + nx)
-
-                    s1 = prop_matrix[:, n:n+2, 2*sx:2*sx+2]
-                    s1_ct = s1.conj().transpose(1,2)
-                    s1_err = prop_matrix_std[:, n:n+2, 2*sx:2*sx+2]
-                    s1_err_ct = s1_err.conj().transpose(1,2)
-                    s2 = tr.einsum('bxy, byz -> bxz', s1, s1.conj().transpose(1,2))
-                    s2_var = tr.zeros_like(s2)
-
-                    #Propogating error through the matrix multiplication
-                    #Ugly code, but can't think of a cleaner way to write this
-                    s2_var[:,0,0] = tr.square(s1[:,0,0]*s1_ct[:,0,0]) *tr.sqrt(tr.square(s1_err[:,0,0]/s1[:,0,0])
-                                    + tr.square(s1_err_ct[:,0,0]/s1_ct[:,0,0])) + \
-                                    tr.square(s1[:,0,1]*s1_ct[:,1,0]) *tr.sqrt(tr.square(s1_err[:,0,1]/s1[:,0,1])
-                                    + tr.square(s1_err_ct[:,1,0]/s1_ct[:,1,0]))
-                    
-                    s2_var[:,0,1] = tr.square(s1[:,0,0]*s1_ct[:,0,1]) *tr.sqrt(tr.square(s1_err[:,0,0]/s1[:,0,0])
-                                    + tr.square(s1_err_ct[:,0,1]/s1_ct[:,0,1])) + \
-                                    tr.square(s1[:,0,1]*s1_ct[:,1,1]) *tr.sqrt(tr.square(s1_err[:,0,1]/s1[:,0,1])
-                                    + tr.square(s1_err_ct[:,1,1]/s1_ct[:,1,1]))
-                    
-                    s2_var[:,1,0] = tr.square(s1[:,1,0]*s1_ct[:,0,0]) *tr.sqrt(tr.square(s1_err[:,1,0]/s1[:,1,0])
-                                    + tr.square(s1_err_ct[:,0,0]/s1_ct[:,0,0])) + \
-                                    tr.square(s1[:,1,1]*s1_ct[:,1,0]) *tr.sqrt(tr.square(s1_err[:,1,1]/s1[:,1,1])
-                                    + tr.square(s1_err_ct[:,1,0]/s1_ct[:,1,0]))
-                    
-                    s2_var[:,1,1] = tr.square(s1[:,1,0]*s1_ct[:,0,1]) *tr.sqrt(tr.square(s1_err[:,1,0]/s1[:,1,0])
-                                    + tr.square(s1_err_ct[:,0,1]/s1_ct[:,0,1])) + \
-                                    tr.square(s1[:,1,1]*s1_ct[:,1,1]) *tr.sqrt(tr.square(s1_err[:,1,1]/s1[:,1,1])
-                                    + tr.square(s1_err_ct[:,1,1]/s1_ct[:,1,1]))
-
-                    #B length vector
-                    c = c - np.exp(-1.0j*nx*p)*tr.sum(s2, dim=(1,2))
-
-                    var_c = var_c - np.exp(-1.0j*nx*p) *tr.sum(s2_var, dim=(1,2))
-
-
-
-                #BxL tensor
-                # values of c are verified as real- cast them to real to avoid error message        
-                ev[:, nt] = ev[:, nt] +  tr.real(c)
-                ev_err[:, nt] = ev_err[:,nt] + tr.real(tr.sqrt(var_c))
-
-        #Average over the sources
-        ev = ev / (len(s_range))
-        ev_err = ev_err /(len(s_range))
-
-        return ev / np.sqrt(1.0*self.V[1]), ev_err/np.sqrt(1.0*self.V[1])
-
-
 
     #TODO: Compute systematic error between approx and full propogator approach
     #Input: field configuration, frozen boundary timeslices and width, inverse of Dirac matrix in boundaries,

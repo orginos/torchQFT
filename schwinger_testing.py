@@ -237,10 +237,10 @@ def quenched_pi_plus_mass():
     #Measurement process -given function for correlator of pi plus
     batch_size=1000
     #lam =np.sqrt(1.0/0.970)
-    lam = np.sqrt(1.0/4.0)
-    mass= 0.4
-    L = 16
-    L2 = 8
+    lam = np.sqrt(1.0/10.0)
+    mass= -0.10*lam
+    L = 32
+    L2 = 16
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     #Average correlation function for each lattice timeslice
@@ -256,7 +256,7 @@ def quenched_pi_plus_mass():
     sim = h.hmc(sch, im2, False)
     
     #Bring lattice to equilibrium
-    q = sim.evolve_f(q, 5)
+    q = sim.evolve_f(q, 200)
 
 
 
@@ -860,19 +860,177 @@ def autograd_pi_plus_mass():
 #Fit function for pion triplet
 #TODO: N_T is hardcoded- way to pass in fitting process?
 def f_pi_triplet(x, m, A):
-    N_T = 10
+    N_T = 32
     return A* (np.exp(-m *x) + np.exp(-(N_T - x)*m))
 
 #Fit for analytical pion mass as a function of quark mass and coupling to fit critical mas
 def f_analytical_pi_triplet(x, mc):
     #Coupling
     lam = 1.0/np.sqrt(10.0)
-    return 2.066*np.power(((x-mc)/lam)**2, 1.0/3.0) * lam
+    return 2.066*tr.pow(((x-mc)/lam)**2, 1.0/3.0) * lam
 
 
 #Fit function for finite volume effects
 def f_FV_Mass(L, m_inf, A):
     return m_inf + A*(np.sqrt(m_inf)/np.sqrt(L))*np.exp(-m_inf*L)
+
+
+#Effective mass curve looks OK to eye test- run a fit on the curve to estimate mass
+def quenched_Pion_Triplet_Fit():
+    #Measurement process -given function for correlator of pi plus
+    batch_size=50
+    #lam =np.sqrt(1.0/0.970)
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass... Need critical mass offset for analytical comparison
+    mass= 0.1*lam
+    L = 32
+    L2 = 16
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+
+    u = sch.hotStart()
+
+
+    #Define q as a tuple of the gauge field, psuedofermion field, Dirac operator
+    q =(u,)
+
+    #Tune integrator to desired step size
+    im2 = i.minnorm2(sch.force,sch.evolveQ,25, 1.0)
+    sim = h.hmc(sch, im2, False)
+    
+    #Equilibration
+    q = sim.evolve_f(q, 100)
+
+
+
+    #Measurement process- nm measurements on batches
+    nm = 10
+    for n in np.arange(nm):
+        #Discard some in between
+        q= sim.evolve_f(q, 50)
+        d = sch.diracOperator(q[0])
+        d_inv = tr.linalg.inv(d.to_dense())
+
+            
+        #Vector of time slice correlations
+        cl = sch.exact_Pion_Correlator(d_inv, (0,), 0)
+        if n ==0:
+            c = cl
+        else:
+            c= tr.cat((c, cl), 0)
+        print(n)
+
+    #Average over all batches and configurations measured
+    c_avg = tr.mean(c, dim=0)
+    c_err = (tr.std(c, dim=0)/np.sqrt(tr.numel(c[:,0]) - 1))
+
+    #Write dataframe of data
+
+    df = pd.DataFrame([c_avg.detach().numpy(), c_err.detach().numpy()])
+    #TODO: Write more descriptive datafile name
+    df.to_csv("output.csv", index = False)
+
+    #Fit the effective mass curve
+    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(10, 21), tr.abs(c_avg[10:21]), sigma = tr.abs(c_err[10:21]))
+    print(popt)
+    print(pcov)
+
+    m_eff = np.log(c_avg[:L-1]/c_avg[1:]) 
+
+    print(m_eff)
+
+
+    fig, ax1 = plt.subplots(1,1)
+
+    ax1.set_yscale('log', nonpositive='clip')
+
+    #Plot the fit
+    ax1.plot(np.linspace(0, L, 500), f_pi_triplet(np.linspace(0, L, 500), popt[0], popt[1]))
+
+
+    ax1.errorbar(np.arange(0, L), tr.abs(c_avg), tr.abs(c_err), ls="", marker=".")
+    ax1.set_title(str(batch_size * nm) + ' config '+ str(L) + 'x' + str(L2) + r' lattice, $\beta$ = ' + str(1/lam**2) +' m=' + str(mass))
+
+    plt.show()
+
+
+def compute_Quenched_Critical_Mass():
+    #Measurement process -given function for correlator of pi plus
+    batch_size=50
+    #lam =np.sqrt(1.0/0.970)
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass... Need critical mass offset for analytical comparison
+    L = 32
+    L2 = 16
+
+    mq_list = tr.linspace(-0.1*lam, 0.0, 20, dtype=tr.complex64)
+    m_pi_list = tr.zeros_like(mq_list)
+    m_pi_err_list = tr.zeros_like(mq_list)
+    x=0
+
+    for mass in mq_list:
+        sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+
+        u = sch.hotStart()
+
+
+        #Define q as a tuple of the gauge field, psuedofermion field, Dirac operator
+        q =(u,)
+
+        #Tune integrator to desired step size
+        im2 = i.minnorm2(sch.force,sch.evolveQ,25, 1.0)
+        sim = h.hmc(sch, im2, False)
+        
+        #Equilibration
+        q = sim.evolve_f(q, 100)
+
+
+
+        #Measurement process- nm measurements on batches
+        nm = 10
+        for n in np.arange(nm):
+            #Discard some in between
+            q= sim.evolve_f(q, 50)
+            d = sch.diracOperator(q[0])
+            d_inv = tr.linalg.inv(d.to_dense())
+
+                
+            #Vector of time slice correlations
+            cl = sch.exact_Pion_Correlator(d_inv, (0,), 0)
+            if n ==0:
+                c = cl
+            else:
+                c= tr.cat((c, cl), 0)
+            print(n)
+
+        #Average over all batches and configurations measured
+        c_avg = tr.mean(c, dim=0)
+        c_err = (tr.std(c, dim=0)/np.sqrt(tr.numel(c[:,0]) - 1))
+
+        #Fit the effective mass curve
+        popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(0, L), tr.abs(c_avg), sigma = tr.abs(c_err))
+        mq_list[x] = popt[0]
+        m_pi_err_list[x] = np.sqrt(pcov[0,0])/np.sqrt(tr.numel(c[:,0]) - 1)
+        print(x)
+        x += 1
+
+    #Now fit the data given to find the zero point
+    popt, pcov = sp.optimize.curve_fit(f_analytical_pi_triplet, mq_list, m_pi_list, sigma= m_pi_err_list)
+    print(popt)
+    print(pcov)
+
+    df = pd.DataFrame([mq_list.detach().numpy(), m_pi_list.detach().numpy(), m_pi_err_list.detach().numpy()])
+    #TODO: Write more descriptive datafile name
+    df.to_csv("output.csv", index = False)
+
+    fig, ax = plt.subplot(1,1)
+    ax.set_yscale('log', nonpositive='clip')
+
+    ax.errorbar(mq_list, m_pi_list, m_pi_err_list)
+    ax.plot(mq_list, f_analytical_pi_triplet(mq_list, popt))
+    plt.show()
+
 
 #Effective mass curve looks OK to eye test- run a fit on the curve to estimate mass
 def pion_triplet_fit():
@@ -1174,7 +1332,7 @@ def main():
     #fermion_force()
     #pure_gauge_Savg()
     #trivial_D_inspect()
-    dynamical_action()
+    #dynamical_action()
     #dynamical_dH_vs_eps2()
     #pi_plus_mass()
     #autograd_test()
@@ -1182,6 +1340,8 @@ def main():
     #autograd_dynamical_action()
     #pi_plus_comparison()
     #autograd_pi_plus_mass()
+    quenched_Pion_Triplet_Fit()
+    #compute_Quenched_Critical_Mass()
     #pion_triplet_fit()
     #import_fit()
     #fit_critical_mass()

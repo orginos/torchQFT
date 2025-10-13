@@ -1594,8 +1594,8 @@ def test_Factorized_Propogator():
         
         print(n)
     
-    print("Factorized: ",tr.mean(c), tr.std(c)/(tr.numel(c)-1))
-    print("Full: ", tr.mean(c2), tr.std(c2)/(tr.numel(c2)-1))
+    print("Factorized: ",tr.mean(c), tr.std(c)/np.sqrt(tr.numel(c)-1))
+    print("Full: ", tr.mean(c2), tr.std(c2)/np.sqrt(tr.numel(c2)-1))
 
 
 def factorized_Pion_Comparison():
@@ -1804,7 +1804,10 @@ def compare_Factorizations():
 
     #Accounts for shifting of the lattice indices in the factorizing process
     sink_adj = (xcut_1)*L2
-    source_adj = bw*L2
+    if overlap == True:
+        source_adj = bw*L2
+    else:
+        source_adj = L2
     
 
     s_prop = summed[:, sink_x-sink_adj, source_x+source_adj, :,:]
@@ -1842,7 +1845,10 @@ def compare_Factorizations():
 
     #Accounts for shifting of the lattice indices in the factorizing process
     sink_adj = 2*(xcut_1)*L2
-    source_adj = 2*bw*L2
+    if overlap == True:
+        source_adj = 2*bw*L2
+    else:
+        source_adj = 2*L2
 
     prop = summed2[:, 2*sink_x-sink_adj:2*sink_x-sink_adj+2, 
             2*source_x+source_adj:2*source_x+source_adj + 2]
@@ -1914,6 +1920,112 @@ def plot_Factorized_Correlator_Data():
     plt.show()
 
 
+def test_Factorized_Measurement_Scan():
+    batch_size= 300
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= 0.10*lam
+    L = 32
+    L2 = 16
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    #Boundary cut timeslices
+    xcut_1 = 12
+    xcut_2 = 29
+    bw=3
+
+    u = sch.hotStart()
+
+    q = (u,)
+
+    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
+    sim = h.hmc(sch, im2, False)
+
+    #Typical equilibration
+    q = sim.evolve_f(q, 100)
+
+    #Generate projectors
+    #TODO: Needs work below
+    overlap = True
+    projs = tr.zeros(2*1*2*L2, 2*L*L2, dtype=tr.complex64)
+    ct=0
+    if overlap:
+        for x in tr.arange((xcut_1+1)*L2*2, (xcut_1+2)*L2*2):
+            projs[ct, x] = 1.0
+            ct += 1
+        for x in tr.arange((xcut_2+1)*L2*2, (xcut_2+2)*L2*2):
+            projs[ct, x] = 1.0
+            ct += 1
+    else:
+        for x in tr.arange((xcut_1)*L2*2, (xcut_1+1)*L2*2):
+            projs[ct, x] = 1.0
+            ct += 1
+        for x in tr.arange((L-1)*L2*2, (L)*L2*2):
+            projs[ct, x] = 1.0
+            ct += 1
+    
+    ensemble_l, ensemble_r, f_propogator = sch.factorized_Propogator_Proj(q, xcut_1, xcut_2,
+                                                                          bw, projs, overlap)
+
+    factorized_corr, corr = sch.measure_Factorized_Two_Point_Correlator(q, f_propogator, xcut_1, xcut_2,
+    
+                                                                        bw, overlap)
+    
+    print(len(factorized_corr))
+    c_avg = tr.zeros(len(factorized_corr))
+    fc_avg = tr.zeros(len(factorized_corr))
+    c_err = tr.zeros(len(factorized_corr))
+    fc_err = tr.zeros(len(factorized_corr))
+
+    bias = tr.zeros(len(factorized_corr))
+    bias_err = tr.zeros(len(factorized_corr))
+
+    correlation = tr.zeros(len(factorized_corr))
+    correlation_err = tr.zeros(len(factorized_corr))
+
+    for x in tr.arange(len(factorized_corr)):
+        c_avg[x] = tr.mean(corr[x])
+        c_err[x] = tr.std(corr[x])/np.sqrt(tr.numel(corr[x])-1)
+        fc_avg[x] = tr.mean(factorized_corr[x])
+        fc_err[x] = tr.std(factorized_corr[x])/np.sqrt(tr.numel(factorized_corr[x])-1)
+        bias[x] = tr.mean(tr.abs(corr[x]-factorized_corr[x]))
+        bias_err[x] = tr.std(corr[x]-factorized_corr[x])/ np.sqrt(tr.numel(corr[x])-1)
+        cov = tr.mean(corr[x]*factorized_corr[x]) - tr.mean(corr[x])*tr.mean(factorized_corr[x])
+        correlation[x] = cov / (tr.std(corr[x])*tr.std(factorized_corr[x]))
+        correlation_err[x] = tr.sqrt((1-tr.square(correlation[x]))/(tr.numel(corr[x]) - 2))
+
+
+    #Save data
+    #TODO
+
+    fig, (ax, ax2) = plt.subplots(2,1)
+    ax.set_yscale('log', nonpositive='clip')
+    ax2.set_yscale('log', nonpositive='clip')
+
+
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), fc_avg, fc_err, label="Factorized signal")
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), c_avg, c_err, label="True signal")
+    ax.plot(tr.arange(bw+1, int(L/2)+1), fc_err, label="Factorized Error")
+    ax.plot(tr.arange(bw+1, int(L/2)+1), c_err, label="True Error")
+
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), bias, bias_err, label="Bias")
+    ax.plot(tr.arange(bw+1, int(L/2)+1), bias_err, label="Bias Error")
+
+    ax.legend(loc='lower right')
+
+    ax.set_title('Overlapping boundaries, n='+ str(300) +', ' r'$m_\pi L = 5$', fontsize=30)
+    ax.set_ylabel('Magnitude', fontsize=20)
+    #ax.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
+
+    ax2.errorbar(tr.arange(bw+1, int(L/2)+1), correlation, correlation_err)
+    ax2.set_ylabel('Correlation', fontsize=20)
+    ax2.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
+
+
+
+
+    plt.show()
+    
 
 
     
@@ -2210,7 +2322,8 @@ def main():
     #test_Factorized_Propogator()
     #factorized_Pion_Comparison()
     #plot_Factorized_Correlator_Data()
-    compare_Factorizations()
+    #compare_Factorizations()
+    test_Factorized_Measurement_Scan()
 
 
 
