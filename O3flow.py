@@ -92,6 +92,10 @@ class Functional(ABC):
 
     def mlapl(self,x): # minus the laplacian
         return self.lapl(x) 
+
+    def grad_lapl(self,x):
+        """Compute the grad of the Laplacian at x."""
+        raise NotImplementedError
     
 class Psi0(Functional):
     def action(self,s):
@@ -115,6 +119,9 @@ class Psi0(Functional):
     def lapl(self,s):
         return -4.0*self.action(s)
 
+    def grad_lapl(self,s):
+        return -4.0*self.grad(s)
+    
     
 class Psi2(Functional):
     def action(self,s):
@@ -151,6 +158,9 @@ class Psi2(Functional):
     def lapl(self,s):
         return -4.0*self.action(s)
 
+    def grad_lapl(self,s):
+        return -4.0*self.grad(s)
+    
 class Psi11_l(Functional):
     def action(self,s):
         # I have a batch dimension first
@@ -182,6 +192,9 @@ class Psi11_l(Functional):
     # this one is simple... it is an eigenfunction of the laplacian
     def lapl(self,s):
         return -12.0*self.action(s)
+
+    def grad_lapl(self,s):
+        return -12.0*self.grad(s)
     
 class Psi11t(Functional):
 
@@ -246,6 +259,10 @@ class Psi11t(Functional):
         #print(A)
         return A-10.0*self.action(s)
 
+    def grad_lapl(self,s):
+        ps11_l = Psi11_l()
+        ps2    = Psi2()
+        return -2.0*ps11_l.grad(s) + 2.0*ps2.grad(s) - 10.0*self.grad(s)
 
 #this is now an eigenfunction of the Lie Laplacian.
 # NOTE: I found all the coefficients experimentaly and they are not equal to those in the old notes...
@@ -268,6 +285,8 @@ class Psi11(Functional):
     def lapl(self,s):
         return self.p11t.lapl(s) - self.p11l.lapl(s) -1.0/3.0*self.psi2.lapl(s)
 
+    def grad_lapl(self,s):
+        return self.p11t.grad_lapl(s) - self.p11l.grad_lapl(s) -1.0/3.0*self.psi2.grad_lapl(s)
 
 # Now the basis for O(t^2) flow action:
 #specialize for 2D and SO(3)
@@ -303,6 +322,9 @@ class Psi3(Functional):
     def lapl(self,s):
         return -4.0*self.action(s) 
 
+    def grad_lapl(self,s):
+        return -4.0*self.grad(s)
+    
 class Psi21(Functional):
     def action(self,s):
         acc = 0.0
@@ -328,6 +350,8 @@ class Psi21(Functional):
     def lapl(self,s):
         return -(10*self.action(s) - 2*Psi3().action(s) -16*Psi0().action(s))
 
+    def grad_lapl(self,s):
+        return -(10*self.grad(s) - 2*Psi3().grad(s) -16*Psi0().grad(s))
 
 class Psi12d(Functional):
     def action(self,s):
@@ -346,6 +370,10 @@ class Psi12d(Functional):
     def lapl(self,s):
         return -(8*self.action(s) -32*Psi0().action(s) +4*Psi12l().action(s))
 
+    def grad_lapl(self,s):
+        return -(8*self.grad(s) -32*Psi0().grad(s) +4*Psi12l().grad(s))
+
+    
 class Psi111(Functional):
     def action(self,s):
         s1 = s1_field(s)
@@ -362,6 +390,11 @@ class Psi111(Functional):
     def lapl(self,s):
         return -(18*self.action(s) - 6*Psi12d().action(s) -24*Psi0().action(s) + 6*Psi1l1().action(s))
 
+    def grad_lapl(self,s):
+        return -(18*self.grad(s) - 6*Psi12d().grad(s) -24*Psi0().grad(s) + 6*Psi1l1().grad(s))
+
+   
+    
 class Psi111c(Functional):
     def action(self,s):
         acc = 0.0
@@ -423,7 +456,9 @@ class Psi111c(Functional):
     def lapl(self,s):
         return -(16*self.action(s) -4*Psi21().action(s) -16*Psi0().action(s) -4*Psi12l().action(s) + 8*Psi1l1().action(s))
 
-
+    def grad_lapl(self,s):
+        return -(16*self.grad(s) -4*Psi21().grad(s) -16*Psi0().grad(s) -4*Psi12l().grad(s) + 8*Psi1l1().grad(s))
+    
 class Psi12l(Functional):
 
     def action(self,s):
@@ -438,6 +473,9 @@ class Psi12l(Functional):
         
     def lapl(self,s):
         return -(10*self.action(s) - 12*Psi0().action(s))
+
+    def grad_lapl(self,s):
+        return -(10*self.grad(s) - 12*Psi0().grad(s))
   
 class Psi1l1(Functional):
     def action(self,s):
@@ -461,6 +499,9 @@ class Psi1l1(Functional):
     def lapl(self,s):
         return -(20*self.action(s) -4*Psi12l().action(s) +4*Psi111l().action(s) -20*Psi0().action(s))
 
+    def grad_lapl(self,s):
+        return -(20*self.grad(s) -4*Psi12l().grad(s) +4*Psi111l().grad(s) -20*Psi0().grad(s))
+
 class Psi111l(Functional):
     def action(self,s):
         acc = sum(dot3(s,roll(s,x,y))**3 for x,y in DIRS)
@@ -475,6 +516,9 @@ class Psi111l(Functional):
        
     def lapl(self,s):
         return -(24*self.action(s) - 12*Psi0().action(s))
+
+    def grad_lapl(self,s):
+        return -(24*self.grad(s) - 12*Psi0().grad(s))
  
     
 class FlowAction(nn.Module):
@@ -496,6 +540,12 @@ class FlowAction(nn.Module):
         A = tr.zeros(s.shape[0],device=device,dtype=dtype)
         for p in self.T:
             A += p.lapl(s,t)
+        return A
+
+    def grad_lapl(self,s,t):
+        A = tr.zeros(s.shape[0],device=device,dtype=dtype)
+        for p in self.T:
+            A += p.grad_lapl(s,t)
         return A
 
 
@@ -806,6 +856,31 @@ def testLaplacian():
         print(f.__class__.__name__,": ",f"Elapsed time: {toc - tic:.6f} msec")
 
 
+def testGradLapl(*Funcs):
+    beta=1.2345
+    lat = [8,8]
+    Nd = len(lat)
+    Vol = np.prod(lat)
+    Bs = 32
+    sigma = uniform_spin(Bs,lat).to(dtype=dtype)
+
+    print("Working lattice: ",sigma.shape)
+
+    for f in Funcs:
+        autoG = LieDeriv(f.lapl,sigma)
+        g = f.grad_lapl(sigma)
+        r = (autoG-g).norm()/g.norm()
+        print("Testing gradient of the Laplacian for: ",f.__class__.__name__, " : ",r.item())
+
+                 
+    for f in Funcs:
+        tic = time.perf_counter()
+        for k in range(1000):
+            LieDeriv(f.lapl,sigma)
+        toc = time.perf_counter()
+        print(f.__class__.__name__,": ",f"Elapsed time: {toc - tic:.6f} msec")
+
+    
 from dataclasses import dataclass,field
 from typing import List
 import matplotlib.pyplot as plt
@@ -1153,7 +1228,14 @@ if __name__ == "__main__":
     elif(args.t=='deriv2'):
         print("Testing Lie Derivative (O(t^2))")
         testDeriv(Psi3(),Psi21(),Psi12d(),Psi111(),Psi111c(),Psi12l(),Psi1l1(),Psi111l())
-        
+
+    if(args.t=='grad_lapl'):
+        print("Testing Lie Derivative of the Laplacian")
+        testGradLapl(Psi0(),Psi2(),Psi11_l(),Psi11t(),Psi11())
+    elif(args.t=='grad_lapl2'):
+        print("Testing Lie Derivative of the Laplacian (O(t^2))")
+        testGradLapl(Psi3(),Psi21(),Psi12d(),Psi111(),Psi111c(),Psi12l(),Psi1l1(),Psi111l())
+     
     elif(args.t=='lapl'):
         print("Testing Laplacian")
         testLaplacian()
