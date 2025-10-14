@@ -905,6 +905,9 @@ class Starget:
     def mlapl(self,s):
         return -self.coef*Psi0.lapl(s)
 
+    def grad_lapl(self,s):
+        return self.coef*Psi0.grad_lapl(s)
+
 @dataclass
 class Sflow0:
     beta : float
@@ -924,6 +927,9 @@ class Sflow0:
     
     def mlapl(self,s):
         return -self.coef*Psi0().lapl(s)
+
+    def grad_lapl(self,s):
+        return self.coef*Psi0.grad_lapl(s)
 
 @dataclass
 class Sflow1:
@@ -958,14 +964,19 @@ class Sflow1:
             r -= c * p.lapl(s)
         return r
 
+    def grad_lapl(self,s):
+        r = tr.zeros(s.shape[0],dtype=s.dtype,device=s.device)
+        for c, p in zip(self.c, self.psi):
+            r += c * p.grad_lapl(s)
+        return r
 
 @dataclass
 class Sflow2:
     beta   : float
-    lat    : List[int]
+    #lat    : List[int]
     c      : List[float] = field(init=False)
     psi    : List = field(init=False)
-    colors : tr.Tensor = field(init=False)
+    #colors : tr.Tensor = field(init=False)
     
     def __post_init__(self):
         coef = self.beta**3/8.0
@@ -989,7 +1000,7 @@ class Sflow2:
                     Psi1l1(),
                     Psi111l()]
 
-        self.colors, ncolors = _distance_R_coloring(self.lat[0], self.lat[1], R=3)  # [Lx,Ly]
+        #self.colors, ncolors = _distance_R_coloring(self.lat[0], self.lat[1], R=3)  # [Lx,Ly]
         
     def __call__(self,s):
         r = tr.zeros(s.shape[0],dtype=s.dtype,device=s.device)
@@ -1006,12 +1017,24 @@ class Sflow2:
 
     def mgrad(self,s,t):
         return -self.grad(s,t)
-    
-    def mlapl(self,s):
-        colors = self.colors.to(dtype=tr.int64, device=s.device)
-        autoLap = LieLaplacian(self.__call__,s,colors)
-        return autoLap
 
+    def mlapl(self,s):
+        r = tr.zeros(s.shape[0],dtype=s.dtype,device=s.device)
+        for c, p in zip(self.c, self.psi):
+            r -= c * p.lapl(s)
+        return r
+
+    def grad_lapl(self,s):
+        r = tr.zeros(s.shape[0],dtype=s.dtype,device=s.device)
+        for c, p in zip(self.c, self.psi):
+            r += c * p.grad_lapl(s)
+        return r
+    
+    #def mlapl(self,s):
+    #    colors = self.colors.to(dtype=tr.int64, device=s.device)
+    #    autoLap = LieLaplacian(self.__call__,s,colors)
+    #    return autoLap
+    
 
 @dataclass
 class SflowO1:
@@ -1045,7 +1068,7 @@ class SflowO2:
     def __post_init__(self):
         self.S0 = Sflow0(self.beta)
         self.S1 = Sflow1(self.beta)
-        self.S2 = Sflow2(self.beta,self.lat)
+        self.S2 = Sflow2(self.beta)
         
     def __call__(self,s,t):
         return self.S0(s) + t*(self.S1(s) + t*self.S2(s))
@@ -1125,7 +1148,7 @@ def testLuscher2():
     St = Starget(beta)
     #Sf0 = Sflow0(beta)
     Sf1 = Sflow1(beta)
-    Sf2 = Sflow2(beta,lat)
+    Sf2 = Sflow2(beta)
     #C1 = - 2.0/3.0 * beta**2 * Vol
     C2  = 0 
     rhs = (Sf1.grad(sigma)*St.grad(sigma)).sum(tuple(range(1,sigma.dim())))
