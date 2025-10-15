@@ -147,8 +147,9 @@ def save_results(
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # Save histories
-    tr.save(chi_m_hist, run_dir / "lchi_m_history.pt")
-    tr.save(q_hist,      run_dir / "q_history.pt")
+    tr.save(chi_m_hist, run_dir / "chi_m_history.pt")
+    tr.save(c2p_hist,   run_dir / "c2p_history.pt")
+    tr.save(q_hist,     run_dir / "q_history.pt")
 
     # Per-stream IATs for quick decorrelation diagnostics
     def _per_stream_tau(hist_bt: tr.Tensor) -> np.ndarray:
