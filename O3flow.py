@@ -1037,6 +1037,29 @@ class Sflow2:
     
 
 @dataclass
+class SflowO0:
+    beta : float
+    S0 : Sflow0 = field(init=False)
+    
+    def __post_init__(self):
+        self.S0 = Sflow0(self.beta)
+            
+    def __call__(self,s,t):
+        return self.S0(s) 
+
+    def grad(self,s,t):
+        return self.S0.grad(s) 
+
+    def mgrad(self,s,t):
+        return -self.grad(s,t)
+    
+    def mlapl(self,s,t):
+        return self.S0.mlapl(s) 
+
+    def grad_lapl(self,s,t):
+        return self.S0.grad_lapl(s) 
+    
+@dataclass
 class SflowO1:
     beta : float
     S0 : Sflow0 = field(init=False)
@@ -1058,10 +1081,13 @@ class SflowO1:
     def mlapl(self,s,t):
         return self.S0.mlapl(s) + t*self.S1.mlapl(s)
 
+    def grad_lapl(self,s,t):
+        return self.S0.grad_lapl(s) + t*self.S1.grad_lapl(s)
+    
 @dataclass
 class SflowO2:
     beta : float
-    lat  : List[int]
+    #lat  : List[int]
     S0 : Sflow0 = field(init=False)
     S1 : Sflow1 = field(init=False)
     S2 : Sflow2 = field(init=False)
@@ -1081,6 +1107,9 @@ class SflowO2:
     
     def mlapl(self,s,t):
         return self.S0.mlapl(s) + t*(self.S1.mlapl(s)+ t*self.S2.mlapl(s))
+
+    def grad_lapl(self,s,t):
+        return self.S0.grad_lapl(s) + t*(self.S1.grad_lapl(s)+ t*self.S2.grad_lapl(s))
     
     
 def testLuscher0():
