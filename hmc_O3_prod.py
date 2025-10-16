@@ -334,8 +334,8 @@ print("m_sig: ",m_sig.squeeze().numpy(),e_sig.numpy())
 meas_chi_m_subtr =  meas_chi_m - (m_sig**2).sum(dim=2)*sg.Vol # subtract the mean
 m_chi_m, e_chi_m = average(meas_chi_m_subtr) 
 m_C2p, e_C2p     = average(meas_C2p)   
-print("Chi_m: ",m_chi_m, e_chi_m)
-print("C2p  : ",m_C2p, e_C2p)
+print("Chi_m: ",m_chi_m.item(), e_chi_m.item())
+print("C2p  : ",m_C2p.item(), e_C2p.item())
 
 avE,eE = average(meas_E)
 print("E    : ", avE.item() ,'+/-',eE.item())
