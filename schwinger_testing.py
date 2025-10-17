@@ -878,13 +878,15 @@ def f_FV_Mass(L, m_inf, A):
 #Effective mass curve looks OK to eye test- run a fit on the curve to estimate mass
 def quenched_Pion_Triplet_Fit():
     #Measurement process -given function for correlator of pi plus
-    batch_size=50
+    batch_size=100
     #lam =np.sqrt(1.0/0.970)
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass... Need critical mass offset for analytical comparison
     mass= 0.1*lam
     L = 32
     L2 = 16
+    pn = 1.0
+    p = 2*np.pi*pn/L2
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
 
@@ -913,7 +915,7 @@ def quenched_Pion_Triplet_Fit():
 
             
         #Vector of time slice correlations
-        cl = sch.exact_Pion_Correlator(d_inv, (0,), 0)
+        cl = sch.exact_Pion_Correlator(d_inv, (0,), p)
         if n ==0:
             c = cl
         else:

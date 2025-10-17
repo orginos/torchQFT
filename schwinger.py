@@ -621,46 +621,100 @@ class schwinger():
 
         return s11
     
+    #Implementing Giusti's subdomain construction schur complement for testing
+    def schur_Complement_Giusti(self, q, xcut_1):
+
+        d = self.diracOperator(q[0]).to_dense()
+
+
+        complement = d[:, 0:xcut_1*2*self.V[1], 0:xcut_1*2*self.V[1]]
+        bulk = d[:,xcut_1*self.V[1]*2:, xcut_1*self.V[1]*2:]
+
+        d01 = d[:, 0:xcut_1*2*self.V[1], xcut_1*self.V[1]*2:]
+        d10 = d[:, xcut_1*self.V[1]*2:, 0:xcut_1*2*self.V[1]]
+
+        schur = complement - tr.einsum('bij, bjk, bkm->bim', d01, tr.inverse(bulk), d10)
+
+        return schur
+
+    #factorized propogator using unapproximated Schur complement in the 
+    #complement subdomain
+    def exact_Factorized_Propogator(self, q, xcut_1, xcut_2, bw, projs):
+        #First seperate sections of the Dirac operator
+        d = self.diracOperator(q[0]).to_dense()
+
+        #Contains second subdomain and both frozen boundaries
+        bulk = d[:,xcut_1*self.V[1]*2:, xcut_1*self.V[1]*2:]
+
+        s1_inv = tr.inverse(self.schur_Complement_Giusti(q, xcut_1))
+        bulk_inv = tr.inverse(bulk)
+
+        #Boundary interface
+        d10 = d[:, xcut_1*self.V[1]*2:, 0:xcut_1*2*self.V[1]]
+
+        #Product for left factorization piece
+        bulk_prod = tr.einsum('bxy, byz->bxz', bulk_inv, d10)
+
+
+        #Will be same for each of the equal sized overlapping subdomains
+        #Dirac indices remain layered into spatial indices here
+        subdomain_index_ct = tr.numel(s1_inv[0,0,:])
+        bulk_index_ct = tr.numel(bulk[0,0,:])
+
+        ensembleL = tr.zeros([self.Bs, tr.numel(projs[:,0]), bulk_index_ct], dtype=tr.complex64)
+        ensembleR = tr.zeros([self.Bs, tr.numel(projs[:,0]), subdomain_index_ct], dtype=tr.complex64)
+        summed = tr.zeros([self.Bs, bulk_index_ct, subdomain_index_ct])
+
+        if projs.ndim==2:
+            num_proj = tr.numel(projs[:,0])
+        else:
+            num_proj = tr.numel(projs[0,0,:])
+
+        for xi in tr.arange(tr.numel(projs[:,0])):
+            #Need to update to allow for batch of projectors
+            if projs.ndim == 2:
+                p = projs[xi, :]
+                p = p.repeat(self.Bs, 1)
+            else:
+                p = projs[:, :, xi]
+
+            #Slice projector relevant to complement subdomain size
+            projector = p[:, :(xcut_1)*self.V[1]*2]
+
+            ensembleR[:, xi, :] = tr.einsum('bx, bxy->by', tr.conj(projector), s1_inv)
+
+            ensembleL[:, xi, :] = tr.einsum('bxy, by-> bx', bulk_prod, projector)
+
+            summed = summed + tr.einsum('bx, by-> bxy', ensembleL[:, xi, :], 
+                                        ensembleR[:, xi, :])
+        
+        return ensembleL, ensembleR, summed
+
+
+
     
     #Input lattice configuration, frozen timeslices beginnings, boundary width, projection vectors, overlap T/F
     #Output:  batch x intermediate ensemble of factorized propogator contributions to all points on the lattice, one for each subdomain. Contains only first order contributions
     #New version of function based on projectors
-    #TODO: Outputs results which do not match original approach or gets close to the
-    #'true' results produced by the full propogator- needs bugfixing
-    def factorized_Propogator_Proj(self, q, xcut_1, xcut_2, bw, projs, overlap):
+    def factorized_Propogator_Proj(self, q, xcut_1, xcut_2, bw, projs):
         #First seperate sections of the Dirac operator
         d = self.diracOperator(q[0]).to_dense()
 
 
         #Contains all dirac matrix points within the first subdomain
-        #roll the entire end boundary if working with a thick overlap,
-        #Only the edge of the boundary for no overlap
-        if overlap == True:
-            rolled_d = d.roll(shifts=(bw*self.V[1]*2, bw*self.V[1]*2), dims=(1,2))
-            s1 = rolled_d[:, :(xcut_1+2*bw)*self.V[1]*2, :(xcut_1+2*bw)*self.V[1]*2]
-        else:
-            rolled_d = d.roll(shifts=(self.V[1]*2, self.V[1]*2), dims=(1,2))        
-            s1 = d[:, :(xcut_1+2)*self.V[1]*2, :(xcut_1+2)*self.V[1]*2]
-        #Contains second subdomain and both frozen boundaries
+        s1 = d[:, :xcut_1*self.V[1]*2, :xcut_1*self.V[1]*2]
 
+        #Contains second subdomain and both frozen boundaries
         bulk = d[:,xcut_1*self.V[1]*2:, xcut_1*self.V[1]*2:]
 
         s1_inv = tr.inverse(s1)
         bulk_inv = tr.inverse(bulk)
 
-        #Construct Dirac matrix for boundary by zeroing all entries outside boundaries
-        boundary_d = tr.clone(bulk)
-        boundary_d[:, bw*self.V[1]*2:(xcut_2-xcut_1)*self.V[1]*2, 
-                   bw*self.V[1]*2:(xcut_2-xcut_1)*self.V[1]*2] = 0.0
-        
-        diags = tr.diagonal(boundary_d, dim1=1, dim2=2)
-        boundary_mat = tr.diag_embed(diags)
+        #Boundary interface
+        d10 = d[:, xcut_1*self.V[1]*2:, 0:xcut_1*2*self.V[1]]
 
-
-
-
-        #Needs to be boundary dirac matrix points only.
-        bulk_prod = tr.einsum('bxy, byz->bxz', bulk_inv, boundary_mat)
+        #Product for left factorization piece
+        bulk_prod = tr.einsum('bxy, byz->bxz', bulk_inv, d10)
 
         #Will be same for each of the equal sized overlapping subdomains
         #Dirac indices remain layered into spatial indices here
@@ -671,22 +725,25 @@ class schwinger():
         ensembleR = tr.zeros([self.Bs, tr.numel(projs[:,0]), subdomain_index_ct], dtype=tr.complex64)
         summed = tr.zeros([self.Bs, bulk_index_ct, subdomain_index_ct])
 
+        if projs.ndim==2:
+            num_proj = tr.numel(projs[:,0])
+        else:
+            num_proj = tr.numel(projs[0,0,:])
+
         for xi in tr.arange(tr.numel(projs[:,0])):
-            p = projs[xi, :]
-
-            #Need to adjust projection vector based on L/R indexing
-            p_left = p[xcut_1*self.V[1]*2:]
-            if overlap == True:
-                rolled_p = p.roll(shifts=bw*self.V[1]*2)
-                p_right = rolled_p[:(xcut_1+2*bw)*self.V[1]*2]
+            #Need to update to allow for batch of projectors
+            if projs.ndim == 2:
+                p = projs[xi, :]
+                p = p.repeat(self.Bs, 1)
             else:
-                rolled_p = p.roll(shifts=self.V[1]*2)        
-                p_right = rolled_p[:(xcut_1+2)*self.V[1]*2]
+                p = projs[:, :, xi]
 
+            #Slice projector relevant to complement subdomain size
+            projector = p[:, :(xcut_1)*self.V[1]*2]
 
-            ensembleR[:, xi, :] = tr.einsum('x, bxy->by', tr.conj(p_right), s1_inv)
+            ensembleR[:, xi, :] = tr.einsum('bx, bxy->by', tr.conj(projector), s1_inv)
 
-            ensembleL[:, xi, :] = tr.einsum('bxy, y-> bx', bulk_prod, p_left)
+            ensembleL[:, xi, :] = tr.einsum('bxy, by-> bx', bulk_prod, projector)
 
             summed = summed + tr.einsum('bx, by-> bxy', ensembleL[:, xi, :], 
                                         ensembleR[:, xi, :])
@@ -700,7 +757,8 @@ class schwinger():
     #Input: lattice configuration, frozen timeslices, boundary width, intermediate indices, overlap T/F
     #of the Dirac operator, intermediate points
     #Output:  batch x intermediate ensemble of factorized propogator contributions to all points on the lattice, one for each subdomain. Contains only first order contributions
-    #TODO: In progress
+    #NOTE: This approach has a bug and will produce incorrect results. Kept as reference
+    #for now but may be removed later
     def factorized_Propogator(self, q, xcut_1, xcut_2, bw, inter, overlap):
 
 
@@ -768,7 +826,7 @@ class schwinger():
     
     #Input:Batch of factorized propogators
     #Output: Measurements of two point correlator binned by timeslice separation
-    def measure_Factorized_Two_Point_Correlator(self, q, f_propogator, xcut_1, xcut_2, bw, overlap):
+    def measure_Factorized_Two_Point_Correlator(self, q, f_propogator, xcut_1, xcut_2, bw):
         
         d_inv = tr.inverse(self.diracOperator(q[0]).to_dense())
         max_length = int((self.V[0])/2)
@@ -778,27 +836,22 @@ class schwinger():
 
         #Accounts for shifting of the lattice indices in the factorizing process
         sink_adj = -2*(xcut_1)*self.V[1]
-        if overlap == True:
-            source_adj = 2*bw*self.V[1]
-        else:
-            source_adj = 2*self.V[1]
         
         sink_ts = xcut_1 + bw
 
-        #factorized_corr_magnitude = tr.zeros((max_length - 1, self.Bs))
         factorized_corr_magnitude = [None]* (max_length-bw)
         corr_magnitude = [None] * (max_length-bw)
-        #corr_magnitude = tr.zeros((max_length - 1, self.Bs))
+
         while sink_ts < xcut_2:
             source_ts = 0
             while source_ts < xcut_1:
-                source_x = mid_x + 2*self.V[1]*source_ts + source_adj
+                source_x = mid_x + 2*self.V[1]*source_ts
                 sink_x = mid_x + 2*self.V[1]*sink_ts + sink_adj
                 factorized_prop = f_propogator[:, sink_x:sink_x+2, source_x:source_x+2]
                 factorized_corr = tr.sum(tr.einsum('bij, bkj-> bik', factorized_prop, factorized_prop.conj()), dim=(1,2))
 
                 #Take an unfactorized measurement as well
-                source_x = source_x - source_adj
+                source_x = source_x
                 sink_x = sink_x - sink_adj
                 prop = d_inv[:, sink_x:sink_x+2, source_x:source_x+2]
                 corr = tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2))
@@ -825,6 +878,75 @@ class schwinger():
 
 
         return factorized_corr_magnitude, corr_magnitude
+    
+    #TODO: Check this still works with newest bugfix
+    def measure_Factorized_Pion_Correlator(self, q, f_propogator, xcut_1, xcut_2, bw, overlap, p = 0.0):
+
+        d_inv = tr.inverse(self.diracOperator(q[0]).to_dense())
+        max_length = int((self.V[0])/2)
+        
+        #1/2 for middle, then x2 for dirac space
+        mid_x = self.V[1]
+
+        #Accounts for shifting of the lattice indices in the factorizing process
+        sink_adj = -2*(xcut_1)*self.V[1]
+        if overlap == True:
+            source_adj = 2*bw*self.V[1]
+        else:
+            source_adj = 2*self.V[1]
+        
+        sink_t = xcut_1 + bw
+
+        factorized_corr = [None]* (max_length-bw)
+        corr = [None] * (max_length-bw)
+
+        while sink_t < xcut_2:
+            source_t = 0
+            while source_t < xcut_1:
+                f_c = tr.zeros(self.Bs)
+                c = tr.zeros(self.Bs)
+                for sink_x in tr.arange(self.V[1]):
+                    #TODO: Why does using more than one source spatial index break this?
+                    #Probably has to do with distance between points: encode a source-sink difference?
+                    for source_x in tr.arange(0,1):
+                        source_ind = 2*self.V[1]*source_t + 2*source_x + source_adj
+                        sink_ind = 2*self.V[1]*sink_t + 2*sink_x + sink_adj
+                        factorized_prop = f_propogator[:, sink_ind:sink_ind+2, source_ind:source_ind+2]
+                        f_c = f_c -  tr.sum(tr.einsum('bij, bkj-> bik', factorized_prop, factorized_prop.conj()), dim=(1,2)) \
+                            *np.exp(-1.0j*p*sink_x)
+
+                        #Take an unfactorized measurement as well
+                        source_ind = source_ind - source_adj
+                        sink_ind = sink_ind - sink_adj
+                        prop = d_inv[:, sink_ind:sink_ind+2, source_ind:source_ind+2]
+                        c = c - tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2)) \
+                            *np.exp(-1.0j*p*sink_x)
+
+                dist = min(sink_t - source_t, source_t + self.V[0] - sink_t)
+
+                #Multiply by fourier transform factor 
+                c = (1.0/np.sqrt(1.0*self.V[1]))  * (1.0/self.V[1])* c
+                f_c = (1.0/np.sqrt(1.0*self.V[1]))* (1.0/self.V[1]) * f_c
+
+                if corr[dist-bw-1] == None:
+                    factorized_corr[dist- bw -1] = f_c
+                    corr[dist- bw - 1] = c
+                else:
+                    temp = tr.cat((factorized_corr[dist- bw -1], f_c), 0)
+                    factorized_corr[dist-bw -1] = temp
+                    #factorized_corr_magnitude[dist - 1, :] = tr.cat((factorized_corr_magnitude[dist - 1, :],
+                    #                                                      factorized_corr), dim=0)
+                    temp = tr.cat((corr[dist-bw -1], c), 0)
+                    corr[dist-bw -1] = temp
+
+                source_t += 1
+            print('sink position: ', sink_t)
+            sink_t += 1
+
+        return factorized_corr, corr
+
+
+
 
     
 
