@@ -198,32 +198,6 @@ class Psi11_l(Functional):
     
 class Psi11t(Functional):
 
-#    def action(self,s):
-#        # first make the bonds
-#        b = tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=2) + tr.roll(s,shifts=1,dims=2))
-#        for mu in range(3,s.dim()):
-#            b += tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=mu) + tr.roll(s,shifts=1,dims=mu))
-        
-#        return tr.einsum('bxy,bxy->b',b,b)
-
-#slow
-#    def grad(self,s):
-#        # first make the bonds
-#        b = tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=2) + tr.roll(s,shifts=1,dims=2))
-#        for mu in range(3,s.dim()):
-#            b += tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=mu) + tr.roll(s,shifts=1,dims=mu))
-#        bs = tr.einsum('bsxy,bxy->bsxy',s,b)
-#        Fs = tr.zeros_like(s)
-#        Fbs = tr.zeros_like(s)
-#        Lsig = -tr.einsum('bsxy,sra->braxy',s,L)
-#        for mu in range(2,s.dim()):
-#            Fs +=tr.roll(s ,shifts= 1,dims=mu)+tr.roll(s ,shifts=-1,dims=mu)
-#            Fbs+=tr.roll(bs,shifts= 1,dims=mu)+tr.roll(bs,shifts=-1,dims=mu) 
-#        F = tr.einsum('baxy,bxy->baxy',Fs,b) + Fbs
-#        F=tr.einsum('bsaxy,bsxy->baxy',Lsig,F)
-#        
-#        return -2.0*F
-
     def action(self,s):
         M = dot3(s,s1_field(s)).unsqueeze(1)
         return (M*M).flatten(1).sum(-1)
@@ -235,14 +209,6 @@ class Psi11t(Functional):
         V = s1_field(sM)+ s1*M   
         return 2*tr.cross(s,V, dim=1)
    
-
-
-    # this one is not simple...
-    # I experimentally found the right constant to subract
-    # and the right weights for Psi11 and Psi2
-    # We need to check the normalization of what I programed and what
-    # I have in the notes ... there seem to be a factor of two over all
-    # scaling missing is various places
     def lapl(self,s):
         ps11_l = Psi11_l()
         ps2    = Psi2()
