@@ -716,6 +716,10 @@ class schwinger():
         #Product for left factorization piece
         bulk_prod = tr.einsum('bxy, byz->bxz', bulk_inv, d10)
 
+        # plt.spy(bulk_prod[0,:,:])
+
+        # plt.show()
+
         #Will be same for each of the equal sized overlapping subdomains
         #Dirac indices remain layered into spatial indices here
         subdomain_index_ct = tr.numel(s1[0,0,:])
@@ -825,8 +829,9 @@ class schwinger():
         return ensembleL, ensembleR, summed
     
     #Input:Batch of factorized propogators
-    #Output: Measurements of two point correlator binned by timeslice separation
-    def measure_Factorized_Two_Point_Correlator(self, q, f_propogator, xcut_1, xcut_2, bw):
+    #Output: Measurements of two point correlator binned by timeslice separation'
+    #TODO:Testing adding a momentum
+    def measure_Factorized_Two_Point_Correlator(self, q, f_propogator, xcut_1, xcut_2, bw, p = 0.0):
         
         d_inv = tr.inverse(self.diracOperator(q[0]).to_dense())
         max_length = int((self.V[0])/2)
@@ -837,38 +842,38 @@ class schwinger():
         #Accounts for shifting of the lattice indices in the factorizing process
         sink_adj = -2*(xcut_1)*self.V[1]
         
-        sink_ts = xcut_1 + bw
+        sink_ts = xcut_1
 
-        factorized_corr_magnitude = [None]* (max_length-bw)
-        corr_magnitude = [None] * (max_length-bw)
+        factorized_corr_magnitude = [None]* (max_length)
+        corr_magnitude = [None] * (max_length)
 
-        while sink_ts < xcut_2:
+        while sink_ts < self.V[0]:
             source_ts = 0
             while source_ts < xcut_1:
                 source_x = mid_x + 2*self.V[1]*source_ts
                 sink_x = mid_x + 2*self.V[1]*sink_ts + sink_adj
                 factorized_prop = f_propogator[:, sink_x:sink_x+2, source_x:source_x+2]
-                factorized_corr = tr.sum(tr.einsum('bij, bkj-> bik', factorized_prop, factorized_prop.conj()), dim=(1,2))
+                factorized_corr = -1.0*tr.sum(tr.einsum('bij, bkj-> bik', factorized_prop, factorized_prop.conj()), dim=(1,2))*np.exp(-1.0j*p*mid_x*0.5)
 
                 #Take an unfactorized measurement as well
-                source_x = source_x
                 sink_x = sink_x - sink_adj
                 prop = d_inv[:, sink_x:sink_x+2, source_x:source_x+2]
-                corr = tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2))
+                corr = -1.0*tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2))*np.exp(-1.0j*p*mid_x*0.5)
 
                 #Save correlator measurements to matrix
                 #First record distance between timeslices
                 dist = min(sink_ts - source_ts, source_ts + self.V[0] - sink_ts)
-                if corr_magnitude[dist-bw-1] == None:
-                    factorized_corr_magnitude[dist- bw -1] = factorized_corr
-                    corr_magnitude[dist- bw - 1] = corr
+                if corr_magnitude[dist-1] == None:
+                    factorized_corr_magnitude[dist-1] = factorized_corr
+                    corr_magnitude[dist- 1] = corr
                 else:
-                    temp = tr.cat((factorized_corr_magnitude[dist- bw -1], factorized_corr), 0)
-                    factorized_corr_magnitude[dist-bw -1] = temp
+                    # temp = tr.cat((factorized_corr_magnitude[dist- bw -1], factorized_corr), 0)
+                    temp = tr.cat((factorized_corr_magnitude[dist-1], factorized_corr), 0)
+                    factorized_corr_magnitude[dist-1] = temp
                     #factorized_corr_magnitude[dist - 1, :] = tr.cat((factorized_corr_magnitude[dist - 1, :],
                     #                                                      factorized_corr), dim=0)
-                    temp = tr.cat((corr_magnitude[dist-bw -1], corr), 0)
-                    corr_magnitude[dist-bw -1] = temp
+                    temp = tr.cat((corr_magnitude[dist-1], corr), 0)
+                    corr_magnitude[dist-1] = temp
                     #corr_magnitude[dist - 1, :] = tr.cat((corr_magnitude[dist - 1, :],
                     #                                                      corr), dim=0)
                 source_ts += 1
@@ -880,7 +885,7 @@ class schwinger():
         return factorized_corr_magnitude, corr_magnitude
     
     #TODO: Check this still works with newest bugfix
-    def measure_Factorized_Pion_Correlator(self, q, f_propogator, xcut_1, xcut_2, bw, overlap, p = 0.0):
+    def measure_Factorized_Pion_Correlator(self, q, f_propogator, xcut_1, xcut_2, bw, p = 0.0):
 
         d_inv = tr.inverse(self.diracOperator(q[0]).to_dense())
         max_length = int((self.V[0])/2)
@@ -890,17 +895,13 @@ class schwinger():
 
         #Accounts for shifting of the lattice indices in the factorizing process
         sink_adj = -2*(xcut_1)*self.V[1]
-        if overlap == True:
-            source_adj = 2*bw*self.V[1]
-        else:
-            source_adj = 2*self.V[1]
         
-        sink_t = xcut_1 + bw
+        sink_t = xcut_1
 
-        factorized_corr = [None]* (max_length-bw)
-        corr = [None] * (max_length-bw)
+        factorized_corr = [None]* (max_length)
+        corr = [None] * (max_length)
 
-        while sink_t < xcut_2:
+        while sink_t < self.V[0]:
             source_t = 0
             while source_t < xcut_1:
                 f_c = tr.zeros(self.Bs)
@@ -908,15 +909,14 @@ class schwinger():
                 for sink_x in tr.arange(self.V[1]):
                     #TODO: Why does using more than one source spatial index break this?
                     #Probably has to do with distance between points: encode a source-sink difference?
-                    for source_x in tr.arange(0,1):
-                        source_ind = 2*self.V[1]*source_t + 2*source_x + source_adj
+                    for source_x in (0,):
+                        source_ind = 2*self.V[1]*source_t + 2*source_x
                         sink_ind = 2*self.V[1]*sink_t + 2*sink_x + sink_adj
                         factorized_prop = f_propogator[:, sink_ind:sink_ind+2, source_ind:source_ind+2]
                         f_c = f_c -  tr.sum(tr.einsum('bij, bkj-> bik', factorized_prop, factorized_prop.conj()), dim=(1,2)) \
                             *np.exp(-1.0j*p*sink_x)
 
                         #Take an unfactorized measurement as well
-                        source_ind = source_ind - source_adj
                         sink_ind = sink_ind - sink_adj
                         prop = d_inv[:, sink_ind:sink_ind+2, source_ind:source_ind+2]
                         c = c - tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2)) \
@@ -925,19 +925,19 @@ class schwinger():
                 dist = min(sink_t - source_t, source_t + self.V[0] - sink_t)
 
                 #Multiply by fourier transform factor 
-                c = (1.0/np.sqrt(1.0*self.V[1]))  * (1.0/self.V[1])* c
-                f_c = (1.0/np.sqrt(1.0*self.V[1]))* (1.0/self.V[1]) * f_c
+                c = (1.0/np.sqrt(1.0*self.V[1]))  * c
+                f_c = (1.0/np.sqrt(1.0*self.V[1])) * f_c
 
-                if corr[dist-bw-1] == None:
-                    factorized_corr[dist- bw -1] = f_c
-                    corr[dist- bw - 1] = c
+                if corr[dist-1] == None:
+                    factorized_corr[dist -1] = f_c
+                    corr[dist - 1] = c
                 else:
-                    temp = tr.cat((factorized_corr[dist- bw -1], f_c), 0)
-                    factorized_corr[dist-bw -1] = temp
+                    temp = tr.cat((factorized_corr[dist -1], f_c), 0)
+                    factorized_corr[dist -1] = temp
                     #factorized_corr_magnitude[dist - 1, :] = tr.cat((factorized_corr_magnitude[dist - 1, :],
                     #                                                      factorized_corr), dim=0)
-                    temp = tr.cat((corr[dist-bw -1], c), 0)
-                    corr[dist-bw -1] = temp
+                    temp = tr.cat((corr[dist -1], c), 0)
+                    corr[dist-1] = temp
 
                 source_t += 1
             print('sink position: ', sink_t)

@@ -1925,13 +1925,15 @@ def test_Factorized_Measurement_Scan():
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
     mass= 0.10*lam
-    L = 32
+    L = 64
     L2 = 16
+    p_n = 0.0
+    p = p_n*2*np.pi/L2
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     #Boundary cut timeslices
-    xcut_1 = 12
-    xcut_2 = 29
+    xcut_1 = 28
+    xcut_2 = 61
     bw=3
 
     u = sch.hotStart()
@@ -1948,88 +1950,59 @@ def test_Factorized_Measurement_Scan():
     #TODO: Needs work below
     #Lets try some different bases
 
-    #Just fill everything
-    if True:
-        overlap= True
-        projs = tr.eye(2*L*L2, dtype=tr.complex64)
-
-    elif False:
-        overlap = True
-        projs = tr.zeros(2*bw*2*L2, 2*L*L2, dtype=tr.complex64)
-        ct=0
-        if overlap:
-            for x in tr.arange((xcut_1)*L2*2, (xcut_1+bw)*L2*2):
-                projs[ct, x] = 1.0
-                ct += 1
-            for x in tr.arange((xcut_2)*L2*2, (xcut_2+bw)*L2*2):
-                projs[ct, x] = 1.0
-                ct += 1
-        else:
-            for x in tr.arange((xcut_1)*L2*2, (xcut_1+1)*L2*2):
-                projs[ct, x] = 1.0
-                ct += 1
-            for x in tr.arange((L-1)*L2*2, (L)*L2*2):
-                projs[ct, x] = 1.0
-                ct += 1
-    elif False:
-        overlap = True
-        #Use only half the lattice index points
+    if False:
+        #Isolates the relevant spin index by boundary
+        mult = 1.0
         projs = tr.zeros(2*L2, 2*L*L2, dtype=tr.complex64)
         ct=0
-        if overlap:
-            for x in tr.arange((xcut_1+1)*L2, (xcut_1+2)*L2):
-                if x % 2 == 0:
-                    projs[ct, 2*x] = 1.0
-                    projs[ct+1, 2*x+1] = 1.0
-                    ct += 2
-            for x in tr.arange((xcut_2+1)*L2, (xcut_2+2)*L2):
-                if x % 2 == 0:
-                    projs[ct, 2*x] = 1.0
-                    projs[ct+1, 2*x+1] = 1.0
-                    ct += 2
-    elif False:
-        overlap = True
-        #Use only half the firs spin index on all lattice points
-        projs = tr.zeros(2*L2, 2*L*L2, dtype=tr.complex64)
-        ct=0
-        if overlap:
-            for x in tr.arange((xcut_1+1)*L2, (xcut_1+2)*L2):
-                projs[ct, 2*x] = 1.0
+        #Only need second spin index on the first boundary
+        for x in tr.arange(1, (1)*L2*2, 2):
+                projs[ct, x] = 1.0
                 ct += 1
-            for x in tr.arange((xcut_2+1)*L2, (xcut_2+2)*L2):
-                projs[ct, 2*x] = 1.0
+        #Only need first spin index on the second boundary
+        for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 2):
+                projs[ct, x] = 1.0
                 ct += 1
+
     elif False:
-        overlap = True
-        #Try a wall projector
-        projs = tr.zeros(1, 2*L*L2, dtype=tr.complex64)
+        #Probing half the boundary
+        #Need to include a multiplier for using fewer intermediates
+        mult = 2.0
+        projs = tr.zeros(L2, 2*L*L2, dtype=tr.complex64)
         ct=0
-        if overlap:
-            for x in tr.arange((xcut_1+1)*L2*2, (xcut_1+2)*L2*2):
-                projs[0, x] = 1.0
-            for x in tr.arange((xcut_2+1)*L2, (xcut_2+2)*L2):
-                projs[0, x] = 1.0
-        projs[0, :] = projs[0,:] / tr.norm(projs[0,:])
+        #Only need second spin index on the first boundary
+        for x in tr.arange(1, (1)*L2*2, 4):
+                projs[ct, x] = 1.0
+                ct += 1
+        #Only need first spin index on the second boundary
+        for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 4):
+                projs[ct, x] = 1.0
+                ct += 1
 
-    elif False:
-        #TODO: This doesn't work!
-        overlap=True
-        #Random based projection
-        rand = tr.rand(2*L*L2, 40, dtype=tr.complex64)
-        d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
-        projs =tr.einsum('bij, jk-> bik', d_inv, rand)
+    elif True:
+        #Probing one quarter of the boundary
+        #Need to include a multiplier for using fewer intermediates
+        mult = 4.0
+        projs = tr.zeros(int(L2/2), 2*L*L2, dtype=tr.complex64)
+        ct=0
+        #Only need second spin index on the first boundary
+        for x in tr.arange(1, (1)*L2*2, 8):
+                projs[ct, x] = 1.0
+                ct += 1
+        #Only need first spin index on the second boundary
+        for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 8):
+                projs[ct, x] = 1.0
+                ct += 1
 
-        projs = tr.linalg.norm(projs, dim = 1)
-
-
-    
     
     ensemble_l, ensemble_r, f_propogator = sch.factorized_Propogator_Proj(q, xcut_1, xcut_2,
                                                                           bw, projs)
 
     factorized_corr, corr = sch.measure_Factorized_Two_Point_Correlator(q, f_propogator, xcut_1, xcut_2, 
-                                                                        bw)
+                                                                        bw, p=p)
     
+    
+
     print(len(factorized_corr))
     c_avg = tr.zeros(len(factorized_corr))
     fc_avg = tr.zeros(len(factorized_corr))
@@ -2043,19 +2016,20 @@ def test_Factorized_Measurement_Scan():
     correlation_err = tr.zeros(len(factorized_corr))
 
     for x in tr.arange(len(factorized_corr)):
-        c_avg[x] = tr.mean(corr[x])
-        c_err[x] = tr.std(corr[x])/np.sqrt(tr.numel(corr[x])-1)
-        fc_avg[x] = tr.mean(factorized_corr[x])
-        fc_err[x] = tr.std(factorized_corr[x])/np.sqrt(tr.numel(factorized_corr[x])-1)
-        bias[x] = tr.mean(tr.abs(corr[x]-factorized_corr[x]))
-        bias_err[x] = tr.std(corr[x]-factorized_corr[x])/ np.sqrt(tr.numel(corr[x])-1)
-        cov = tr.mean(corr[x]*factorized_corr[x]) - tr.mean(corr[x])*tr.mean(factorized_corr[x])
-        correlation[x] = cov / (tr.std(corr[x])*tr.std(factorized_corr[x]))
+        factorized_corr[x] = mult *factorized_corr[x]
+        c_avg[x] = tr.real(tr.mean(corr[x]))
+        c_err[x] = tr.std(tr.real(corr[x]))/np.sqrt(tr.numel(corr[x])-1)
+        fc_avg[x] = tr.real(tr.mean(factorized_corr[x]))
+        fc_err[x] = tr.std(tr.real(factorized_corr[x]))/np.sqrt(tr.numel(factorized_corr[x])-1)
+        bias[x] = tr.mean((tr.real(corr[x])-tr.real(factorized_corr[x])))
+        bias_err[x] = tr.std(tr.real(corr[x])-tr.real(factorized_corr[x]))/ np.sqrt(tr.numel(corr[x])-1)
+        cov = tr.mean(tr.real(corr[x])*tr.real(factorized_corr[x])) - tr.mean(tr.real(corr[x]))*tr.mean(tr.real(factorized_corr[x]))
+        correlation[x] = cov / (tr.std(tr.real(corr[x]))*tr.std(tr.real(factorized_corr[x])))
         correlation_err[x] = tr.sqrt((1-tr.square(correlation[x]))/(tr.numel(corr[x]) - 2))
 
 
     #Save data
-    data_write = tr.stack((tr.arange(bw+1, int(L/2)+1), c_avg, c_err,
+    data_write = tr.stack((tr.arange(1, int(L/2)+1), c_avg, c_err,
                            fc_avg, fc_err, bias, bias_err,
                             correlation, correlation_err), dim=0).numpy()
     np.savetxt('factorized_data.csv', data_write, delimiter=',')
@@ -2066,26 +2040,52 @@ def test_Factorized_Measurement_Scan():
     ax2.set_yscale('log', nonpositive='clip')
 
 
-    ax.errorbar(tr.arange(bw+1, int(L/2)+1), fc_avg, fc_err, label="Factorized signal")
-    ax.errorbar(tr.arange(bw+1, int(L/2)+1), c_avg, c_err, label="True signal")
-    ax.plot(tr.arange(bw+1, int(L/2)+1), fc_err, label="Factorized Error")
-    ax.plot(tr.arange(bw+1, int(L/2)+1), c_err, label="True Error")
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(fc_avg[bw:]), fc_err[bw:], label="Factorized signal")
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(c_avg[bw:]), c_err[bw:], label="True signal")
+    ax.plot(tr.arange(bw+1, int(L/2)+1), fc_err[bw:], label="Factorized Error")
+    ax.plot(tr.arange(bw+1, int(L/2)+1), c_err[bw:], label="True Error")
 
-    ax.errorbar(tr.arange(bw+1, int(L/2)+1), bias, bias_err, label="Bias")
-    ax.plot(tr.arange(bw+1, int(L/2)+1), bias_err, label="Bias Error")
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(bias[bw:]), bias_err[bw:], label="Bias")
+    ax.plot(tr.arange(bw+1, int(L/2)+1), bias_err[bw:], label="Bias Error")
 
     ax.legend(loc='lower right')
 
-    ax.set_title('Full complement probe, n='+ str(300) +', ' r'$m_\pi L = 5$', fontsize=30)
+    ax.set_title('Quarter boundary probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$', fontsize=30)
     ax.set_ylabel('Magnitude', fontsize=20)
     #ax.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
 
-    ax2.errorbar(tr.arange(bw+1, int(L/2)+1), correlation, correlation_err)
+    ax2.errorbar(tr.arange(bw+1, int(L/2)+1), correlation[bw:], correlation_err[bw:])
     ax2.set_ylabel('Correlation', fontsize=20)
     ax2.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
 
+    fig2, ax = plt.subplots(1,1)
+    ax.set_yscale('log', nonpositive='clip')
+
+    #I'm gonna change up the StN measurment
+    #Keep the number of samples computed the same
+    measurements = tr.numel(corr[0])
+    for x in tr.arange(len(factorized_corr)):
+        bias[x] = tr.mean((tr.real(corr[x])-tr.real(factorized_corr[x])))
+        bias_err[x] = tr.std(tr.real(corr[x])-tr.real(factorized_corr[x]))/ np.sqrt(tr.numel(corr[x])-1)
+        # c_avg[x] = tr.real(tr.mean(corr[x][:measurements]))
+        # c_err[x] = tr.std(tr.real(corr[x][:measurements]))/np.sqrt(measurements-1)
+        # fc_avg[x] = tr.real(tr.mean(factorized_corr[x][:measurements]))
+        # fc_err[x] = tr.std(tr.real(factorized_corr[x][:measurements]))/np.sqrt(measurements-1)
 
 
+    fig2, ax = plt.subplots(1,1)
+    ax.set_yscale('log', nonpositive='clip')
+
+    ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(bias[bw:-bw])/bias_err[bw:-bw], label="Bias")
+    # ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(fc_avg[bw:-bw])/fc_err[bw:-bw], label="Factorized")
+    # ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(c_avg[bw:-bw])/c_err[bw:-bw], label="True")
+
+
+    ax.set_title('Quarter probed 2-pt signal to noise: '+ 'n='+ str(measurements) +', '+ 'p='+ str(p_n)+ 
+                r'$*2\pi/L$, ' + r'$m_\pi L = 5$', fontsize=30)
+    ax.set_ylabel('StN Ratio', fontsize=20)
+    ax.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
+    ax.legend(loc='lower right')
 
     plt.show()
     
@@ -2206,20 +2206,20 @@ def test_Exact_Schur_Correlator():
 
 
 def test_Factorized_Pion_Correlator():
-    batch_size= 10
+    batch_size= 300
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
     mass= 0.10*lam
-    L = 32
+    L = 48
     L2 = 16
-    p_n = 1.0
+    p_n = 2.0
     p = p_n*2*np.pi/L2
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
 
     #Boundary cut timeslices
-    xcut_1 = 12
-    xcut_2 = 29
+    xcut_1 = 20
+    xcut_2 = 45
     bw=3
 
     u = sch.hotStart()
@@ -2236,70 +2236,49 @@ def test_Factorized_Pion_Correlator():
     #TODO: Needs work below
     #Lets try some different bases
 
-    overlap = False
-    if True:
-        projs = tr.zeros(2*1*2*L2, 2*L*L2, dtype=tr.complex64)
-        ct=0
-        if overlap:
-            for x in tr.arange((xcut_1+1)*L2*2, (xcut_1+2)*L2*2):
-                projs[ct, x] = 1.0
-                ct += 1
-            for x in tr.arange((xcut_2+1)*L2*2, (xcut_2+2)*L2*2):
-                projs[ct, x] = 1.0
-                ct += 1
-        else:
-            for x in tr.arange((xcut_1)*L2*2, (xcut_1+1)*L2*2):
-                projs[ct, x] = 1.0
-                ct += 1
-            for x in tr.arange((L-1)*L2*2, (L)*L2*2):
-                projs[ct, x] = 1.0
-                ct += 1
-    elif False:
-        #Use only half the lattice index points
+    if False:
+        #Isolates the relevant spin index by boundary
+        mult = 1.0
         projs = tr.zeros(2*L2, 2*L*L2, dtype=tr.complex64)
         ct=0
-        if overlap:
-            for x in tr.arange((xcut_1+1)*L2, (xcut_1+2)*L2):
-                if x % 2 == 0:
-                    projs[ct, 2*x] = 1.0
-                    projs[ct+1, 2*x+1] = 1.0
-                    ct += 2
-            for x in tr.arange((xcut_2+1)*L2, (xcut_2+2)*L2):
-                if x % 2 == 0:
-                    projs[ct, 2*x] = 1.0
-                    projs[ct+1, 2*x+1] = 1.0
-                    ct += 2
-    elif False:
-        #Use only half the firs spin index on all lattice points
-        projs = tr.zeros(2*L2, 2*L*L2, dtype=tr.complex64)
-        ct=0
-        if overlap:
-            for x in tr.arange((xcut_1+1)*L2, (xcut_1+2)*L2):
-                projs[ct, 2*x] = 1.0
+        #Only need second spin index on the first boundary
+        for x in tr.arange(1, (1)*L2*2, 2):
+                projs[ct, x] = 1.0
                 ct += 1
-            for x in tr.arange((xcut_2+1)*L2, (xcut_2+2)*L2):
-                projs[ct, 2*x] = 1.0
+        #Only need first spin index on the second boundary
+        for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 2):
+                projs[ct, x] = 1.0
                 ct += 1
-    elif False:
-        #Try a wall projector
-        projs = tr.zeros(1, 2*L*L2, dtype=tr.complex64)
+
+    elif True:
+        #Probing half the boundary
+        #Need to include a multiplier for using fewer intermediates
+        mult = 2.0
+        projs = tr.zeros(L2, 2*L*L2, dtype=tr.complex64)
         ct=0
-        if overlap:
-            for x in tr.arange((xcut_1+1)*L2*2, (xcut_1+2)*L2*2):
-                projs[0, x] = 1.0
-            for x in tr.arange((xcut_2+1)*L2, (xcut_2+2)*L2):
-                projs[0, x] = 1.0
-        projs[0, :] = projs[0,:] / tr.norm(projs[0,:])
+        #Only need second spin index on the first boundary
+        for x in tr.arange(1, (1)*L2*2, 4):
+                projs[ct, x] = 1.0
+                ct += 1
+        #Only need first spin index on the second boundary
+        for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 4):
+                projs[ct, x] = 1.0
+                ct += 1
 
     elif False:
-        #TODO: This doesn't work!
-        overlap=True
-        #Random based projection
-        rand = tr.rand(2*L*L2, 40, dtype=tr.complex64)
-        d_inv = tr.inverse(sch.diracOperator(q[0]).to_dense())
-        projs =tr.einsum('bij, jk-> bik', d_inv, rand)
-
-        projs = tr.linalg.norm(projs, dim = 1)
+        #Probing one quarter of the boundary
+        #Need to include a multiplier for using fewer intermediates
+        mult = 4.0
+        projs = tr.zeros(int(L2/2), 2*L*L2, dtype=tr.complex64)
+        ct=0
+        #Only need second spin index on the first boundary
+        for x in tr.arange(1, (1)*L2*2, 8):
+                projs[ct, x] = 1.0
+                ct += 1
+        #Only need first spin index on the second boundary
+        for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 8):
+                projs[ct, x] = 1.0
+                ct += 1
 
 
     
@@ -2308,7 +2287,7 @@ def test_Factorized_Pion_Correlator():
                                                                           bw, projs)
 
     factorized_corr, corr = sch.measure_Factorized_Pion_Correlator(q, f_propogator, xcut_1, xcut_2,
-                                                                        bw, overlap,p=p)
+                                                                        bw, p=p)
     
     print(len(factorized_corr))
     c_avg = tr.zeros(len(factorized_corr))
@@ -2323,19 +2302,19 @@ def test_Factorized_Pion_Correlator():
     correlation_err = tr.zeros(len(factorized_corr))
 
     for x in tr.arange(len(factorized_corr)):
-        c_avg[x] = tr.mean(corr[x])
-        c_err[x] = tr.std(corr[x])/np.sqrt(tr.numel(corr[x])-1)
-        fc_avg[x] = tr.mean(factorized_corr[x])
-        fc_err[x] = tr.std(factorized_corr[x])/np.sqrt(tr.numel(factorized_corr[x])-1)
-        bias[x] = tr.mean(tr.abs(corr[x]-factorized_corr[x]))
-        bias_err[x] = tr.std(corr[x]-factorized_corr[x])/ np.sqrt(tr.numel(corr[x])-1)
-        cov = tr.mean(corr[x]*factorized_corr[x]) - tr.mean(corr[x])*tr.mean(factorized_corr[x])
-        correlation[x] = cov / (tr.std(corr[x])*tr.std(factorized_corr[x]))
+        c_avg[x] = tr.real(tr.mean(corr[x]))
+        c_err[x] = tr.std(tr.real(corr[x]))/np.sqrt(tr.numel(corr[x])-1)
+        fc_avg[x] = tr.real(tr.mean(factorized_corr[x]))
+        fc_err[x] = tr.std(tr.real(factorized_corr[x]))/np.sqrt(tr.numel(factorized_corr[x])-1)
+        bias[x] = tr.mean((tr.real(corr[x])-tr.real(factorized_corr[x])))
+        bias_err[x] = tr.std(tr.real(corr[x])-tr.real(factorized_corr[x]))/ np.sqrt(tr.numel(corr[x])-1)
+        cov = tr.mean(tr.real(corr[x])*tr.real(factorized_corr[x])) - tr.mean(tr.real(corr[x]))*tr.mean(tr.real(factorized_corr[x]))
+        correlation[x] = cov / (tr.std(tr.real(corr[x]))*tr.std(tr.real(factorized_corr[x])))
         correlation_err[x] = tr.sqrt((1-tr.square(correlation[x]))/(tr.numel(corr[x]) - 2))
 
 
     #Save data
-    data_write = tr.stack((tr.arange(bw+1, int(L/2)+1), c_avg, c_err,
+    data_write = tr.stack((tr.arange(1, int(L/2)+1), c_avg, c_err,
                            fc_avg, fc_err, bias, bias_err,
                             correlation, correlation_err), dim=0).numpy()
     np.savetxt('factorized_data.csv', data_write, delimiter=',')
@@ -2346,29 +2325,56 @@ def test_Factorized_Pion_Correlator():
     ax2.set_yscale('log', nonpositive='clip')
 
 
-    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(fc_avg), fc_err, label="Factorized signal")
-    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(c_avg), c_err, label="True signal")
-    ax.plot(tr.arange(bw+1, int(L/2)+1), fc_err, label="Factorized Error")
-    ax.plot(tr.arange(bw+1, int(L/2)+1), c_err, label="True Error")
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(fc_avg[bw:]), fc_err[bw:], label="Factorized signal")
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(c_avg[bw:]), c_err[bw:], label="True signal")
+    ax.plot(tr.arange(bw+1, int(L/2)+1), fc_err[bw:], label="Factorized Error")
+    ax.plot(tr.arange(bw+1, int(L/2)+1), c_err[bw:], label="True Error")
 
-    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(bias), bias_err, label="Bias")
-    ax.plot(tr.arange(bw+1, int(L/2)+1), bias_err, label="Bias Error")
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(bias[bw:]), bias_err[bw:], label="Bias")
+    ax.plot(tr.arange(bw+1, int(L/2)+1), bias_err[bw:], label="Bias Error")
 
     ax.legend(loc='lower right')
 
-    ax.set_title('Using exact Schur complement: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ 
+    ax.set_title('Half probed pion correlator: '+ 'configs='+ str(batch_size) +', '+ 'p='+ str(p_n)+ 
                 r'$*2\pi/L$, ' + r'$m_\pi L = 5$', fontsize=30)
     ax.set_ylabel('Magnitude', fontsize=20)
     #ax.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
 
-    ax2.errorbar(tr.arange(bw+1, int(L/2)+1), correlation, correlation_err)
+    ax2.errorbar(tr.arange(bw+1, int(L/2)+1), correlation[bw:], correlation_err[bw:])
     ax2.set_ylabel('Correlation', fontsize=20)
     ax2.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
 
+    plt.show()
+
+    #I'm gonna change up the StN measurment
+    #Keep the number of samples computed the same
+    measurements = tr.numel(corr[0])
+    for x in tr.arange(len(factorized_corr)):
+        bias[x] = tr.mean((tr.real(corr[x])-tr.real(factorized_corr[x])))
+        bias_err[x] = tr.std(tr.real(corr[x])-tr.real(factorized_corr[x]))/ np.sqrt(tr.numel(corr[x])-1)
+        # c_avg[x] = tr.real(tr.mean(corr[x][:measurements]))
+        # c_err[x] = tr.std(tr.real(corr[x][:measurements]))/np.sqrt(measurements-1)
+        # fc_avg[x] = tr.real(tr.mean(factorized_corr[x][:measurements]))
+        # fc_err[x] = tr.std(tr.real(factorized_corr[x][:measurements]))/np.sqrt(measurements-1)
 
 
+    fig2, ax = plt.subplots(1,1)
+    ax.set_yscale('log', nonpositive='clip')
+
+    ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(bias[bw:-bw])/bias_err[bw:-bw], label="Bias")
+    # ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(fc_avg[bw:-bw])/fc_err[bw:-bw], label="Factorized")
+    # ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(c_avg[bw:-bw])/c_err[bw:-bw], label="True")
+
+    ax.set_title('Half probed pion signal to noise: '+ 'n='+ str(measurements) +', '+ 'p='+ str(p_n)+ 
+                r'$*2\pi/L$, ' + r'$m_\pi L = 5$', fontsize=30)
+    ax.set_ylabel('StN Ratio', fontsize=20)
+    ax.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
+    ax.legend(loc='lower right')
 
     plt.show()
+    
+
+
     
 
 def d_Ddag_Spectral_Radius():
@@ -2664,8 +2670,8 @@ def main():
     #factorized_Pion_Comparison()
     #plot_Factorized_Correlator_Data()
     #compare_Factorizations()
-    test_Factorized_Measurement_Scan()
-    #test_Factorized_Pion_Correlator()
+    #test_Factorized_Measurement_Scan()
+    test_Factorized_Pion_Correlator()
     #test_Exact_Schur_Correlator()
 
 
