@@ -91,7 +91,7 @@ class Functional(ABC):
         raise NotImplementedError
 
     def mlapl(self,x): # minus the laplacian
-        return self.lapl(x) 
+        return -self.lapl(x) 
 
     def grad_lapl(self,x):
         """Compute the grad of the Laplacian at x."""
@@ -869,10 +869,10 @@ class Starget:
         return -self.grad(s,t)
     
     def mlapl(self,s):
-        return -self.coef*Psi0.lapl(s)
+        return -self.coef*Psi0().lapl(s)
 
     def grad_lapl(self,s):
-        return self.coef*Psi0.grad_lapl(s)
+        return self.coef*Psi0().grad_lapl(s)
 
 @dataclass
 class Sflow0:
@@ -895,7 +895,7 @@ class Sflow0:
         return -self.coef*Psi0().lapl(s)
 
     def grad_lapl(self,s):
-        return self.coef*Psi0.grad_lapl(s)
+        return self.coef*Psi0().grad_lapl(s)
 
 @dataclass
 class Sflow1:
@@ -931,7 +931,7 @@ class Sflow1:
         return r
 
     def grad_lapl(self,s):
-        r = tr.zeros(s.shape[0],dtype=s.dtype,device=s.device)
+        r = tr.zeros_like(s)
         for c, p in zip(self.c, self.psi):
             r += c * p.grad_lapl(s)
         return r
@@ -991,7 +991,7 @@ class Sflow2:
         return r
 
     def grad_lapl(self,s):
-        r = tr.zeros(s.shape[0],dtype=s.dtype,device=s.device)
+        r = tr.zeros_like(s)
         for c, p in zip(self.c, self.psi):
             r += c * p.grad_lapl(s)
         return r
