@@ -100,16 +100,19 @@ parser.add_argument('-lam'     , type=float, default=2.4 , help="Coupling consta
 parser.add_argument('-batch', type=int,   default=10  , help="HMC batch size")
 parser.add_argument('-L'     , type=int,   default=8, help="Lattice size")
 parser.add_argument('-dev'   , type=int,   default=-1 , help="Device number, -1 for CPU, 0,1,... for GPU")
+parser.add_argument("-warm",   type=int,   default=1000 , help="Number of warmup HMC steps")
+parser.add_argument("-meas",   type=int,   default=10000 , help="Number of measurement HMC steps")
 
 args = parser.parse_args()
 
 L=args.L
 lat = [L,L]
+
 # This set of params is very very close to critical.
 lam = args.lam
 #
-Nwarm = 1000
-Nmeas = 10000
+Nwarm = args.warm
+Nmeas = args.meas
 Nskip = args.Nskip
 batch_size = args.batch
 mass = args.m
@@ -122,7 +125,33 @@ mn2 = i.minnorm2(sg.force,sg.evolveQ,7,1.0)
 print(phi.shape,Vol,tr.mean(phi),tr.std(phi))
 hmc = u.hmc(T=sg,I=mn2,verbose=False)
 
+
 lC2p, lchi_m, E, av_phi, phi = gm.get_observables_hist(sg, hmc, phi, Nwarm, Nmeas, Nskip)
-#tau_phi1[sss],tau_suscept1[sss] = get_autocorrelationtime(av_phi, lchi_m)
-results_av = gm.gamma_method_with_replicas(gm.split_first_dim_to_list(tr.stack(av_phi).T.unsqueeze(2)), lambda A: A[0])
-results_lchi = gm.gamma_method_with_replicas(gm.split_first_dim_to_list(tr.stack(lchi_m).T.unsqueeze(2)), lambda A: A[0])
+#tau_phi1,tau_suscept1 = get_autocorrelationtime(av_phi, lchi_m)
+#map traces to cpu and do the analysis there
+results_av = gm.gamma_method_with_replicas(gm.split_first_dim_to_list(tr.stack(av_phi).T.unsqueeze(2).to(device)), lambda A: A[0])
+results_lchi = gm.gamma_method_with_replicas(gm.split_first_dim_to_list(tr.stack(lchi_m).T.unsqueeze(2).to(device)), lambda A: A[0])
+
+print("Gamma results for average phi:")
+print(f"F = {results_av['value']:.6f} ± {results_av['dvalue']:.6f} (±{results_av['ddvalue']:.6f})")
+print(f"tau_int = {results_av['tau_int']:.3f} ± {results_av['dtau_int']:.3f}")
+print(f"W_opt = {results_av['W_opt']}, Q = {results_av['Q']}")
+print("Gamma results for susceptibility:")
+print(f"F = {results_lchi['value']:.6f} ± {results_lchi['dvalue']:.6f} (±{results_lchi['ddvalue']:.6f})")
+print(f"tau_int = {results_lchi['tau_int']:.3f} ± {results_lchi['dtau_int']:.3f}")
+print(f"W_opt = {results_lchi['W_opt']}, Q = {results_lchi['Q']}")
+
+
+tau_phi1=results_av['tau_int']
+tau_suscept1=results_lchi['tau_int']
+dtau_phi1=results_av['dtau_int']
+dtau_suscept1=results_lchi['dtau_int']
+phi_av_mean=results_av['value']
+phi_av_std=results_av['dvalue']
+sucept_mean=results_lchi['value']
+sucept_std=results_lchi['dvalue']
+
+#save results to a text file with out removing previous data
+with open("MCMG_results_L"+str(L)+"_lam"+str(lam)+".txt", "a") as f:
+    f.write(f"{mass} {Nwarm} {Nmeas} {Nskip} {batch_size} {phi_av_mean} {phi_av_std} {tau_phi1} {dtau_phi1} {sucept_mean} {sucept_std} {tau_suscept1} {dtau_suscept1}\n")
+
