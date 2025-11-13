@@ -98,23 +98,39 @@ class Functional(ABC):
         raise NotImplementedError
     
 class Psi0(Functional):
-    def action(self,s):
-        # I have a batch dimension first
-        A = tr.zeros(s.shape[0],device=s.device)
-        # I will explicitelly make the code 2d
-        for mu in range(2,s.dim()):
-            A += tr.einsum('bsxy,bsxy->b',s,tr.roll(s,shifts=-1,dims=mu))
-        return 2.0*A # matches the paper definition with +/- sums
-    
-    def grad(self,s):
-        F = tr.zeros_like(s)
-        Lsig = -tr.einsum('bsxy,sra->braxy',s,L)
-        for mu in range(2,s.dim()):
-            F+=tr.roll(s,shifts= 1,dims=mu)+tr.roll(s,shifts=-1,dims=mu)
-        F=tr.einsum('bsaxy,bsxy->baxy',Lsig,F)
-        
-        return 2.0*F
+#    def action_old(self,s):
+#        # I have a batch dimension first
+#        A = tr.zeros(s.shape[0],device=s.device)
+#        # I will explicitelly make the code 2d
+#        for mu in range(2,s.dim()):
+#            A += tr.einsum('bsxy,bsxy->b',s,tr.roll(s,shifts=-1,dims=mu))
+#        return 2.0*A # matches the paper definition with +/- sums
 
+    def action(self,s):
+        s1 = tr.zeros_like(s) 
+        for mu in range(2,s.dim()):
+            s1+=tr.roll(s,shifts=-1,dims=mu)+tr.roll(s,shifts=1,dims=mu)
+        #return dot3(s,s1).flatten(1).sum(-1)
+        return (s*s1).flatten(1).sum(-1)
+        #slower ....
+        #return dot3(s,s1_field(s)).flatten(1).sum(-1)
+    
+ #   def grad_old(self,s):
+ #       F = tr.zeros_like(s)
+ #       Lsig = -tr.einsum('bsxy,sra->braxy',s,L)
+ #       for mu in range(2,s.dim()):
+ #           F+=tr.roll(s,shifts= 1,dims=mu)+tr.roll(s,shifts=-1,dims=mu)
+ #       F=tr.einsum('bsaxy,bsxy->baxy',Lsig,F)
+ #       
+ #       return 2.0*F
+
+    def grad(self,s):
+        s1 = tr.zeros_like(s) 
+        for mu in range(2,s.dim()):
+            s1+=tr.roll(s,shifts=-1,dims=mu)+tr.roll(s,shifts=1,dims=mu)
+
+        return -2.0*tr.cross(s1,s,dim=1)
+     
     # this one is simple... it is an eigenfunction of the laplacian
     def lapl(self,s):
         return -4.0*self.action(s)
@@ -132,8 +148,9 @@ class Psi2(Functional):
         for mu in range(2,s.dim()):
             s1+=tr.roll(s,shifts=-1,dims=mu)+tr.roll(s,shifts=1,dims=mu)
         for mu in range(2,s.dim()):
-            A += tr.einsum('bsxy,bsxy->b',s,tr.roll(s1,shifts=-1,dims=mu))
-
+            #A += tr.einsum('bsxy,bsxy->b',s,tr.roll(s1,shifts=-1,dims=mu))
+            A+= (s*tr.roll(s1,shifts=-1,dims=mu)).flatten(1).sum(-1)
+            
         V = 2.0*tr.ones(s.shape[0],device=s.device,dtype=s.dtype)
         for mu in range(2,s.dim()):
             V *= s.shape[mu] 
@@ -147,12 +164,12 @@ class Psi2(Functional):
         for mu in range(2,s.dim()):
             s1+=tr.roll(s,shifts=-1,dims=mu)+tr.roll(s,shifts=1,dims=mu)
         F = tr.zeros_like(s)
-        Lsig = -tr.einsum('bsxy,sra->braxy',s,L)
+        #Lsig = -tr.einsum('bsxy,sra->braxy',s,L)
         for mu in range(2,s.dim()):
             F+=tr.roll(s1,shifts= 1,dims=mu)+tr.roll(s1,shifts=-1,dims=mu)
-        F=tr.einsum('bsaxy,bsxy->baxy',Lsig,F)
+        #F=tr.einsum('bsaxy,bsxy->baxy',Lsig,F)
         
-        return 2.0*F # matches the paper definition with +/- sums
+        return -2.0*tr.cross(F,s,dim=1) # matches the paper definition with +/- sums
 
     # this one is simple... it is an eigenfunction of the laplacian
     def lapl(self,s):
@@ -1195,7 +1212,7 @@ def testLuscher():
 
     #second order action
     print("Testing Luscher equation using O(2) flow")
-    Sf2 = SflowO2(beta,lat)
+    Sf2 = SflowO2(beta)
     r=[]
     std=[]
     for t in ftime:
