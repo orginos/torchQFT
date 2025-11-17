@@ -211,9 +211,12 @@ class BijectorFactory():
 # this is an invertible RG transformation
 # it preseves the residual fine degrees of freedom
 class RGlayer(nn.Module):
-    def __init__(self,transformation_type="select",batch_size=1):
+    def __init__(self,transformation_type="select",batch_size=1,dtype=tr.float64,device=tr.device("cpu")):
         super(RGlayer, self).__init__()
         self.batch_size = batch_size
+        self.device = device
+        self.dtype = dtype
+        
         if(transformation_type=="select"):
             mask_c = [[1.0,0.0],[0.0,0.0]]
             mask_r = [[1.0,1.0],[1.0,1.0]]
@@ -229,10 +232,10 @@ class RGlayer(nn.Module):
         self.type = transformation_type
         
         self.restrict = nn.Conv2d(in_channels=1, out_channels=1, kernel_size=(2,2),stride=2,bias=False)
-        self.restrict.weight = tr.nn.Parameter(tr.tensor([[mask_c]]),requires_grad=False)
+        self.restrict.weight = nn.Parameter(tr.tensor([[mask_c]], dtype=self.dtype, device=self.device), requires_grad=False)
 
         self.prolong = nn.ConvTranspose2d(in_channels=1,out_channels=1,kernel_size=(2,2),stride=2,bias=False)
-        self.prolong.weight = tr.nn.Parameter(tr.tensor([[mask_r]]),requires_grad=False)
+        self.prolong.weight = nn.Parameter(tr.tensor([[mask_r]], dtype=self.dtype, device=self.device), requires_grad=False)
 
         
     def coarsen(self,f):
@@ -260,14 +263,17 @@ class RGlayer(nn.Module):
 #works only with power of 2 sizes
 # and the lattice has to be square...
 class MGflow(nn.Module):
-    def __init__(self,size,bijector,rg,prior,Nconvs=1):
+    def __init__(self,size,bijector,rg,prior,Nconvs=1,depth=None):
         super(MGflow, self).__init__()
         self.prior=prior
         self.rg=rg
         self.size = size
         minSize = min(size)
         print("Initializing MGflow module with size: ",minSize)
-        self.depth = int(np.log(minSize)/np.log(2))
+        if depth==None:
+            self.depth = int(np.log(minSize)/np.log(2))
+        else:
+            self.depth = depth
         print("Using depth: ", self.depth)
         print("Using rg type: ",rg.type)
         sizes = []

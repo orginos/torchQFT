@@ -51,6 +51,7 @@ mpl.rc('font', **font)
 
 ###### Architectures and parameters #################################
 
+### this is the first attempt at a non-linear restriction/prolongation operator but not invertible
 class NonLinearRGlayer(nn.Module):
     def __init__(self, channels=1, hidden_channels=8, batch_size=1):
         super(NonLinearRGlayer, self).__init__()
@@ -95,13 +96,13 @@ parser = argparse.ArgumentParser()
 
 
 parser.add_argument('-Nskip' , type=int,   default=1 , help="number of skipped trajectories between measurements")
-parser.add_argument('-m'     , type=float, default=-0.5, help="Mass parameter")
 parser.add_argument('-lam'     , type=float, default=2.4 , help="Coupling constant")
 parser.add_argument('-batch', type=int,   default=10  , help="HMC batch size")
 parser.add_argument('-L'     , type=int,   default=8, help="Lattice size")
 parser.add_argument('-dev'   , type=int,   default=-1 , help="Device number, -1 for CPU, 0,1,... for GPU")
 parser.add_argument("-warm",   type=int,   default=1000 , help="Number of warmup HMC steps")
 parser.add_argument("-meas",   type=int,   default=10000 , help="Number of measurement HMC steps")
+parser.add_argument('-m'     , type=float, default=-0.5, help="Mass parameter")
 
 args = parser.parse_args()
 
@@ -153,5 +154,7 @@ sucept_std=results_lchi['dvalue']
 
 #save results to a text file with out removing previous data
 with open("MCMG_results_L"+str(L)+"_lam"+str(lam)+".txt", "a") as f:
+    #names of columns
+    f.write("#mass Nwarm Nmeas Nskip batch_size phi_av_mean phi_av_std tau_phi1 dtau_phi1 sucept_mean sucept_std tau_suscept1 dtau_suscept1\n")
     f.write(f"{mass} {Nwarm} {Nmeas} {Nskip} {batch_size} {phi_av_mean} {phi_av_std} {tau_phi1} {dtau_phi1} {sucept_mean} {sucept_std} {tau_suscept1} {dtau_suscept1}\n")
 
