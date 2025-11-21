@@ -29,8 +29,13 @@ class njl:
             self.cdtype=tr.cdouble
 
     def gamma_matrices(self):
+        # Define gamma matrices in 2D (using Pauli matrices)
         gamma0 = tr.tensor([[0., 1.], [1., 0.]])         # sigma_x
         gamma1 = tr.tensor([[0., -1j], [1j, 0.]])        # sigma_y
+        # Staggered gamma5 not needed in 2D NJL
+        gamma5 = tr.tensor([[1., 0.], [0., -1.]])         # sigma_z
+        gamma0_stag = tr.tensor([[1., 0.], [0., -1.]])   # sigma_z
+        gamma1_stag = tr.tensor([[0., 1j], [-1j, 0.]])  # -sigma_y
         return [gamma0.to(tr.cdouble), gamma1.to(tr.cdouble)]
 
     def site_index(self, x, y, L):
@@ -134,16 +139,36 @@ class njl:
         phi = tr.einsum('bxy,by->bx',Dirac_op, phi)
 
         return phi
+    
     def fermion_action(self, Dirac_op, phi):
+        Ddag = Dirac_op.transpose(-2, -1).conj()  # D^t
+        Q = tr.matmul(Ddag, Dirac_op)  # D^t D
 
-        """
-        Compute the fermion action S_f = phi^dagger (D_W^dagger D_W)^{-1} phi
-        Output: action value for each batch element, size (Bs,) or we can sum over batch and return a scalar
-        Complete this function
-        """
-        return 0
+        # Solve Q x = phi for x
+        x = tr.linalg.solve(Q, phi.unsqueeze(-1))  # (Bs, 2L^2, 1)
+        action = tr.sum(tr.conj(phi) * x.squeeze(-1), dim=1).real  # (Bs,)
+        return action
 
     def action(self, sigma, phi,Dirac_op):
         sig2=sigma*sigma
-        A = tr.sum((self.Nf/2*self.lam)*sig2,dim=(1,2))+ self.fermion_action(Dirac_op, phi)
+        A = tr.sum((self.Nf/(2*self.lam))*sig2,dim=(1,2))+ self.fermion_action(Dirac_op, phi)
         return A
+    
+    def force(self, sigma, phi, Dirac_op):
+
+        L = self.L
+        V = L * L
+        Ddag = Dirac_op.transpose(-2, -1).conj()
+        Q = tr.matmul(Ddag, Dirac_op)
+        x = tr.linalg.solve(Q, phi.unsqueeze(-1))  # x = (D†D)^(-1) phi
+
+        force = tr.zeros_like(sigma, dtype=self.dtype)
+        for x_pos in range(L):
+            for y_pos in range(L):
+                site = self.site_index(x_pos, y_pos, L)
+                for a in range(2):
+                    idx = 2 * site + a
+                    # grad_Sf = 2 * Re[ x†(x) * phi(x) ]
+                    f = 2.0 * tr.real(tr.conj(x[:, idx, 0]) * x[:, idx, 0])
+                    force[:, x_pos, y_pos] += f
+        return -force-(self.Nf/self.lam)*sigma
