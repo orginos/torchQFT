@@ -149,6 +149,7 @@ class njl:
         action = tr.sum(tr.conj(phi) * x.squeeze(-1), dim=1).real  # (Bs,)
         return action
 
+
     def action(self, sigma, phi,Dirac_op):
         sig2=sigma*sigma
         A = tr.sum((self.Nf/(2*self.lam))*sig2,dim=(1,2))+ self.fermion_action(Dirac_op, phi)
