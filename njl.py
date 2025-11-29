@@ -58,7 +58,7 @@ class njl:
         return P
 
     def evolveQ(self,dt,P,Q):
-        """leapfrog update of field"""
+        """leapfrog update of a scalar field"""
         return Q + dt*P
     
     def kinetic(self,P):
@@ -140,7 +140,10 @@ class njl:
 
         return phi
     
-    def fermion_action(self, Dirac_op, phi):
+    def fermion_action(self, sigma):
+        Dirac_op=self.build_DW_wilson(sigma)
+        phi=self.pseudofermion_field(Dirac_op)
+
         Ddag = Dirac_op.transpose(-2, -1).conj()  # D^t
         Q = tr.matmul(Ddag, Dirac_op)  # D^t D
 
@@ -150,15 +153,17 @@ class njl:
         return action
 
 
-    def action(self, sigma, phi,Dirac_op):
+    def action(self, sigma):
         sig2=sigma*sigma
-        A = tr.sum((self.Nf/(2*self.lam))*sig2,dim=(1,2))+ self.fermion_action(Dirac_op, phi)
-        return A
+        A = tr.sum((self.Nf/(2*self.lam))*sig2,dim=(1,2)) + self.fermion_action(sigma)
+        return -A
     
-    def force(self, sigma, phi, Dirac_op):
+    def force(self, sigma):
 
         L = self.L
         V = L * L
+        Dirac_op=self.build_DW_wilson(sigma)
+        phi=self.pseudofermion_field(Dirac_op)
         Ddag = Dirac_op.transpose(-2, -1).conj()
         Q = tr.matmul(Ddag, Dirac_op)
         x = tr.linalg.solve(Q, phi.unsqueeze(-1))  # x = (D†D)^(-1) phi
@@ -172,4 +177,4 @@ class njl:
                     # grad_Sf = 2 * Re[ x†(x) * phi(x) ]
                     f = 2.0 * tr.real(tr.conj(x[:, idx, 0]) * x[:, idx, 0])
                     force[:, x_pos, y_pos] += f
-        return -force-(self.Nf/self.lam)*sigma
+        return force-(self.Nf/self.lam)*sigma
