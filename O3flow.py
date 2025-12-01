@@ -194,18 +194,41 @@ class Psi11_l(Functional):
         
         return A
 
-    def grad(self,s):
+    def grad(self, s: tr.Tensor) -> tr.Tensor:
+        # s: (B, S, X, Y), typically S==3 for the cross
         F = tr.zeros_like(s)
-        Lsig = -tr.einsum('bsxy,sra->braxy',s,L)
-        for mu in range(2,s.dim()):
-            bp = tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=mu))
-            bm = tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=+1,dims=mu))
-            F+=tr.einsum('bsxy,bxy->bsxy',tr.roll(s,shifts= 1,dims=mu),bm)
-            F+=tr.einsum('bsxy,bxy->bsxy',tr.roll(s,shifts=-1,dims=mu),bp)
-        F=tr.einsum('bsaxy,bsxy->baxy',Lsig,F)
         
-        return 4.0*F # 2 for the power and 2 the to match the paper definition with +/- sums
+        # Optional (often helps on CUDA with image-shaped tensors)
+        # s = s.contiguous(memory_format=tr.channels_last)
+        # F = F.contiguous(memory_format=tr.channels_last)
+        
+        for mu in range(2, s.dim()):
+            sp = tr.roll(s, shifts=+1, dims=mu)        # s(x+1)
+            sm = tr.roll(s, shifts=-1, dims=mu)        # s(x-1)
+            
+            # One reduction instead of two:
+            bm = (s * sp).sum(dim=1)                   # Σ_s s * s(x+1) -> (B, X, Y)
+            bp = tr.roll(bm, shifts=-1, dims=mu-1)     # Σ_s s * s(x-1) via shift of bm
+            
+            # Accumulate with fused mul+add (broadcast bm/bp over channel dim)
+            F.addcmul_(sp, bm.unsqueeze(1))            # F += sp * bm
+            F.addcmul_(sm, bp.unsqueeze(1))            # F += sm * bp
 
+        return 4.0 * tr.cross(s, F, dim=1)
+
+
+#    def old_grad(self,s):
+#        F = tr.zeros_like(s)
+#        Lsig = -tr.einsum('bsxy,sra->braxy',s,L)
+#        for mu in range(2,s.dim()):
+#            bp = tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=-1,dims=mu))
+#            bm = tr.einsum('bsxy,bsxy->bxy',s,tr.roll(s,shifts=+1,dims=mu))
+#            F+=tr.einsum('bsxy,bxy->bsxy',tr.roll(s,shifts= 1,dims=mu),bm)
+#            F+=tr.einsum('bsxy,bxy->bsxy',tr.roll(s,shifts=-1,dims=mu),bp)
+#        F=tr.einsum('bsaxy,bsxy->baxy',Lsig,F)
+#        
+#        return 4.0*F # 2 for the power and 2 the to match the paper definition with +/- sums
+    
     # this one is simple... it is an eigenfunction of the laplacian
     def lapl(self,s):
         return -12.0*self.action(s)
