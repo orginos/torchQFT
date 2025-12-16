@@ -8,6 +8,9 @@ import phi4 as s
 import integrators as i
 import update as u
 
+import mgmc as mgmc
+
+
 import time
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -103,8 +106,12 @@ parser.add_argument('-dev'   , type=int,   default=-1 , help="Device number, -1 
 parser.add_argument("-warm",   type=int,   default=1000 , help="Number of warmup HMC steps")
 parser.add_argument("-meas",   type=int,   default=10000 , help="Number of measurement HMC steps")
 parser.add_argument('-m'     , type=float, default=-0.5, help="Mass parameter")
+parser.add_argument('-mcmg', type=int, default=0, help="0:use HMC, 1:use MGMC and 2:use MGMC+rnvp")
 
 args = parser.parse_args()
+
+#print arguments
+print(args)
 
 L=args.L
 lat = [L,L]
@@ -117,21 +124,37 @@ Nmeas = args.meas
 Nskip = args.Nskip
 batch_size = args.batch
 mass = args.m
-device = args.dev
+#device = args.dev
+if args.dev == -1:
+    device = "cuda"
+else:
+    device = "cpu"
+
+
 
 Vol = np.prod(lat)
 sg = s.phi4(lat,lam,mass,batch_size=batch_size,device=device)
+print("Device: ", device) 
 phi = sg.hotStart()
 mn2 = i.minnorm2(sg.force,sg.evolveQ,7,1.0)
 print(phi.shape,Vol,tr.mean(phi),tr.std(phi))
 hmc = u.hmc(T=sg,I=mn2,verbose=False)
 
+FLOW=lambda: m.FlowBijectorParity(Nlayers=1,width=32)
 
-lC2p, lchi_m, E, av_phi, phi = gm.get_observables_hist(sg, hmc, phi, Nwarm, Nmeas, Nskip)
+mgf=MGflow1([L,L],FLOW,m.RGlayer("average",batch_size=batch_size,dtype=dtype,device=device),prior,depth=1).to(device)#.double()
+
+
+if args.mcmg == 0:
+    lC2p, lchi_m, E, av_phi, phi = gm.get_observables_hist(sg, hmc, phi, Nwarm, Nmeas, Nskip)
+elif args.mcmg == 1:
+    lC2p, lchi_m, E, av_phi, phi = mgmc.get_observables_MCMG(sg,mgf, hmc, phi, Nwarm, Nmeas, pp="no",mode="normal")
+elif args.mcmg == 2:
+    lC2p, lchi_m, E, av_phi, phi = mgmc.get_observables_MCMG(sg,mgf, hmc, phi, Nwarm, Nmeas, pp="no",mode="rnvp")
 #tau_phi1,tau_suscept1 = get_autocorrelationtime(av_phi, lchi_m)
 #map traces to cpu and do the analysis there
-results_av = gm.gamma_method_with_replicas(gm.split_first_dim_to_list(tr.stack(av_phi).T.unsqueeze(2).to(device)), lambda A: A[0])
-results_lchi = gm.gamma_method_with_replicas(gm.split_first_dim_to_list(tr.stack(lchi_m).T.unsqueeze(2).to(device)), lambda A: A[0])
+results_av = gm.gamma_method_with_replicas(gm.split_first_dim_to_list(tr.stack(av_phi).T.unsqueeze(2).to("cpu")), lambda A: A[0], max_lag=1200)
+results_lchi = gm.gamma_method_with_replicas(gm.split_first_dim_to_list(tr.stack(lchi_m).T.unsqueeze(2).to("cpu")), lambda A: A[0], max_lag=1200)
 
 print("Gamma results for average phi:")
 print(f"F = {results_av['value']:.6f} ± {results_av['dvalue']:.6f} (±{results_av['ddvalue']:.6f})")
@@ -155,6 +178,7 @@ sucept_std=results_lchi['dvalue']
 #save results to a text file with out removing previous data
 with open("MCMG_results_L"+str(L)+"_lam"+str(lam)+".txt", "a") as f:
     #names of columns
-    f.write("#mass Nwarm Nmeas Nskip batch_size phi_av_mean phi_av_std tau_phi1 dtau_phi1 sucept_mean sucept_std tau_suscept1 dtau_suscept1\n")
+    if os.path.getsize("MCMG_results_L"+str(L)+"_lam"+str(lam)+".txt") == 0:    
+        f.write("#mass Nwarm Nmeas Nskip batch_size phi_av_mean phi_av_std tau_phi1 dtau_phi1 sucept_mean sucept_std tau_suscept1 dtau_suscept1\n")
     f.write(f"{mass} {Nwarm} {Nmeas} {Nskip} {batch_size} {phi_av_mean} {phi_av_std} {tau_phi1} {dtau_phi1} {sucept_mean} {sucept_std} {tau_suscept1} {dtau_suscept1}\n")
 

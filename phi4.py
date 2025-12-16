@@ -36,12 +36,14 @@ class phi4():
         return Q + dt*P
     
     def kinetic(self,P):
-        return tr.einsum('bxy,bxy->b',P,P)/2.0 ;
+        return tr.einsum('bxy,bxy->b',P,P)/2.0
+
+    def coldStart(self):
+        sigma=tr.ones([self.Bs,self.V[0],self.V[1]], dtype=self.dtype,device=self.device)
+        return sigma
 
     def hotStart(self):
-        sigma=tr.normal(0.0,1.0,
-                        [self.Bs,self.V[0],self.V[1]],
-                        dtype=self.dtype,device=self.device)
+        sigma=tr.normal(0.0,1.0,[self.Bs,self.V[0],self.V[1]],dtype=self.dtype,device=self.device)
         return sigma
     
     def __init__(self,V,l,m,batch_size=1,device="cpu",dtype=tr.float32): 

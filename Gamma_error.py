@@ -11,7 +11,7 @@ Created on Wed Nov 2 03:30:00 2025
 
 """
 
-def get_observables_hist(sg,hmc, phi, Nwarm, Nmeas, Nskip):
+def get_observables_hist(sg,hmc, phi, Nwarm, Nmeas, Nskip,pp="no"):
 
     tic=time.perf_counter()
     Vol=sg.Vol
@@ -24,7 +24,7 @@ def get_observables_hist(sg,hmc, phi, Nwarm, Nmeas, Nskip):
     lchi_m = []
     E = []
     av_phi = []
-    phase=tr.tensor(np.exp(1j*np.indices(tuple(lat))[0]*2*np.pi/lat[0]))
+    phase=tr.tensor(np.exp(1j*np.indices(tuple(lat))[0]*2*np.pi/lat[0]),dtype=sg.dtype,device=sg.device)
     for k in range(Nmeas):
         ttE = sg.action(phi)/Vol
         E.append(ttE)
@@ -33,7 +33,7 @@ def get_observables_hist(sg,hmc, phi, Nwarm, Nmeas, Nskip):
         chi_m = av_sigma*av_sigma*Vol
         p1_av_sig = tr.mean(phi.view(sg.Bs,Vol)*phase.view(1,Vol),axis=1)
         C2p = tr.real(tr.conj(p1_av_sig)*p1_av_sig)*Vol
-        if(k%100==0):
+        if(k%100==0) and pp=="print":
             print("k= ",k,"(av_phi,chi_m, c2p, E) ", av_sigma.mean().numpy(),chi_m.mean().numpy(),C2p.mean().numpy(),ttE.mean().numpy())
             print("len(C2p): ", len(C2p))
         lC2p.append(C2p)
@@ -149,10 +149,10 @@ def split_first_dim_to_list(tensor: tr.Tensor) -> list:
     """
     return [tensor[i] for i in range(tensor.shape[0])]
 
-def gamma_method_with_replicas(data_replicas: list, f, S: float = 1.0):
+def gamma_method_with_replicas(data_replicas: list, f, S: float = 1.0, max_lag: int = 200):
     """
     Uli Wolff's Gamma analysis for arbitrary general scalar functional F(A, B, C, ...)
-    if we want to do a analysis for a principal observable A, we can just set F(A,A, B, C, ...) = A.
+    if we want to do a analysis for a principal observable A, we can just set F(A, B, C, ...) = A.
     and autograd will take care of the gradient which is 1
     Returns:
         - acf: normalized autocorrelation function
@@ -173,9 +173,9 @@ def gamma_method_with_replicas(data_replicas: list, f, S: float = 1.0):
     grad_f = compute_gradient_autograd(f, mean_a)
     projected = tr.cat([project_observable(rep, grad_f) for rep in data_replicas])
 
-    max_lag = 100
+    #max_lag = 200 # this is the maximum lag we will consider, IT IS
     acf_avg, acf_err = autocorrelation_proj_with_error(projected, max_lag=max_lag)
-    W_opt, tau_int, dtau_int, tau_hist, dtau_hist, W_hist = find_optimal_window(acf_avg, len(projected), S=S)
+    W_opt, tau_int, dtau_int, tau_hist, dtau_hist, W_hist = find_optimal_window(acf_avg, len(projected), S=S, maxW=max_lag)
 
     var_f = acf_avg[0] * (2 * tau_int / len(projected))
     dvalue = math.sqrt(var_f.item())

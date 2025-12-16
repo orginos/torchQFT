@@ -1,0 +1,36 @@
+no change     /sciclone/apps/miniforge3-24.9.2-0/condabin/conda
+no change     /sciclone/apps/miniforge3-24.9.2-0/bin/conda
+no change     /sciclone/apps/miniforge3-24.9.2-0/bin/conda-env
+no change     /sciclone/apps/miniforge3-24.9.2-0/bin/activate
+no change     /sciclone/apps/miniforge3-24.9.2-0/bin/deactivate
+no change     /sciclone/apps/miniforge3-24.9.2-0/etc/profile.d/conda.sh
+no change     /sciclone/apps/miniforge3-24.9.2-0/etc/fish/conf.d/conda.fish
+no change     /sciclone/apps/miniforge3-24.9.2-0/shell/condabin/Conda.psm1
+no change     /sciclone/apps/miniforge3-24.9.2-0/shell/condabin/conda-hook.ps1
+no change     /sciclone/apps/miniforge3-24.9.2-0/lib/python3.12/site-packages/xontrib/conda.xsh
+no change     /sciclone/apps/miniforge3-24.9.2-0/etc/profile.d/conda.csh
+no change     /sciclone/home/yacahuanamedra/.bashrc
+No action taken.
+Python path: /sciclone/home/yacahuanamedra/.conda/envs/torchQFT-env/bin/python3
+Python 3.12.2
+Running on node: bo04.sciclone.wm.edu
+Running on CPUs: bo04
+SLURM job ID: 237618
+SLURM job name: 1_2.4_50_128_1_1000_10000_-0.580
+In directory: /sciclone/home/yacahuanamedra/pscr/torchQFT
+Starting Python at Mon Dec  8 11:24:30 AM EST 2025
+/sciclone/pscr/yacahuanamedra/torchQFT/Gamma_error.py:27: UserWarning: Casting complex values to real discards the imaginary part (Triggered internally at /opt/conda/conda-bld/pytorch_1724789563135/work/aten/src/ATen/native/Copy.cpp:305.)
+  phase=tr.tensor(np.exp(1j*np.indices(tuple(lat))[0]*2*np.pi/lat[0]),dtype=sg.dtype,device=sg.device)
+Namespace(Nskip=1, lam=2.4, batch=50, L=128, dev=1, warm=1000, meas=10000, m=-0.58)
+Device:  cpu
+torch.Size([50, 128, 128]) 16384 tensor(0.0006) tensor(1.0010)
+time 0.0030 micro-seconds per HMC trajecrory
+Gamma results for average phi:
+F = 0.005034 ± 0.057492 (±0.001573)
+tau_int = 826.334 ± 45.210
+W_opt = 1200, Q = 0.0
+Gamma results for susceptibility:
+F = 523.694641 ± 0.047102 (±0.001693)
+tau_int = 554.659 ± 39.869
+W_opt = 1200, Q = 0.0
+Finished Python at Mon Dec  8 11:24:30 AM EST 2025

@@ -1,0 +1,37 @@
+no change     /sciclone/apps/miniforge3-24.9.2-0/condabin/conda
+no change     /sciclone/apps/miniforge3-24.9.2-0/bin/conda
+no change     /sciclone/apps/miniforge3-24.9.2-0/bin/conda-env
+no change     /sciclone/apps/miniforge3-24.9.2-0/bin/activate
+no change     /sciclone/apps/miniforge3-24.9.2-0/bin/deactivate
+no change     /sciclone/apps/miniforge3-24.9.2-0/etc/profile.d/conda.sh
+no change     /sciclone/apps/miniforge3-24.9.2-0/etc/fish/conf.d/conda.fish
+no change     /sciclone/apps/miniforge3-24.9.2-0/shell/condabin/Conda.psm1
+no change     /sciclone/apps/miniforge3-24.9.2-0/shell/condabin/conda-hook.ps1
+no change     /sciclone/apps/miniforge3-24.9.2-0/lib/python3.12/site-packages/xontrib/conda.xsh
+no change     /sciclone/apps/miniforge3-24.9.2-0/etc/profile.d/conda.csh
+no change     /sciclone/home/yacahuanamedra/.bashrc
+No action taken.
+Python path: /sciclone/home/yacahuanamedra/.conda/envs/torchQFT-env/bin/python3
+Python 3.12.2
+Running on node: bo07.sciclone.wm.edu
+Running on CPUs: bo07
+SLURM job ID: 237624
+SLURM job name: 1_2.4_50_128_1_1000_10000_-0.550
+In directory: /sciclone/home/yacahuanamedra/pscr/torchQFT
+Starting Python at Mon Dec  8 11:24:30 AM EST 2025
+/sciclone/pscr/yacahuanamedra/torchQFT/Gamma_error.py:27: UserWarning: Casting complex values to real discards the imaginary part (Triggered internally at /opt/conda/conda-bld/pytorch_1724789563135/work/aten/src/ATen/native/Copy.cpp:305.)
+  phase=tr.tensor(np.exp(1j*np.indices(tuple(lat))[0]*2*np.pi/lat[0]),dtype=sg.dtype,device=sg.device)
+Namespace(Nskip=1, lam=2.4, batch=50, L=128, dev=1, warm=1000, meas=10000, m=-0.55)
+Device:  cpu
+torch.Size([50, 128, 128]) 16384 tensor(0.0007) tensor(1.0005)
+time 0.0037 micro-seconds per HMC trajecrory
+Optimal window found: W = 709
+Gamma results for average phi:
+F = 0.004593 ± 0.035471 (±0.001493)
+tau_int = 314.542 ± 26.481
+W_opt = 1200, Q = 0.0
+Gamma results for susceptibility:
+F = 124.982750 ± 0.024145 (±0.000811)
+tau_int = 145.748 ± 9.788
+W_opt = 709, Q = 0.0
+Finished Python at Mon Dec  8 11:24:30 AM EST 2025
