@@ -116,7 +116,7 @@ class ConvFlowLayer(nn.Module):
         for k in range(self.Nsteps):
             sf = self.unfold(tr.roll(self.fold(self.bj[2*k  ].g(uf).transpose(2,1)),dims=(2,3),shifts=(-1,-1))).transpose(2,1)
             uf = self.unfold(tr.roll(self.fold(self.bj[2*k+1].g(sf).transpose(2,1)),dims=(2,3),shifts=( 1, 1))).transpose(2,1)
-        x = self.fold(uf.transpose(2,1)).squeeze()
+        x = self.fold(uf.transpose(2,1)).squeeze(1)
         return x
 
     # fields to noise
@@ -139,7 +139,7 @@ class ConvFlowLayer(nn.Module):
             #fold
             z = self.fold(ff.transpose(2,1))
             
-        z = z.squeeze()
+        z = z.squeeze(1)#change back to Batch,2d
         return z,log_det_J
 
     def log_prob(self,x):

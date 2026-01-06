@@ -27,6 +27,11 @@ class phi4():
             F +=  tr.roll(phi,shifts= 1,dims=mu)+tr.roll(phi,shifts=-1,dims=mu)
         return F
     
+    def autoforce(self,phi):#it matches with the force up to 10^-14 worst case
+        x_tensor = phi.clone().requires_grad_()
+        grad=tr.autograd.grad(self.action(x_tensor).sum(),x_tensor,retain_graph=False)[0]
+
+        return -grad
 
     def refreshP(self):
         P = tr.normal(0.0,1.0,[self.Bs,self.V[0],self.V[1]],dtype=self.dtype,device=self.device)
