@@ -1919,9 +1919,36 @@ def plot_Factorized_Correlator_Data():
 
     plt.show()
 
+#Jacknife for pearson correlation since the correlation is unstable
+#run to run
+def jackknife_Correlation(x, y):
+
+    N = x.shape[0]
+
+    # Full-sample correlation
+    cov = tr.mean(tr.real(x)*tr.real(y)) - tr.mean(tr.real(x))*tr.mean(tr.real(y))
+    full_correlation = cov / (tr.std(tr.real(x))*tr.std(tr.real(y)))
+
+    # Leave-one-out correlations
+    r_jack = tr.empty(N, dtype=x.dtype, device=x.device)
+
+    for i in range(N):
+        mask = tr.ones(N, dtype=tr.bool)
+        mask[i] = False
+        cov = tr.mean(tr.real(x[mask])*tr.real(y[mask])) - tr.mean(tr.real(x[mask]))*tr.mean(tr.real(y[mask]))
+        r_jack[i] = cov / (tr.std(tr.real(x[mask]))*tr.std(tr.real(y[mask])))
+
+    # Jackknife mean
+    r_jack_mean = r_jack.mean()
+
+    # Jackknife standard error
+    r_jack_se = tr.sqrt((N - 1) * tr.mean((r_jack - r_jack_mean) ** 2))
+
+    return full_correlation, r_jack_mean, r_jack_se
+
 
 def test_Factorized_Measurement_Scan():
-    batch_size= 50
+    batch_size= 100
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
     mass= 0.10*lam
@@ -1932,9 +1959,9 @@ def test_Factorized_Measurement_Scan():
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     #Boundary cut timeslices
-    xcut_1 = 27
-    xcut_2 = 59
-    bw=5
+    xcut_1 = 16
+    xcut_2 = 48
+    bw=16
 
     u = sch.hotStart()
 
@@ -1991,6 +2018,9 @@ def test_Factorized_Measurement_Scan():
     elif False:
         #Probing half the boundary
         #Need to include a multiplier for using fewer intermediates
+        title1 = 'Half boundary probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title2 = 'Half boundary 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
+                r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
         mult = 2.0
         projs = tr.zeros(L2, 2*L*L2, dtype=tr.complex64)
         ct=0
@@ -2045,26 +2075,26 @@ def test_Factorized_Measurement_Scan():
                 projs[ct, x] = 1.0
                 ct += 1
 
-    elif False:
+    elif True:
         #Deflation technique
         #Seek eigenmodes of the complement Dirac operator
-        title1 = 'Deflation probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title1 = 'Deflation 2-pt probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
         title2 = 'Deflation probe 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
                 r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
         mult=1.0
-        ov=5
-        N_vec = 8
+        ov=16
+        N_vec = 100
         projs = sch.complement_Deflation_Eigenvectors(q, xcut_1, N_vec, ov=ov)
     
-    elif True:
+    elif False:
         #Distillation technique
         #Seek distillation eigenvectors for a given batch of configurations
-        title1 = 'Distillation probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
-        title2 = 'Distillation 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
+        title1 = 'Laplacian 2-pt probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title2 = 'Laplacian 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
                 r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
         mult=1.0
         N_vec = 32
-        ov=5
+        ov=1
         projs = sch.boundary_Distillation_Eigenvectors(q, xcut_1, N_vec, ov=ov)
 
         
@@ -2108,9 +2138,10 @@ def test_Factorized_Measurement_Scan():
         fc_err[x] = tr.std(tr.real(factorized_corr[x]))/np.sqrt(tr.numel(factorized_corr[x])-1)
         bias[x] = tr.mean((tr.real(corr[x])-tr.real(factorized_corr[x])))
         bias_err[x] = tr.std(tr.real(corr[x])-tr.real(factorized_corr[x]))/ np.sqrt(tr.numel(corr[x])-1)
-        cov = tr.mean(tr.real(corr[x])*tr.real(factorized_corr[x])) - tr.mean(tr.real(corr[x]))*tr.mean(tr.real(factorized_corr[x]))
-        correlation[x] = cov / (tr.std(tr.real(corr[x]))*tr.std(tr.real(factorized_corr[x])))
-        correlation_err[x] = tr.sqrt((1-tr.square(correlation[x]))/(tr.numel(corr[x]) - 2))
+        #cov = tr.mean(tr.real(corr[x])*tr.real(factorized_corr[x])) - tr.mean(tr.real(corr[x]))*tr.mean(tr.real(factorized_corr[x]))
+        # correlation[x] = cov / (tr.std(tr.real(corr[x]))*tr.std(tr.real(factorized_corr[x])))
+        # correlation_err[x] = (1-tr.square(correlation[x]))/np.sqrt(tr.numel(corr[x]) - 3)
+        fcr, correlation[x], correlation_err[x] = jackknife_Correlation(corr[x], factorized_corr[x])
 
 
     #Save data
@@ -2146,8 +2177,6 @@ def test_Factorized_Measurement_Scan():
     ax2.grid(which='minor', color='0.9')
     ax2.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
 
-    fig2, ax = plt.subplots(1,1)
-    ax.set_yscale('log', nonpositive='clip')
 
     #I'm gonna change up the StN measurment
     #Keep the number of samples computed the same
@@ -2164,7 +2193,7 @@ def test_Factorized_Measurement_Scan():
     fig2, ax = plt.subplots(1,1)
     ax.set_yscale('log', nonpositive='clip')
 
-    ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(bias[bw:-bw])/bias_err[bw:-bw], label="Bias")
+    #ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(bias[bw:-bw])/bias_err[bw:-bw], label="Bias")
     # ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(fc_avg[bw:-bw])/fc_err[bw:-bw], label="Factorized")
     # ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(c_avg[bw:-bw])/c_err[bw:-bw], label="True")
 
@@ -2297,7 +2326,7 @@ def test_Factorized_Pion_Correlator():
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
     mass= 0.10*lam
-    L = 32
+    L = 64
     L2 = 16
     p_n = 0.0
     p = p_n*2*np.pi/L2
@@ -2305,9 +2334,9 @@ def test_Factorized_Pion_Correlator():
 
 
     #Boundary cut timeslices
-    xcut_1 = 13
-    xcut_2 = 29
-    bw=3
+    xcut_1 = 16
+    xcut_2 = 48
+    bw=16
 
     u = sch.hotStart()
 
@@ -2366,27 +2395,34 @@ def test_Factorized_Pion_Correlator():
         for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 8):
                 projs[ct, x] = 1.0
                 ct += 1
-    elif False:
+    elif True:
         #Deflation technique
-        #Seek deflation eigenvectors for a given batch of configurations
-        #TODO:What should the signal boost multiplier be?
+        #Seek eigenmodes of the complement Dirac operator
+        title1 = 'Pion Deflation probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title2 = 'Deflation probe Pion signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
+                r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
         mult=1.0
-        N_vec = 30
-        projs = sch.complement_Deflation_Eigenvectors(q, xcut_1, N_vec)
+        ov=16
+        N_vec = 60
+        projs = sch.complement_Deflation_Eigenvectors(q, xcut_1, N_vec, ov=ov)
     elif True:
         #Distillation technique
         #Seek distillation eigenvectors for a given batch of configurations
         #TODO:What should the signal boost multiplier be?
+        title1 = 'Laplacian Pion probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title2 = 'Laplacian Pion signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
+                r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
         mult=1.0
-        N_vec = 50
-        projs = sch.boundary_Distillation_Eigenvectors(q, xcut_1, N_vec)
+        ov=16
+        N_vec = 60
+        projs = sch.boundary_Distillation_Eigenvectors(q, xcut_1, N_vec, ov=ov)
 
 
 
     
     
     ensemble_l, ensemble_r, f_propogator = sch.factorized_Propogator_Proj(q, xcut_1, xcut_2,
-                                                                          bw, projs)
+                                                                          projs, ov=ov)
 
     factorized_corr, corr = sch.measure_Factorized_Pion_Correlator(q, f_propogator, xcut_1, xcut_2,
                                                                         bw, p=p)
@@ -2403,7 +2439,7 @@ def test_Factorized_Pion_Correlator():
     correlation = tr.zeros(len(factorized_corr))
     correlation_err = tr.zeros(len(factorized_corr))
 
-    for x in tr.arange(len(factorized_corr)):
+    for x in tr.arange(bw, len(factorized_corr)):
         factorized_corr[x] = mult *factorized_corr[x]
         c_avg[x] = tr.real(tr.mean(corr[x]))
         c_err[x] = tr.std(tr.real(corr[x]))/np.sqrt(tr.numel(corr[x])-1)
@@ -2411,9 +2447,10 @@ def test_Factorized_Pion_Correlator():
         fc_err[x] = tr.std(tr.real(factorized_corr[x]))/np.sqrt(tr.numel(factorized_corr[x])-1)
         bias[x] = tr.mean((tr.real(corr[x])-tr.real(factorized_corr[x])))
         bias_err[x] = tr.std(tr.real(corr[x])-tr.real(factorized_corr[x]))/ np.sqrt(tr.numel(corr[x])-1)
-        cov = tr.mean(tr.real(corr[x])*tr.real(factorized_corr[x])) - tr.mean(tr.real(corr[x]))*tr.mean(tr.real(factorized_corr[x]))
-        correlation[x] = cov / (tr.std(tr.real(corr[x]))*tr.std(tr.real(factorized_corr[x])))
-        correlation_err[x] = tr.sqrt((1-tr.square(correlation[x]))/(tr.numel(corr[x]) - 2))
+        #cov = tr.mean(tr.real(corr[x])*tr.real(factorized_corr[x])) - tr.mean(tr.real(corr[x]))*tr.mean(tr.real(factorized_corr[x]))
+        # correlation[x] = cov / (tr.std(tr.real(corr[x]))*tr.std(tr.real(factorized_corr[x])))
+        # correlation_err[x] = (1-tr.square(correlation[x]))/np.sqrt(tr.numel(corr[x]) - 3)
+        fcr, correlation[x], correlation_err[x] = jackknife_Correlation(corr[x], factorized_corr[x])
 
 
     #Save data
@@ -2438,8 +2475,7 @@ def test_Factorized_Pion_Correlator():
 
     ax.legend(loc='lower right')
 
-    ax.set_title('Distilled pion correlator: '+ 'configs='+ str(batch_size) +', '+ 'p='+ str(p_n)+ 
-                r'$*2\pi/L$, ' + r'$m_\pi L = 5$', fontsize=30)
+    ax.set_title(title1, fontsize=30)
     ax.set_ylabel('Magnitude', fontsize=20)
     #ax.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
 
@@ -2451,7 +2487,7 @@ def test_Factorized_Pion_Correlator():
 
     #I'm gonna change up the StN measurment
     #Keep the number of samples computed the same
-    measurements = tr.numel(corr[0])
+    measurements = tr.numel(corr[bw+1])
     for x in tr.arange(len(factorized_corr)):
         bias[x] = tr.mean((tr.real(corr[x])-tr.real(factorized_corr[x])))
         bias_err[x] = tr.std(tr.real(corr[x])-tr.real(factorized_corr[x]))/ np.sqrt(tr.numel(corr[x])-1)
@@ -2468,8 +2504,7 @@ def test_Factorized_Pion_Correlator():
     # ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(fc_avg[bw:-bw])/fc_err[bw:-bw], label="Factorized")
     # ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(c_avg[bw:-bw])/c_err[bw:-bw], label="True")
 
-    ax.set_title('Distilled pion signal to noise: '+ 'n='+ str(measurements) +', '+ 'p='+ str(p_n)+ 
-                r'$*2\pi/L$, ' + r'$m_\pi L = 5$', fontsize=30)
+    ax.set_title(title2, fontsize=30)
     ax.set_ylabel('StN Ratio', fontsize=20)
     ax.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
     ax.legend(loc='lower right')
@@ -2485,15 +2520,18 @@ def two_Level_Factorized_Pion():
     mass= 0.10*lam
     L = 32
     L2 = 16
-    p_n = 0.0
+    p_n = 2.0
     p = p_n*2*np.pi/L2
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
 
     #Boundary cut timeslices
-    xcut_1 = 13
-    xcut_2 = 29
-    bw=3
+    xcut_1 = 15
+    xcut_2 = 31
+    bw=1
+
+    #Number of level 1 configurations per level 0 config
+    n1=100
 
     u = sch.hotStart()
 
@@ -2510,100 +2548,168 @@ def two_Level_Factorized_Pion():
     #Try a simple even-odd projection
     #Probing half the boundary
     #Need to include a multiplier for using fewer intermediates
-    mult = 2.0
-    projs = tr.zeros(L2, 2*L*L2, dtype=tr.complex64)
-    ct=0
-    #Only need second spin index on the first boundary
-    for x in tr.arange(1, (1)*L2*2, 4):
-            projs[ct, x] = 1.0
-            ct += 1
-    #Only need first spin index on the second boundary
-    for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 4):
-            projs[ct, x] = 1.0
-            ct += 1
+    if True:
+        mult = 2.0
+        ov=1
+        projs = tr.zeros(L2, 2*L*L2, dtype=tr.complex64)
+        ct=0
+        #Only need second spin index on the first boundary
+        for x in tr.arange(1, (1)*L2*2, 4):
+                projs[ct, x] = 1.0
+                ct += 1
+        #Only need first spin index on the second boundary
+        for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 4):
+                projs[ct, x] = 1.0
+                ct += 1
 
-    title1 = '2-level even-odd pion, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
-    title2 = '2 level even-odd 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
-            r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
+        N_vec= ct
 
-    #Number of level 1 configurations per level 0 config
-    n1=10
+        title1 = '2-level even-odd pion, n='+ str(batch_size) +', ' r'$m_\pi L = 5$ '+ 'p='+ str(p_n)+ \
+                r'$*2\pi/L$, '
+        title2 = '2 level even-odd 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
+                r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
+    if False:
+        #Deflation technique
+        #TODO- needs to update each complement config
+        #Seek eigenmodes of the complement Dirac operator
+        title1 = 'Deflation probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$ '+ 'p='+ str(p_n)+ \
+                r'$*2\pi/L$, '
+        title2 = 'Deflation probe 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
+                r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
+        mult=1.0
+        ov=3
+        N_vec = 16
+        projs = sch.complement_Deflation_Eigenvectors(q, xcut_1, N_vec, ov=ov)
+
+
     q1 = tuple(q)
+
+    max_length = int((L)/2)
+
+    factorized_corr = [None]* (max_length)
+    corr = [None] * (max_length)
+
+    #Measure Bias and correlation in the level-0 config
+    print("Measuring Bias")
+
+    #Measure the level-0 config using true and factorized propogator
+    e_l, e_r, f_propogator = sch.factorized_Propogator_Proj(q1, xcut_1, xcut_2,
+                                                                        projs, ov)
+    factorized_corr0, corr0 = sch.measure_Factorized_Pion_Correlator(q1, f_propogator, xcut_1, xcut_2, 
+                                                                    bw, p=p)
+    #Measure bias and correlation
+    c_avg0 = tr.zeros(len(factorized_corr))
+    fc_avg0 = tr.zeros(len(factorized_corr))
+    c_err0 = tr.zeros(len(factorized_corr))
+    fc_err0 = tr.zeros(len(factorized_corr))
+    bias0 = tr.zeros(max_length)
+    bias_err0 = tr.zeros(max_length)
+    correlation0 = tr.zeros(max_length)
+    correlation_err0 = tr.zeros(max_length)
+
+
+    for x in np.arange(bw, max_length):
+        factorized_corr0[x] = mult *factorized_corr0[x]
+        c_avg0[x] = tr.real(tr.mean(corr0[x]))
+        c_err0[x] = tr.std(tr.real(corr0[x]))/np.sqrt(tr.numel(corr0[x])-1)
+        fc_avg0[x] = tr.real(tr.mean(factorized_corr0[x]))
+        fc_err0[x] = tr.std(tr.real(factorized_corr0[x]))/np.sqrt(tr.numel(factorized_corr0[x])-1)
+        bias0[x] = tr.mean((tr.real(corr0[x])-tr.real(factorized_corr0[x])))
+        bias_err0[x] = tr.std(tr.real(corr0[x])-tr.real(factorized_corr0[x]))/ np.sqrt(tr.numel(corr0[x])-1)
+        cov = tr.mean(tr.real(corr0[x])*tr.real(factorized_corr0[x])) - tr.mean(tr.real(corr0[x]))*tr.mean(tr.real(factorized_corr0[x]))
+        correlation0[x] = cov / (tr.std(tr.real(corr0[x]))*tr.std(tr.real(factorized_corr0[x])))
+        correlation_err0[x] = tr.sqrt((1-tr.square(correlation0[x]))/(tr.numel(corr0[x]) - 2))
+        
+
+
 
     print("Beginning 2-level integration")
     for m in np.arange(n1):
         #2nd level integration
         q = lvl2_sim.second_Level_Evolve(q, 50, xcut_1, xcut_2, bw)
 
-        #TODO: Error correction
+        #Construct projectors here if not fixed
+        #projs = sch.complement_Deflation_Eigenvectors(q, xcut_1, N_vec, ov=ov)
 
         if m == 0:
-            ensemble_l, ensemble_r, f_propogator = sch.factorized_Propogator_Proj(q, xcut_1, xcut_2,
-                                                                        bw, projs)
-        else:
             e_l, e_r, f_propogator = sch.factorized_Propogator_Proj(q, xcut_1, xcut_2,
-                                                                        bw, projs)
-            ensemble_l = ensemble_l + e_l
-            ensemble_r = ensemble_r + e_r
+                                                                        projs, ov)
+            
+            ensemble_l = tr.zeros((batch_size, n1, N_vec, tr.numel(e_l[0, 0,:])), dtype=tr.complex64)
+            ensemble_r = tr.zeros((batch_size, n1, N_vec, tr.numel(e_r[0, 0,:])), dtype=tr.complex64)
+
+            ensemble_l[:, m, :,:] = e_l
+            ensemble_r[:,m,:,:] = e_r
+            
+        else:
+            ensemble_l[:,m,:,:], ensemble_r[:,m,:,:], f_propogator = sch.factorized_Propogator_Proj(q, xcut_1, xcut_2,
+                                                                        projs, ov)
         print(m)
-        
-    #Average
-    avg_left = ensemble_l / n1
-    avg_right = ensemble_r / n1
 
-    #Combine pieces for correlator
-    f_propogator = tr.sum(tr.einsum('bxi, bxj->bxij',avg_left, avg_right), dim=1)
+    print("Measuring Ensembles")    
+    #Combine for n1^2 measurements
+    for m1 in np.arange(n1):
 
-    factorized_corr, cx = sch.measure_Factorized_Pion_Correlator(q, f_propogator, xcut_1, xcut_2, 
-                                                                    bw, p=p)
-    
-    fcx, corr = sch.measure_Factorized_Pion_Correlator(q1, f_propogator, xcut_1, xcut_2, 
-                                                                    bw, p=p)
 
-    print('Timeslices measured: ' + str(len(factorized_corr)))
-    c_avg = tr.zeros(len(factorized_corr))
+        for m2 in np.arange(n1):
+            #Construct propogator
+            f_propogator = tr.sum(tr.einsum('bix, biy->bixy', ensemble_l[:,m2, :], ensemble_r[:,m1,:]), dim=1)
+
+            #Make measurement
+            ens_fc = sch.measure_Factorized_Pion_Correlator(q, f_propogator, xcut_1, xcut_2, 
+                                                                    bw, p=p, factorized_only=True)
+            
+            #store measurement
+            if m1 == 0 and m2 == 0:
+                for t in np.arange(max_length):
+                    factorized_corr[t] = ens_fc[t]
+            else:
+                for t in np.arange(bw, max_length):
+                    temp = tr.cat((factorized_corr[t], ens_fc[t]), 0)
+                    factorized_corr[t] = temp
+
+        print(m1)
+
+
+
+
     fc_avg = tr.zeros(len(factorized_corr))
-    c_err = tr.zeros(len(factorized_corr))
     fc_err = tr.zeros(len(factorized_corr))
 
-    bias = tr.zeros(len(factorized_corr))
-    bias_err = tr.zeros(len(factorized_corr))
 
-    correlation = tr.zeros(len(factorized_corr))
-    correlation_err = tr.zeros(len(factorized_corr))
-
-    for x in tr.arange(len(factorized_corr)):
-        factorized_corr[x] = mult *factorized_corr[x]
-        c_avg[x] = tr.real(tr.mean(corr[x]))
-        c_err[x] = tr.std(tr.real(corr[x]))/np.sqrt(tr.numel(corr[x])-1)
+    for x in tr.arange(bw, len(factorized_corr)):
+        #factorized_corr[x] = mult *factorized_corr[x]
+        factorized_corr[x] = mult *factorized_corr[x] + bias0[x]
         fc_avg[x] = tr.real(tr.mean(factorized_corr[x]))
         fc_err[x] = tr.std(tr.real(factorized_corr[x]))/np.sqrt(tr.numel(factorized_corr[x])-1)
-        bias[x] = tr.mean((tr.real(corr[x])-tr.real(factorized_corr[x])))
-        bias_err[x] = tr.std(tr.real(corr[x])-tr.real(factorized_corr[x]))/ np.sqrt(tr.numel(corr[x])-1)
-        cov = tr.mean(tr.real(corr[x])*tr.real(factorized_corr[x])) - tr.mean(tr.real(corr[x]))*tr.mean(tr.real(factorized_corr[x]))
-        correlation[x] = cov / (tr.std(tr.real(corr[x]))*tr.std(tr.real(factorized_corr[x])))
-        correlation_err[x] = tr.sqrt((1-tr.square(correlation[x]))/(tr.numel(corr[x]) - 2))
+        #fc_err[x] = tr.sqrt(tr.square(tr.std(tr.real(factorized_corr[x]))/np.sqrt(tr.numel(factorized_corr[x])-1)) 
+        #                    + bias_err0[x]**2)
+        # bias[x] = tr.mean((tr.real(corr[x])-tr.real(factorized_corr[x])))
+        # bias_err[x] = tr.std(tr.real(corr[x])-tr.real(factorized_corr[x]))/ np.sqrt(tr.numel(corr[x])-1)
+
+
 
 
     #Save data
-    data_write = tr.stack((tr.arange(1, int(L/2)+1), c_avg, c_err,
-                           fc_avg, fc_err, bias, bias_err,
-                            correlation, correlation_err), dim=0).numpy()
+    data_write = tr.stack((tr.arange(1, int(L/2)+1), c_avg0, c_err0,
+                           fc_avg, fc_err, bias0, bias_err0,
+                            correlation0, correlation_err0), dim=0).numpy()
     np.savetxt('2_level_factorized_data.csv', data_write, delimiter=',')
     
+    #First plot level 0
 
     fig, (ax, ax2) = plt.subplots(2,1)
     ax.set_yscale('log', nonpositive='clip')
     ax2.set_yscale('log', nonpositive='clip')
 
 
-    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(fc_avg[bw:]), fc_err[bw:], label="2-level signal")
-    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(c_avg[bw:]), c_err[bw:], label="1-level signal")
-    ax.plot(tr.arange(bw+1, int(L/2)+1), fc_err[bw:], label="2-level Error")
-    ax.plot(tr.arange(bw+1, int(L/2)+1), c_err[bw:], label="1-level Error")
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(fc_avg0[bw:]), fc_err0[bw:], label="Factorized signal")
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(c_avg0[bw:]), c_err0[bw:], label="Level-0 true signal")
+    ax.plot(tr.arange(bw+1, int(L/2)+1), fc_err0[bw:], label="Factorized Error")
+    ax.plot(tr.arange(bw+1, int(L/2)+1), c_err0[bw:], label="True Error")
 
-    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(bias[bw:]), bias_err[bw:], label="Bias")
-    ax.plot(tr.arange(bw+1, int(L/2)+1), bias_err[bw:], label="Bias Error")
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(bias0[bw:]), bias_err0[bw:], label="Bias")
+    ax.plot(tr.arange(bw+1, int(L/2)+1), bias_err0[bw:], label="Bias Error")
 
     ax.legend(loc='lower right')
 
@@ -2611,40 +2717,58 @@ def two_Level_Factorized_Pion():
     ax.set_ylabel('Magnitude', fontsize=20)
     #ax.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
 
-    ax2.errorbar(tr.arange(bw+1, int(L/2)+1), correlation[bw:], correlation_err[bw:])
+    ax2.errorbar(tr.arange(bw+1, int(L/2)+1), correlation0[bw:], correlation_err0[bw:])
     ax2.set_ylabel('Correlation', fontsize=20)
     ax2.set_ylim(0,1)
     #ax2.grid(True, axis='y', ls='--')
     ax2.grid(which='minor', color='0.9')
     ax2.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
 
-    fig2, ax = plt.subplots(1,1)
-    ax.set_yscale('log', nonpositive='clip')
+    #Now plot Level 1
+
+    fig2, ax3 = plt.subplots(1,1)
+    ax3.set_yscale('log', nonpositive='clip')
+
+
+    ax3.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(fc_avg[bw:]), fc_err[bw:], label="2-level signal + Bias")
+    ax3.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(c_avg0[bw:]), c_err0[bw:], label="Level-0 true signal")
+    ax3.plot(tr.arange(bw+1, int(L/2)+1), fc_err[bw:], label="2-level Error")
+    ax3.plot(tr.arange(bw+1, int(L/2)+1), c_err0[bw:], label="True Error")
+
+    #ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(bias0[bw:]), bias_err0[bw:], label="Bias")
+    #ax.plot(tr.arange(bw+1, int(L/2)+1), bias_err0[bw:], label="Bias Error")
+
+    ax3.legend(loc='lower right')
+
+    ax3.set_title("2nd-level integration, n = " + str(n1*n1*batch_size), fontsize=30)
+
+    ax3.set_ylabel('Magnitude', fontsize=20)
+    #ax.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
 
     #I'm gonna change up the StN measurment
     #Keep the number of samples computed the same
-    measurements = tr.numel(corr[0])
-    for x in tr.arange(len(factorized_corr)):
-        bias[x] = tr.mean((tr.real(corr[x])-tr.real(factorized_corr[x])))
-        bias_err[x] = tr.std(tr.real(corr[x])-tr.real(factorized_corr[x]))/ np.sqrt(tr.numel(corr[x])-1)
-        c_avg[x] = tr.real(tr.mean(corr[x][:measurements]))
-        c_err[x] = tr.std(tr.real(corr[x][:measurements]))/np.sqrt(measurements-1)
-        fc_avg[x] = tr.real(tr.mean(factorized_corr[x][:measurements]))
-        fc_err[x] = tr.std(tr.real(factorized_corr[x][:measurements]))/np.sqrt(measurements-1)
+    # measurements = tr.numel(corr[bw+1])
+    # for x in tr.arange(bw+1, len(factorized_corr)):
+    #     bias[x] = tr.mean((tr.real(corr[x])-tr.real(factorized_corr[x])))
+    #     bias_err[x] = tr.std(tr.real(corr[x])-tr.real(factorized_corr[x]))/ np.sqrt(tr.numel(corr[x])-1)
+    #     c_avg[x] = tr.real(tr.mean(corr[x][:measurements]))
+    #     c_err[x] = tr.std(tr.real(corr[x][:measurements]))/np.sqrt(measurements-1)
+    #     fc_avg[x] = tr.real(tr.mean(factorized_corr[x][:measurements]))
+    #     fc_err[x] = tr.std(tr.real(factorized_corr[x][:measurements]))/np.sqrt(measurements-1)
 
 
-    fig2, ax = plt.subplots(1,1)
-    ax.set_yscale('log', nonpositive='clip')
+    fig3, ax5 = plt.subplots(1,1)
+    ax5.set_yscale('log', nonpositive='clip')
 
-    ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(bias[bw:-bw])/bias_err[bw:-bw], label="Bias")
-    ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(fc_avg[bw:-bw])/fc_err[bw:-bw], label="2-level")
-    ax.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(c_avg[bw:-bw])/c_err[bw:-bw], label="1-level")
+    ax5.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(bias0[bw:-bw])/bias_err0[bw:-bw], label="Bias")
+    ax5.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(fc_avg[bw:-bw])/fc_err[bw:-bw], label="2-level")
+    ax5.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(c_avg0[bw:-bw])/c_err0[bw:-bw], label="1-level")
 
 
-    ax.set_title(title2, fontsize=30)
-    ax.set_ylabel('StN Ratio', fontsize=20)
-    ax.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
-    ax.legend(loc='lower right')
+    ax5.set_title(title2, fontsize=30)
+    ax5.set_ylabel('StN Ratio', fontsize=20)
+    ax5.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
+    ax5.legend(loc='lower right')
 
     plt.show()
     
@@ -2945,10 +3069,10 @@ def main():
     #factorized_Pion_Comparison()
     #plot_Factorized_Correlator_Data()
     #compare_Factorizations()
-    test_Factorized_Measurement_Scan()
+    #test_Factorized_Measurement_Scan()
     #test_Factorized_Pion_Correlator()
     #test_Exact_Schur_Correlator()
-    #two_Level_Factorized_Pion()
+    two_Level_Factorized_Pion()
 
 
 

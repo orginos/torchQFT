@@ -497,23 +497,81 @@ class schwinger():
             d00 = d_rolled[:, 0:(xcut_1+2*(ov-1))*2*self.V[1], 0:(xcut_1+2*(ov-1))*2*self.V[1]]
 
 
-        #Compute eigenvectors of D^dag D:
-        #Lets try computing it in the complement space
-        m = tr.einsum('byx, byz-> bxz', tr.conj(d00), d00)
-        L, V = tr.linalg.eig(m)
+        boundary_only = True
+        if boundary_only:
+            bound_d = tr.zeros((self.Bs, 2*2*ov*self.V[1], 2*2*ov*self.V[1]), dtype=tr.complex64)
+
+            bound_d[:, :2*ov*self.V[1], :2*ov*self.V[1]] = d00[:, :2*ov*self.V[1], :2*ov*self.V[1]]
+            bound_d[:, 2*ov*self.V[1]:, 2*ov*self.V[1]:] = d00[:, -2*ov*self.V[1]:, -2*ov*self.V[1]:]
+
+            m = tr.einsum('byx, byz-> bxz', tr.conj(bound_d), bound_d)
+
+        else:
+            #Compute eigenvectors of D^dag D:
+            #Lets try computing it in the complement space
+            m = tr.einsum('byx, byz-> bxz', tr.conj(d00), d00)
+
+        #Try eigh and see if it doesn't overwhelm memory
+        L, V = tr.linalg.eigh(m)
 
         #Sort and return k with lowest eigenvalue
         #sorted_L, sorted_ind = tr.sort(tr.abs(L), descending=True)
-        sorted_L, sorted_ind = tr.sort(tr.sqrt(tr.real(L)), descending = False)
+        sorted_L, sorted_ind = tr.sort(tr.real(L), descending = False)
 
 
-        projs = tr.zeros((self.Bs, k, 2*self.V[0]*self.V[1]), dtype=tr.complex64)
+        projs = tr.zeros((self.Bs, k+1, 2*self.V[0]*self.V[1]), dtype=tr.complex64)
         
         for b in np.arange(self.Bs):
+            transverse = tr.eye(2*self.V[0]*self.V[1])
             for x in np.arange(k):
-                temp = tr.zeros_like(projs[b,x,:], dtype=tr.complex64)
-                temp[:(xcut_1+2*(ov-1))*2*self.V[1]] = V[b, :, sorted_ind[b, x]]
+                if boundary_only:
+                    temp = tr.zeros_like(projs[b,x,:], dtype=tr.complex64)
+                    temp[:2*ov*self.V[1]] = V[b, :2*ov*self.V[1], sorted_ind[b,x]]
+                    temp[-2*ov*self.V[1]:] = V[b, -2*ov*self.V[1]:, sorted_ind[b,x]]
+                else:
+                    temp = tr.zeros_like(projs[b,x,:], dtype=tr.complex64)
+                    temp[:(xcut_1+2*(ov-1))*2*self.V[1]] = V[b, :, sorted_ind[b, x]]
+
                 projs[b, x, :] = tr.roll(temp, -(ov-1)*2*self.V[1], 0)
+
+                transverse = transverse - tr.outer(projs[b,x,:], tr.conj(projs[b,x,:]))/tr.dot(projs[b,x,:], tr.conj(projs[b,x,:]))
+
+            #Collapse transverse space into a vector
+            t_vec = transverse.sum(dim=0)
+            #Save as final vector
+            #projs[b, k, :] = t_vec
+            projs[b, k, :] = t_vec/tr.norm(t_vec)
+
+            #Try Graham Schmidt orthogonalization for transverse space instead
+            # ones vector for transverse space to keep deterministic
+            transverse = tr.ones_like(projs[b,k-1, :], dtype=tr.complex64)
+            #transverse = tr.rand_like(projs[b,k-1, :]) + 1.0j*tr.rand_like(projs[b,k-1, :])
+
+            # orthogonalization
+            for x in range(k):
+                v = projs[b, x, :]
+                transverse = transverse - tr.dot(tr.conj(v), transverse) * v
+
+            # re-orthogonalization pass 
+            for x in range(k):
+                v = projs[b, x, :]
+                transverse = transverse - tr.dot(tr.conj(v), transverse) * v
+
+            # Normalize
+            norm = tr.norm(transverse)
+            transverse = transverse / norm
+
+            projs[b, k, :] = transverse
+
+            #Now try a very coarse transverse space in the empty center
+            # B = 2 * ov * self.V[1]
+            # N = 2 * self.V[0] * self.V[1]
+
+            # t = tr.zeros(N, dtype=tr.complex64)
+            # t[B:N-B] = 1.0   # or tr.randn(N - 2*B)
+
+            # #t = t / tr.norm(t)
+            # projs[b, k, :] = t
 
 
 
@@ -523,6 +581,10 @@ class schwinger():
     #eigenvectors sought after
     #Output: Most significant k distillation
     def boundary_Distillation_Eigenvectors(self, q, xcut_1, k, ov = 1):
+        u = q[0]
+
+
+        
         #Includes Dirac Space in Laplacian
 
         #Construct the full laplacian then slice it
@@ -539,7 +601,7 @@ class schwinger():
         bc[:, 0, self.V[0]-1, :] = -2.0*u[:, 0, self.V[0] - 1, :]
         u_bc = u + bc
 
-        for mu in [1]:
+        for mu in [0,1]:
             #Forward shifted indices
             p_s =  tr.roll(p, shifts = -1, dims=mu)
             #Flatten the 2D reps of lattice/field to one dimension
@@ -560,34 +622,68 @@ class schwinger():
 
         #Diagonal
         d_dir = tr.zeros([self.Bs, self.V[0]*self.V[1], self.V[0]*self.V[1]], dtype=tr.complex64)
-        d_dir[:, p_f, p_f] = -2.0
+        d_dir[:, p_f, p_f] = -4.0
         laplacian = laplacian+ tr.kron(d_dir, tr.eye(2))
 
         #Reduce to the complement domain
         laplacian_roll = tr.roll(laplacian, ((ov-1)*2*self.V[1], (ov-1)*2*self.V[1]), dims=(1,2))
 
         r_l = laplacian_roll[:, 0:(xcut_1+2*(ov-1))*2*self.V[1], 0:(xcut_1+2*(ov-1))*2*self.V[1]]
+        
 
         #Or try just the boundaries
+        boundary_only = True
+        if boundary_only:
+            bound_laplacian = tr.zeros((self.Bs, 2*2*ov*self.V[1], 2*2*ov*self.V[1]), dtype=tr.complex64)
 
-        #r_l[:, ov*2*self.V[1]:(xcut_1+ov)*2*self.V[1], ov*2*self.V[1]:(xcut_1+ov)*2*self.V[1]] = 0.0
+            bound_laplacian[:, :2*ov*self.V[1], :2*ov*self.V[1]] = r_l[:, :2*ov*self.V[1], :2*ov*self.V[1]]
+            bound_laplacian[:, 2*ov*self.V[1]:, 2*ov*self.V[1]:] = r_l[:, -2*ov*self.V[1]:, -2*ov*self.V[1]:]
 
-        L, V = tr.linalg.eig(-1.0*r_l)
+            L, V = tr.linalg.eigh(-1.0*bound_laplacian)
+        else:
+            L, V = tr.linalg.eigh(-1.0*r_l)
         sorted_L, sorted_ind = tr.sort(tr.real(L), descending=False)
-        # print(L[0, :])
+        print(sorted_L[0, :])
 
-
-        projs = tr.zeros((self.Bs, k, 2*self.V[0]*self.V[1]), dtype=tr.complex64)
+        projs = tr.zeros((self.Bs, k+1, 2*self.V[0]*self.V[1]), dtype=tr.complex64)
 
         for b in np.arange(self.Bs):
+
             for x in np.arange(k):
-                # projs[b, x, :2*self.V[1]] = V[b, :2*self.V[1], sorted_ind[b, x]]
-                # projs[b, x, -2*self.V[1]:] = V[b, 2*self.V[1]:, sorted_ind[b, x]]
-                temp = tr.zeros_like(projs[b,x,:], dtype=tr.complex64)
-                temp[:(xcut_1+2*(ov-1))*2*self.V[1]] = V[b, :, sorted_ind[b, x]]
+                if boundary_only:
+                    temp = tr.zeros_like(projs[b,x,:], dtype=tr.complex64)
+                    temp[:2*ov*self.V[1]] = V[b, :2*ov*self.V[1], sorted_ind[b,x]]
+                    temp[-2*ov*self.V[1]:] = V[b, -2*ov*self.V[1]:, sorted_ind[b,x]]
+                else:
+                    temp = tr.zeros_like(projs[b,x,:], dtype=tr.complex64)
+                    temp[:(xcut_1+2*(ov-1))*2*self.V[1]] = V[b, :, sorted_ind[b, x]]
+                
                 projs[b, x, :] = tr.roll(temp, -(ov-1)*2*self.V[1], 0)
 
+             #Try Graham Schmidt orthogonalization for transverse space instead
+            # vector of ones for transverse space
+            transverse = tr.ones(2*self.V[0]*self.V[1], dtype=tr.complex64)
+
+            # orthogonalization
+            for x in range(k):
+                v = projs[b, x, :]
+                transverse = transverse - tr.dot(tr.conj(v), transverse) * v
+
+            # re-orthogonalization pass 
+            for x in range(k):
+                v = projs[b, x, :]
+                transverse = transverse - tr.dot(tr.conj(v), transverse) * v
+
+            # Normalize
+            norm = tr.norm(transverse)
+            transverse = transverse / norm
+
+            projs[b, k, :] = transverse
+
+
         projs_orthonormal, r = tr.linalg.qr(tr.transpose(projs, 1,2), mode='reduced')
+
+        
         #print(projs[0, k, :])
 
 
@@ -838,14 +934,14 @@ class schwinger():
             subdomain_index_ct = tr.numel(s1[0,0,:])
             bulk_index_ct = tr.numel(bulk[0,0,:])
 
-            ensembleL = tr.zeros([self.Bs, tr.numel(projs[:,0]), bulk_index_ct], dtype=tr.complex64)
-            ensembleR = tr.zeros([self.Bs, tr.numel(projs[:,0]), subdomain_index_ct], dtype=tr.complex64)
-            summed = tr.zeros([self.Bs, bulk_index_ct, subdomain_index_ct])
-            
             if projs.ndim==2:
                 num_proj = tr.numel(projs[:,0])
             else:
                 num_proj = tr.numel(projs[0,:,0])
+
+            ensembleL = tr.zeros([self.Bs, num_proj, bulk_index_ct], dtype=tr.complex64)
+            ensembleR = tr.zeros([self.Bs, num_proj, subdomain_index_ct], dtype=tr.complex64)
+            summed = tr.zeros([self.Bs, bulk_index_ct, subdomain_index_ct])
 
             for xi in tr.arange(num_proj):
                 #Need to update to allow for batch of projectors
@@ -870,7 +966,7 @@ class schwinger():
                                             ensembleR[:, xi, :])
 
             #Remove overlap spaces from the right complement domain
-            ensembleR[:, :, (ov-1)*2*self.V[1]:(self.V[0]+1 -ov)*2*self.V[1]]
+            ensembleR =ensembleR[:, :, (ov-1)*2*self.V[1]:(self.V[0]+1 -ov)*2*self.V[1]]
             summed = summed[:, :, (ov-1)*2*self.V[1]:(self.V[0]+1 -ov)*2*self.V[1]]
 
             
@@ -905,14 +1001,14 @@ class schwinger():
         subdomain_index_ct = tr.numel(s1[0,0,:])
         bulk_index_ct = tr.numel(bulk[0,0,:])
 
-        ensembleL = tr.zeros([self.Bs, tr.numel(projs[:,0]), bulk_index_ct], dtype=tr.complex64)
-        ensembleR = tr.zeros([self.Bs, tr.numel(projs[:,0]), subdomain_index_ct], dtype=tr.complex64)
-        summed = tr.zeros([self.Bs, bulk_index_ct, subdomain_index_ct])
-        
         if projs.ndim==2:
             num_proj = tr.numel(projs[:,0])
         else:
             num_proj = tr.numel(projs[0,:,0])
+
+        ensembleL = tr.zeros([self.Bs, num_proj, bulk_index_ct], dtype=tr.complex64)
+        ensembleR = tr.zeros([self.Bs, num_proj, subdomain_index_ct], dtype=tr.complex64)
+        summed = tr.zeros([self.Bs, bulk_index_ct, subdomain_index_ct])
 
         for xi in tr.arange(num_proj):
             #Need to update to allow for batch of projectors
@@ -1068,10 +1164,15 @@ class schwinger():
         return factorized_corr_magnitude, corr_magnitude
     
     #TODO: Check this still works with newest bugfix
-    def measure_Factorized_Pion_Correlator(self, q, f_propogator, xcut_1, xcut_2, bw, p = 0.0):
+    def measure_Factorized_Pion_Correlator(self, q, f_propogator, xcut_1, xcut_2, bw, p = 0.0, ov=1, factorized_only=False):
 
-        d_inv = tr.inverse(self.diracOperator(q[0]).to_dense())
         max_length = int((self.V[0])/2)
+
+        if factorized_only == False:
+            d_inv = tr.inverse(self.diracOperator(q[0]).to_dense())
+        corr = [None] * (max_length)
+
+        factorized_corr = [None]* (max_length)
         
         #1/2 for middle, then x2 for dirac space
         mid_x = self.V[1]
@@ -1079,12 +1180,9 @@ class schwinger():
         #Accounts for shifting of the lattice indices in the factorizing process
         sink_adj = -2*(xcut_1)*self.V[1]
         
-        sink_t = xcut_1
+        sink_t = xcut_1+ bw
 
-        factorized_corr = [None]* (max_length)
-        corr = [None] * (max_length)
-
-        while sink_t < self.V[0]:
+        while sink_t < self.V[0] - bw:
             source_t = 0
             while source_t < xcut_1:
                 f_c = tr.zeros(self.Bs)
@@ -1099,11 +1197,12 @@ class schwinger():
                         f_c = f_c -  tr.sum(tr.einsum('bij, bkj-> bik', factorized_prop, factorized_prop.conj()), dim=(1,2)) \
                             *np.exp(-1.0j*p*sink_x)
 
-                        #Take an unfactorized measurement as well
-                        sink_ind = sink_ind - sink_adj
-                        prop = d_inv[:, sink_ind:sink_ind+2, source_ind:source_ind+2]
-                        c = c - tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2)) \
-                            *np.exp(-1.0j*p*sink_x)
+                        #Take an unfactorized measurement as well if needed
+                        if factorized_only == False:
+                            sink_ind = sink_ind - sink_adj
+                            prop = d_inv[:, sink_ind:sink_ind+2, source_ind:source_ind+2]
+                            c = c - tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2)) \
+                                *np.exp(-1.0j*p*sink_x)
 
                 dist = min(sink_t - source_t, source_t + self.V[0] - sink_t)
 
@@ -1123,10 +1222,12 @@ class schwinger():
                     corr[dist-1] = temp
 
                 source_t += 1
-            print('sink position: ', sink_t)
+            #print('sink position: ', sink_t)
             sink_t += 1
-
-        return factorized_corr, corr
+        if factorized_only == False:
+            return factorized_corr, corr
+        else:
+            return factorized_corr
 
 
 
