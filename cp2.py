@@ -41,24 +41,24 @@ class cp2():
     def action(self,z):
         A = self.Nd * self.Vol * tr.ones(z.shape[0], device=self.device)
         # Normalize so aligned fields have zero action:
-        # S = (beta/3) * [Nd*Vol - sum_{x,mu} |z(x)^\dagger z(x+mu)|^2]
+        # S = beta * [Nd*Vol - sum_{x,mu} |z(x)^\dagger z(x+mu)|^2]
         dims = tuple(range(1, 1 + self.Nd))
         for mu in range(self.Nd):
             z_shift = tr.roll(z, shifts=-1, dims=1 + mu)
             overlap = tr.einsum('...c,...c->...', tr.conj(z), z_shift)
             #overlap = tr.sum(tr.conj(z)*z_shift,dim=-1)
             A = A - tr.sum(tr.abs(overlap) ** 2, dim=dims)
-        return (self.beta / 3.0) * A
+        return self.beta * A
 
     def action_unshifted(self, z):
-        # S = -(beta/3) * sum_{x,mu} |z(x)^\dagger z(x+mu)|^2
+        # S = -beta * sum_{x,mu} |z(x)^\dagger z(x+mu)|^2
         dims = tuple(range(1, 1 + self.Nd))
         A = tr.zeros(z.shape[0], device=self.device)
         for mu in range(self.Nd):
             z_shift = tr.roll(z, shifts=-1, dims=1 + mu)
             overlap = tr.einsum('...c,...c->...', tr.conj(z), z_shift)
             A = A - tr.sum(tr.abs(overlap) ** 2, dim=dims)
-        return (self.beta / 3.0) * A
+        return self.beta * A
 
     # slower than the action
     def action_opt(self,z):
@@ -73,13 +73,13 @@ class cp2():
             oy.real * oy.real + oy.imag * oy.imag,
             dim=(1, 2),
         )
-        return (self.beta / 3.0) * A
+        return self.beta * A
 
     
     def force_components(self, z):
-        # F_a(x) = (beta/3) * tr(T_a [P(x), M(x)])
+        # F_a(x) = beta * tr(T_a [P(x), M(x)])
         comm = self._commutator_PM(z)
-        Fa = (self.beta / 3.0) * tr.einsum('aij,...ji->...a', self.T, comm)
+        Fa = self.beta * tr.einsum('aij,...ji->...a', self.T, comm)
         return tr.real(Fa)
 
     def force_matrix(self, z):
