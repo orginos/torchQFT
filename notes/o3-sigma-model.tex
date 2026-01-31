@@ -1,0 +1,459 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,bbm}
+\usepackage{hyperref}
+\usepackage{geometry}
+\geometry{margin=1in}
+
+\title{Control Functionals in the $O(3)$ Sigma Model (Lie-derivative formulation)}
+\author{Kostas Orginos}
+\date{\today}
+
+\newcommand{\nn}{\mathrm{nn}}
+\newcommand{\avg}[1]{\left\langle #1 \right\rangle}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\Id}{\mathbbm{1}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We formulate control functionals for Monte-Carlo simulations of the lattice $O(3)$ non-linear sigma model
+using Lie derivatives on the target manifold. The construction parallels the scalar-field formulation based on
+the defining PDE $(\partial^2 - \partial S \cdot \partial)\,U = O-\mu$, but replaces ordinary field derivatives by
+left-invariant (Lie) derivatives at each lattice site. We derive the associated control variate, prove it has zero mean,
+and show that the PDE operator is self-adjoint and positive with respect to the Gibbs inner product. We work out the
+leading terms of the weak-coupling expansion in $\beta$ for the two-point function at separation $|y-z|>1$, and suggest
+symmetry-respecting parametrizations of $U$ suitable for machine learning.
+\end{abstract}
+
+\section{Notation and model}
+
+\paragraph{Lattice sites vs.\ Lie algebra indices.}
+Throughout, $y,z,w,\ldots$ denote lattice sites.
+Lie algebra directions are denoted by $a,b,c,\ldots\in\{1,2,3\}$.
+
+\subsection{$O(3)$ sigma model}
+
+Let $n_y\in S^2\subset\mathbb{R}^3$ be a unit vector at each lattice site $y$.
+We take the nearest-neighbor action
+\begin{equation}
+S[n] = \beta S_0[n], \qquad
+S_0[n] = - \sum_{\langle y w\rangle} n_y\cdot n_w .
+\label{eq:action}
+\end{equation}
+The partition function and expectation values are
+\begin{equation}
+Z = \int \mathcal{D}n\; e^{-S[n]},
+\qquad
+\avg{A} \equiv \frac{1}{Z}\int \mathcal{D}n\; A[n]\, e^{-S[n]} .
+\end{equation}
+Here $\mathcal{D}n$ is the product of normalized invariant measures on $S^2$ at each site.
+
+We will focus on the (translation-summed) two-point observable
+\begin{equation}
+C(r) \equiv \sum_y n_y\cdot n_{y+r},
+\qquad \mu_r \equiv \avg{C(r)}.
+\label{eq:Cdef}
+\end{equation}
+Many derivations are clearer for fixed sites $y,z$; in that case set $O[n]=n_y\cdot n_z$ and $\mu=\avg{O}$, and at the end
+one may sum over translations.
+
+\section{Lie derivatives and $\partial^2$}
+
+\subsection{Lie derivatives}
+
+Let $\{\lambda^a\}$ be anti-hermitian generators of $\mathfrak{so}(3)$ in the defining representation:
+$\lambda^a$ are real antisymmetric $3\times 3$ matrices obeying
+\begin{equation}
+[\lambda^a,\lambda^b] = \epsilon^{abc}\lambda^c .
+\end{equation}
+Define the Lie derivative at site $y$ by its action on spins:
+\begin{equation}
+\partial_y^a n_w = (\lambda^a n_w)\,\delta_{y,w}.
+\label{eq:LieDerDef}
+\end{equation}
+For any functional $U[n]$, $\partial_y^a U[n]$ is defined by the induced variation of $U$ under an infinitesimal rotation
+at site $y$.
+
+\subsection{The Casimir / Laplacian $\partial^2$}
+
+Define the quadratic Casimir at site $y$ and globally by
+\begin{equation}
+\partial_y^2 \equiv \sum_{a=1}^3 (\partial_y^a)^2,
+\qquad
+\partial^2 \equiv \sum_y \partial_y^2.
+\label{eq:partialsq}
+\end{equation}
+On functions depending only on one spin $n_y$, $\partial_y^2$ coincides with the Laplace--Beltrami operator on $S^2$.
+
+Useful identities (with fixed $u,v\in\mathbb{R}^3$) are
+\begin{align}
+\partial_y^2 (n_y\cdot u) &= -2 (n_y\cdot u),
+\label{eq:l1}\\
+\partial_y^2\!\left[(n_y\cdot u)(n_y\cdot v)\right]
+&= -6 (n_y\cdot u)(n_y\cdot v) + 2 (u\cdot v).
+\label{eq:quadid}
+\end{align}
+Finally, from the $\mathfrak{so}(3)$ algebra in the defining representation one obtains the projector identity
+\begin{equation}
+\sum_{a=1}^3 \big[(\lambda^a n)\cdot u\big]\big[(\lambda^a n)\cdot v\big]
+= u\cdot v - (n\cdot u)(n\cdot v).
+\label{eq:projid}
+\end{equation}
+
+\section{Control functionals: definition and why they work}
+
+\subsection{The defining PDE and the control variate}
+
+Let $O[n]$ be any observable and $\mu\equiv \avg{O}$.
+Given a functional $U[n]$, define
+\begin{equation}
+F_U[n] \equiv \partial^2 U[n] - \left(\partial_y^a U[n]\right)\left(\partial_y^a S[n]\right),
+\label{eq:Fdef}
+\end{equation}
+with the usual implied sums over $y$ and $a$.
+
+The ``control-functional PDE'' is
+\begin{equation}
+\partial^2 U[n] - \left(\partial_y^a U[n]\right)\left(\partial_y^a S[n]\right)
+= O[n] - \mu.
+\label{eq:defPDE}
+\end{equation}
+If $U$ satisfies \eqref{eq:defPDE} exactly, then $F_U = O-\mu$ and the improved estimator $O-F_U$ is the constant $\mu$
+(i.e.\ zero variance). In practice, one uses approximations to $U$.
+
+\subsection{Why $F_U$ has zero mean (control variate property)}
+
+We show $\avg{F_U}=0$ for any sufficiently regular $U$.
+The key tool is integration by parts with respect to Lie derivatives (invariance of the Haar measure on each $S^2$ factor).
+
+\paragraph{Lie integration by parts.}
+For any functionals $A[n],B[n]$ with appropriate regularity,
+\begin{equation}
+\int \mathcal{D}n\; (\partial_y^a A[n])\, B[n]
+= - \int \mathcal{D}n\; A[n]\, (\partial_y^a B[n]).
+\label{eq:ibp}
+\end{equation}
+This follows because $\partial_y^a$ generates an infinitesimal symmetry of the measure at site $y$.
+
+Now compute
+\begin{align}
+\avg{\partial^2 U}
+&= \frac{1}{Z}\int \mathcal{D}n\; (\partial_y^a\partial_y^a U)\, e^{-S}
+\nonumber\\
+&= -\frac{1}{Z}\int \mathcal{D}n\; (\partial_y^a U)\, (\partial_y^a e^{-S})
+\qquad\text{by \eqref{eq:ibp}}
+\nonumber\\
+&= \frac{1}{Z}\int \mathcal{D}n\; (\partial_y^a U)\,(\partial_y^a S)\, e^{-S}
+\nonumber\\
+&= \avg{(\partial_y^a U)(\partial_y^a S)}.
+\end{align}
+Therefore
+\begin{equation}
+\avg{F_U} = \avg{\partial^2 U} - \avg{(\partial_y^a U)(\partial_y^a S)} = 0.
+\label{eq:FUzero}
+\end{equation}
+Hence $F_U$ is a valid \emph{control variate} for any $U$.
+
+\subsection{Variance reduction}
+
+Given any $U$, define the improved estimator
+\begin{equation}
+\widehat O_U[n] \equiv O[n] - F_U[n].
+\end{equation}
+Since $\avg{F_U}=0$, it is unbiased: $\avg{\widehat O_U}=\avg{O}=\mu$.
+Moreover, choosing $U$ to make $F_U$ strongly correlated with $O$ reduces the variance of $\widehat O_U$.
+The formal optimal choice is the exact solution of \eqref{eq:defPDE}, yielding $\widehat O_U=\mu$.
+
+\section{Operator formulation: self-adjointness and positivity}
+
+\subsection{Gibbs inner product}
+
+Define the Gibbs inner product
+\begin{equation}
+(A,B) \equiv \avg{A\,B} = \frac{1}{Z}\int \mathcal{D}n\; A[n]\,B[n]\,e^{-S[n]}.
+\label{eq:inner}
+\end{equation}
+(For complex functionals one may insert complex conjugation on the first slot; in most applications $U$ is real.)
+
+\subsection{The PDE operator}
+
+Define the differential operator $L$ by
+\begin{equation}
+(LU)[n] \equiv -\,e^{S[n]}\,\partial_y^a\!\Big(e^{-S[n]}\,\partial_y^a U[n]\Big).
+\label{eq:Ldef}
+\end{equation}
+Expanding \eqref{eq:Ldef} using $\partial_y^a(e^{-S})=-(\partial_y^a S)e^{-S}$ gives
+\begin{equation}
+(LU)[n] = -\partial^2 U[n] + (\partial_y^a S[n])(\partial_y^a U[n]).
+\label{eq:Lexpanded}
+\end{equation}
+Thus the defining PDE \eqref{eq:defPDE} is equivalently
+\begin{equation}
+LU = \mu - O.
+\label{eq:LUeq}
+\end{equation}
+
+\subsection{Self-adjointness}
+
+Using \eqref{eq:inner} and \eqref{eq:Ldef},
+\begin{align}
+(A,LB)
+&= \frac{1}{Z}\int \mathcal{D}n\; A\Big(-e^{S}\partial_y^a(e^{-S}\partial_y^a B)\Big)e^{-S}
+\nonumber\\
+&= -\frac{1}{Z}\int \mathcal{D}n\; A\, \partial_y^a(e^{-S}\partial_y^a B)
+\nonumber\\
+&= \frac{1}{Z}\int \mathcal{D}n\; (\partial_y^a A)\, (e^{-S}\partial_y^a B)
+\qquad\text{by \eqref{eq:ibp}}
+\nonumber\\
+&= \avg{(\partial_y^a A)(\partial_y^a B)}.
+\label{eq:ALB}
+\end{align}
+By symmetry of the final expression,
+\begin{equation}
+(A,LB) = (LA,B),
+\end{equation}
+so $L$ is self-adjoint with respect to $(\cdot,\cdot)$.
+
+\subsection{Positivity and the zero mode}
+
+Setting $A=B$ in \eqref{eq:ALB} yields
+\begin{equation}
+(A,LA) = \avg{(\partial_y^a A)(\partial_y^a A)} \ge 0,
+\label{eq:pos}
+\end{equation}
+so $L$ is positive semidefinite.
+
+Moreover, constants are a zero mode:
+\begin{equation}
+L\Id = 0.
+\end{equation}
+Hence $L$ is invertible on the subspace orthogonal to constants, i.e.\ those $A$ with $\avg{A}=0$.
+Equation \eqref{eq:LUeq} is solvable because $\avg{\mu-O}=0$ by definition of $\mu$.
+
+\paragraph{ML remark.}
+The identity \eqref{eq:ALB} is useful for ML: it gives a natural quadratic form
+\begin{equation}
+(A,LA)=\avg{\|\partial A\|^2},
+\end{equation}
+and suggests loss functions based on the PDE residual measured in the Gibbs inner product.
+
+\section{Strong-coupling expansion in $\beta$ for $O(3)$ two-point functions}
+
+We now specialize to $O[n]=n_y\cdot n_z$ with $|y-z|>1$.
+
+Write $S=\beta S_0$ and expand
+\begin{equation}
+U = U_0 + \beta U_1 + \mathcal{O}(\beta^2), \qquad
+\mu = \mu_0 + \beta \mu_1 + \mathcal{O}(\beta^2).
+\end{equation}
+At $\beta=0$, spins are i.i.d.\ uniform on $S^2$, so for $y\neq z$,
+\begin{equation}
+\mu_0 = \avg{n_y\cdot n_z}_{\beta=0}=0.
+\end{equation}
+For $|y-z|>1$ one also has $\mu_1=0$ (the first nonzero contribution to the correlator appears at higher order).
+
+Define
+\begin{equation}
+B U \equiv (\partial_y^a S_0)(\partial_y^a U),
+\end{equation}
+so the PDE \eqref{eq:defPDE} reads
+\begin{equation}
+(\partial^2 - \beta B)\,U = O - \mu.
+\end{equation}
+
+\subsection{Zeroth order: $U_0$}
+
+At $\mathcal{O}(\beta^0)$:
+\begin{equation}
+\partial^2 U_0 = O.
+\end{equation}
+Using \eqref{eq:l1},
+\begin{equation}
+\partial^2 (n_y\cdot n_z) = (\partial_y^2+\partial_z^2)(n_y\cdot n_z)=(-2-2)(n_y\cdot n_z)=-4(n_y\cdot n_z),
+\end{equation}
+hence a particular solution is
+\begin{equation}
+U_0 = -\frac14 (n_y\cdot n_z).
+\label{eq:U0sol}
+\end{equation}
+
+\subsection{First order: closure under $\partial^2$ and explicit $U_1$}
+
+At $\mathcal{O}(\beta^1)$:
+\begin{equation}
+\partial^2 U_1 = B U_0 - \mu_1 = B U_0,
+\qquad (|y-z|>1).
+\label{eq:U1eq}
+\end{equation}
+
+\paragraph{Derivatives of $S_0$ and $U_0$.}
+From \eqref{eq:action} and \eqref{eq:LieDerDef},
+\begin{equation}
+\partial_y^a S_0
+= - \sum_{w\in\nn(y)} \partial_y^a (n_y\cdot n_w)
+= - \sum_{w\in\nn(y)} (\lambda^a n_y)\cdot n_w .
+\label{eq:dS0}
+\end{equation}
+From \eqref{eq:U0sol},
+\begin{equation}
+\partial_y^a U_0 = -\frac14\, (\lambda^a n_y)\cdot n_z,
+\qquad
+\partial_z^a U_0 = -\frac14\, (\lambda^a n_z)\cdot n_y.
+\label{eq:dU0}
+\end{equation}
+Therefore only sites $y$ and $z$ contribute to $B U_0$:
+\begin{equation}
+B U_0 = (\partial_y^a S_0)(\partial_y^a U_0) + (\partial_z^a S_0)(\partial_z^a U_0).
+\end{equation}
+
+Using \eqref{eq:dS0}, \eqref{eq:dU0}, and \eqref{eq:projid} yields
+\begin{align}
+(\partial_y^a S_0)(\partial_y^a U_0)
+&= \frac14 \sum_{w\in\nn(y)} \sum_{a=1}^3
+\big[(\lambda^a n_y)\cdot n_w\big]\big[(\lambda^a n_y)\cdot n_z\big]
+\nonumber\\
+&= \frac14 \sum_{w\in\nn(y)}
+\Big[ (n_w\cdot n_z) - (n_y\cdot n_w)(n_y\cdot n_z)\Big],
+\label{eq:BU0y}
+\end{align}
+and similarly with $y\leftrightarrow z$.
+
+\paragraph{Closure under $\partial^2$.}
+Fix a neighbor $w\in\nn(y)$ (with $|y-z|>1$ implying $w\neq z$).
+Define two monomials
+\begin{equation}
+f_1 \equiv (n_w\cdot n_z), \qquad
+f_2 \equiv (n_y\cdot n_w)(n_y\cdot n_z).
+\end{equation}
+Using \eqref{eq:l1} and \eqref{eq:quadid} one obtains
+\begin{equation}
+\partial^2 f_1 = -4 f_1,
+\qquad
+\partial^2 f_2 = 2 f_1 - 10 f_2.
+\label{eq:lapmix}
+\end{equation}
+Thus $\mathrm{span}\{f_1,f_2\}$ is closed. The eigen-combination
+\begin{equation}
+g_2 \equiv f_2 - \frac13 f_1
+\end{equation}
+satisfies $\partial^2 g_2 = -10 g_2$, while $f_1$ satisfies $\partial^2 f_1 = -4 f_1$.
+
+\paragraph{Solving \eqref{eq:U1eq} in the closed subspace.}
+The $y$-side RHS contribution per neighbor $w\in\nn(y)$ is
+\begin{equation}
+R_{y,w} = \frac14(f_1-f_2)=\frac14\left(\frac23 f_1 - g_2\right).
+\end{equation}
+Inverting $\partial^2$ mode-by-mode gives
+\begin{equation}
+U_{1,(y,w)} = -\frac1{20} f_1 + \frac1{40} f_2
+= -\frac1{20}(n_w\cdot n_z) + \frac1{40}(n_y\cdot n_w)(n_y\cdot n_z).
+\label{eq:U1yw}
+\end{equation}
+Adding the symmetric $z$-side contributions yields, for $|y-z|>1$,
+\begin{align}
+U_1
+&=\sum_{w\in\nn(y)}
+\left[
+-\frac1{20}(n_w\cdot n_z)
++\frac1{40}(n_y\cdot n_w)(n_y\cdot n_z)
+\right]
+\nonumber\\
+&\quad+
+\sum_{w\in\nn(z)}
+\left[
+-\frac1{20}(n_w\cdot n_y)
++\frac1{40}(n_z\cdot n_w)(n_y\cdot n_z)
+\right].
+\label{eq:U1sol}
+\end{align}
+
+\paragraph{Control variate through $\mathcal{O}(\beta)$.}
+With $U \approx U_0+\beta U_1$, define
+\begin{equation}
+F_U = \partial^2 U - (\partial_y^a U)(\partial_y^a S),
+\end{equation}
+and the improved estimator $\widehat O_U = O - F_U$. By \eqref{eq:FUzero}, $\avg{F_U}=0$ exactly (no approximation),
+so $\widehat O_U$ remains unbiased for any approximate $U$.
+
+\section{Symmetry-respecting parametrizations of $U$ for ML}
+
+We want a trainable approximation $U_\theta[n]$ that:
+(i) is translation invariant (for $C(r)$),
+(ii) is $O(3)$ invariant,
+(iii) is local/quasi-local for efficiency,
+(iv) generalizes to $G/H$.
+
+\subsection{(A) Translation-invariant local density + invariant features}
+
+Use a shared-weights local density (convolutional ansatz)
+\begin{equation}
+U_\theta[n] = \sum_y u_\theta\!\left(\mathcal{N}_R(y); r\right),
+\end{equation}
+where $\mathcal{N}_R(y)$ is a radius-$R$ neighborhood of $y$ and $r$ is the displacement in $C(r)$.
+
+Impose $O(3)$ invariance by feeding $u_\theta$ only invariants, e.g.\ dot products
+\begin{equation}
+X^{(\delta)}_y = n_y\cdot n_{y+\delta},\qquad
+Y^{(\delta)}_y(r) = n_y\cdot n_{y+r+\delta},
+\end{equation}
+for a chosen stencil $\delta$ (nearest neighbors, next-to-nearest, etc).
+Then $u_\theta$ can be an ordinary MLP/CNN acting on scalar channels.
+
+\subsection{(B) CNN on invariant channels}
+
+Construct multi-channel scalar fields $\{X^{(\delta)}_y, Y^{(\delta)}_y(r)\}$ and feed them into a standard CNN
+(with shared kernels), producing an output field $\rho_\theta(y)$ and set
+\begin{equation}
+U_\theta[n] = \sum_y \rho_\theta(y).
+\end{equation}
+This enforces translation invariance and $O(3)$ invariance by construction.
+
+\subsection{(C) Residual learning around the perturbative solution}
+
+Use the explicit baseline
+\begin{equation}
+U^{(0+1)} \equiv U_0 + \beta U_1,
+\end{equation}
+and train only a correction:
+\begin{equation}
+U_\theta = U^{(0+1)} + \Delta U_\theta,
+\end{equation}
+with $\Delta U_\theta$ constrained as in (A)--(B). This typically stabilizes training and keeps the model in the right symmetry class.
+
+\subsection{(D) Losses based on the self-adjoint inner product}
+
+Since $L$ is self-adjoint in \eqref{eq:inner}, natural losses are:
+
+\paragraph{(i) PDE residual in the Gibbs inner product.}
+Let the residual be
+\begin{equation}
+R_\theta[n] \equiv \partial^2 U_\theta - (\partial_y^a U_\theta)(\partial_y^a S) - (O-\widehat\mu),
+\end{equation}
+with $\widehat\mu$ an empirical estimate of $\mu$. Minimize
+\begin{equation}
+\mathcal{L}_{\mathrm{PDE}}(\theta) = (R_\theta,R_\theta)=\avg{R_\theta^2}.
+\end{equation}
+
+\paragraph{(ii) Variance minimization of the improved estimator.}
+Define $F_\theta$ from \eqref{eq:Fdef} and minimize the empirical variance of
+\begin{equation}
+\widehat O_\theta[n] = O[n] - F_\theta[n].
+\end{equation}
+
+\paragraph{(iii) Dirichlet form regularization.}
+Using \eqref{eq:pos}, one may add
+\begin{equation}
+\mathcal{R}(\theta)= (U_\theta,LU_\theta)=\avg{(\partial_y^a U_\theta)^2}
+\end{equation}
+as a smoothness/complexity control.
+
+\section{Outlook: extension to $G/H$ and principal chiral models}
+
+The Lie-derivative formulation generalizes directly:
+replace $n_y\in S^2$ by fields valued in $G/H$ (or $G$), replace $\partial_y^a$ by the corresponding left-invariant derivatives
+(and for cosets, the projected derivatives), and replace dot-product invariants by group invariants such as
+$\mathrm{Re}\,\mathrm{Tr}(g_y^\dagger g_w)$ (principal chiral) or appropriate coset invariants.
+The low-order closure/eigenspace strategy is then governed by the representation theory of the site-wise quadratic Casimir.
+
+\end{document}
