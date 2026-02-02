@@ -8,7 +8,7 @@ parser.add_argument('-f'     ,             default='no-load')
 parser.add_argument('-e'     , type=int,   default=1000)
 parser.add_argument('-lr'    , type=float, default=1.0e-3)
 parser.add_argument('-t'     ,             default='test_ders')
-parser.add_argument('-model' ,             default='Funct2')
+parser.add_argument('-model' ,             default='Funct3T')
 parser.add_argument('-Nwarm' , type=int,   default=1000 )
 parser.add_argument('-Nskip' , type=int,   default=5    )
 parser.add_argument('-m'     , type=float, default=-0.5)
@@ -90,7 +90,7 @@ print('HMC history length: ',len(hmc.AcceptReject))
 ff = args.f
 if(not load_flag):
     ws = "_".join(str(l) for l in args.conv_l)
-    ff = "cv_"+"L_"+str(L)+"_tau_"+str(args.tau)+"_"+args.model+"_act_"+args.activ+"_cl_"+ws+".dict"
+    ff = "cv_"+"L_"+str(L)+"_m_"+str(args.m)+"_g_"+str(args.g)+"_tau_"+str(args.tau)+"_"+args.model+"_act_"+args.activ+"_cl_"+ws+".dict"
 tr.save(funct.state_dict(), ff)
 
 

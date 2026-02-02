@@ -528,15 +528,41 @@ class ControlModel(nn.Module):
         xx = (x0*tr.roll(x0,dims=1,shifts=-self.y)).mean(dim=1)
         return xx
 
-    def F(self,x):
-        g,l=self.c2p_net.grad_and_lapl(x)
-        return (l + (self.force(x)*g).sum(dim=(1,2)))
-                
-    def Delta(self,x):
-        return self.computeO(x) - self.F(x)
+    def F(self, x, n_colors=None):
+        """Compute control variate F(x).
 
-    def loss(self,x):
-        return ((self.Delta(x) - self.muO)**2).mean()
+        Args:
+            x: Input field
+            n_colors: Override n_colors for probing (use more for evaluation)
+        """
+        if n_colors is not None and hasattr(self.c2p_net, 'grad_and_lapl'):
+            # Try to pass n_colors if the model supports it
+            try:
+                g, l = self.c2p_net.grad_and_lapl(x, n_colors=n_colors)
+            except TypeError:
+                # Model doesn't support n_colors argument
+                g, l = self.c2p_net.grad_and_lapl(x)
+        else:
+            g, l = self.c2p_net.grad_and_lapl(x)
+        return (l + (self.force(x)*g).sum(dim=(1,2)))
+
+    def Delta(self, x, n_colors=None):
+        """Compute improved estimator Delta = O - F.
+
+        Args:
+            x: Input field
+            n_colors: Override n_colors for probing (use more for evaluation)
+        """
+        return self.computeO(x) - self.F(x, n_colors=n_colors)
+
+    def loss(self, x, n_colors=None):
+        """Compute loss = Var(Delta - muO).
+
+        Args:
+            x: Input field
+            n_colors: Override n_colors for probing (use more for evaluation)
+        """
+        return ((self.Delta(x, n_colors=n_colors) - self.muO)**2).mean()
 
 
 def train_control_model(CM,phi,learning_rate=1e-3,epochs=100,super_batch=1,update=lambda phi: tr.randn(phi.shape)):
