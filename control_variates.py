@@ -24,7 +24,16 @@ else:
 print("Using divice: ",device)
 
 def C2pt(x,tau):
-    return tr.mean(x*tr.roll(x,shifts=-tau,dims=2),dim=(1,2))
+    """Connected two-point function with vacuum subtraction.
+
+    C_conn(tau) = (1/V) Σ_x [φ(x) - φ̄][φ(x+τ) - φ̄]
+
+    Subtracting the mean before computing the correlator is more
+    numerically stable than subtracting φ̄² after.
+    """
+    # Zero-momentum projection: subtract spatial mean per sample
+    x_sub = x - x.mean(dim=(1,2), keepdim=True)
+    return tr.mean(x_sub * tr.roll(x_sub, shifts=-tau, dims=2), dim=(1,2))
 
 def symmetry_checker(x,model):
     out     = model(x)
@@ -524,8 +533,11 @@ class ControlModel(nn.Module):
         self.muO = nn.Parameter(tr.tensor([muO]),requires_grad=True)
         
     def computeO(self,x):
+        """Connected wall-to-wall correlator with vacuum subtraction."""
         x0 = tr.mean(x,dim=self.d).squeeze()
-        xx = (x0*tr.roll(x0,dims=1,shifts=-self.y)).mean(dim=1)
+        # Zero-momentum projection: subtract mean for connected correlator
+        x0_sub = x0 - x0.mean(dim=1, keepdim=True)
+        xx = (x0_sub * tr.roll(x0_sub, dims=1, shifts=-self.y)).mean(dim=1)
         return xx
 
     def F(self, x, n_colors=None):
