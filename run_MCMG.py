@@ -52,47 +52,6 @@ font = {'family' : 'normal',
 
 mpl.rc('font', **font)
 
-###### Architectures and parameters #################################
-
-### this is the first attempt at a non-linear restriction/prolongation operator but not invertible
-class NonLinearRGlayer(nn.Module):
-    def __init__(self, channels=1, hidden_channels=8, batch_size=1):
-        super(NonLinearRGlayer, self).__init__()
-        self.batch_size = batch_size
-        
-        # Restrictor: one small conv + downsampling
-        self.restrict_net = nn.Sequential(
-            nn.Conv2d(channels, hidden_channels, kernel_size=1),
-            nn.ReLU(),
-            nn.Conv2d(hidden_channels, channels, kernel_size=1, stride=2)
-        )
-
-        # Prolongator: upsampling + conv
-        self.prolong_net = nn.Sequential(
-            nn.ConvTranspose2d(channels, hidden_channels, kernel_size=2, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(hidden_channels, channels, kernel_size=1)
-        )
-
-    def coarsen(self, f):
-        ff = f.view(f.shape[0], 1, f.shape[1], f.shape[2])  # B x 1 x H x W
-        c = self.restrict_net(ff)
-        r = ff - self.prolong_net(c)
-        if self.batch_size == 1:
-            return c.squeeze(1), r.squeeze(1)
-        else:
-            return c.squeeze(), r.squeeze()
-
-    def refine(self, c, r):
-        cc = c.view(c.shape[0], 1, c.shape[1], c.shape[2])
-        rr = r.view(r.shape[0], 1, r.shape[1], r.shape[2])
-        f_rec = self.prolong_net(cc) + rr
-        if self.batch_size == 1:
-            return f_rec.squeeze(1)
-        else:
-            return f_rec.squeeze()
-
-
 
 
 parser = argparse.ArgumentParser()
