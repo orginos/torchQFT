@@ -59,9 +59,9 @@ def create_coloring_probes(L, n_colors, device, dtype):
     return probes
 
 
-def probing_laplacian(forward_fn, x, grad, n_colors=4):
+def probing_laplacian_coloring(forward_fn, x, grad, n_colors=4):
     """
-    Compute Laplacian using probing with coloring + one noise vector for debiasing.
+    Compute Laplacian using probing with graph coloring + random signs.
 
     The idea:
     1. Use n_colors probe vectors based on graph coloring
@@ -75,7 +75,7 @@ def probing_laplacian(forward_fn, x, grad, n_colors=4):
         forward_fn: Function that computes the scalar output
         x: Input tensor (batch, L, L)
         grad: Gradient of output w.r.t. x (batch, L, L)
-        n_colors: Number of colors for probing (2, 4, or 9 recommended)
+        n_colors: Number of colors for probing (2, 4, 9, 16, ... must be 2 or perfect square)
 
     Returns:
         lapl: Laplacian estimate (batch,)
@@ -109,26 +109,111 @@ def probing_laplacian(forward_fn, x, grad, n_colors=4):
     return lapl
 
 
-def probing_grad_and_lapl(model, x, n_colors=None):
+def probing_laplacian_sites(forward_fn, x, grad, n_sites=4):
+    """
+    Compute Laplacian using random site sampling (Karniadakis-style).
+
+    Instead of computing the full Laplacian Δf = Σᵢ ∂²f/∂φᵢ² at all L² sites,
+    randomly select n_sites and compute exact second derivatives there:
+
+        Δf ≈ (L²/n_sites) × Σₖ∈selected ∂²f/∂φₖ²
+
+    This is unbiased because each site has equal probability of being selected.
+    Used in PINNs (Physics-Informed Neural Networks) by Karniadakis et al.
+
+    Args:
+        forward_fn: Function that computes the scalar output
+        x: Input tensor (batch, L, L)
+        grad: Gradient of output w.r.t. x (batch, L, L)
+        n_sites: Number of random sites to sample (any positive integer, 1 to L²)
+
+    Returns:
+        lapl: Laplacian estimate (batch,)
+    """
+    batch, L, _ = x.shape
+    device = x.device
+    dtype = x.dtype
+    total_sites = L * L
+
+    # Clamp n_sites to valid range
+    n_sites = min(n_sites, total_sites)
+
+    # Randomly select n_sites from [0, L²) without replacement
+    # Use same sites for all samples in batch for efficiency
+    all_sites = tr.randperm(total_sites, device=device)[:n_sites]
+
+    # Convert flat indices to (i, j) coordinates
+    rows = all_sites // L
+    cols = all_sites % L
+
+    # Compute exact second derivative at each selected site
+    lapl = tr.zeros(batch, device=device, dtype=dtype)
+
+    for k in range(n_sites):
+        i, j = rows[k].item(), cols[k].item()
+
+        # grad[i,j] component for all samples in batch
+        g_ij = grad[:, i, j]  # (batch,)
+
+        # Second derivative: ∂(∂f/∂φᵢⱼ)/∂φᵢⱼ
+        # Need to compute gradient of g_ij w.r.t. x, then extract [i,j] component
+        g_ij_sum = g_ij.sum()  # sum over batch for backward
+        hvp = tr.autograd.grad(g_ij_sum, x, create_graph=True)[0]
+
+        # Extract the diagonal element: ∂²f/∂φᵢⱼ²
+        d2f_ij = hvp[:, i, j]  # (batch,)
+        lapl += d2f_ij
+
+    # Scale by L²/n_sites for unbiased estimate
+    lapl *= (total_sites / n_sites)
+
+    return lapl
+
+
+def probing_laplacian(forward_fn, x, grad, n_probes=4, method='coloring'):
+    """
+    Compute Laplacian using probing.
+
+    Args:
+        forward_fn: Function that computes the scalar output
+        x: Input tensor (batch, L, L)
+        grad: Gradient of output w.r.t. x (batch, L, L)
+        n_probes: Number of probes/colors/sites depending on method
+        method: 'coloring' (graph coloring, n_probes must be 2 or perfect square)
+                'sites' (random site sampling, n_probes can be any positive integer 1 to L²)
+
+    Returns:
+        lapl: Laplacian estimate (batch,)
+    """
+    if method == 'sites':
+        return probing_laplacian_sites(forward_fn, x, grad, n_sites=n_probes)
+    else:  # 'coloring' (default)
+        return probing_laplacian_coloring(forward_fn, x, grad, n_colors=n_probes)
+
+
+def probing_grad_and_lapl(model, x, n_probes=None, probing_method=None):
     """
     Compute gradient and Laplacian using probing.
 
     Args:
-        model: Module with forward() method and n_colors attribute
+        model: Module with forward() method, n_colors and probing_method attributes
         x: Input (batch, L, L), requires_grad=True
-        n_colors: Number of probing colors (overrides model.n_colors if provided)
+        n_probes: Number of probes (overrides model.n_colors if provided)
+        probing_method: 'coloring' or 'sites' (overrides model.probing_method if provided)
 
     Returns:
         grad: (batch, L, L)
         lapl: (batch,)
     """
-    # Use provided n_colors or fall back to model's default
-    if n_colors is None:
-        n_colors = getattr(model, 'n_colors', 4)
+    # Use provided values or fall back to model's defaults
+    if n_probes is None:
+        n_probes = getattr(model, 'n_colors', 4)
+    if probing_method is None:
+        probing_method = getattr(model, 'probing_method', 'coloring')
 
     y = model.forward(x)
     grad = tr.autograd.grad(y, x, tr.ones_like(y), create_graph=True)[0]
-    lapl = probing_laplacian(model.forward, x, grad, n_colors=n_colors)
+    lapl = probing_laplacian(model.forward, x, grad, n_probes=n_probes, method=probing_method)
     return grad, lapl
 
 
@@ -671,30 +756,38 @@ class FunctSmeared2ptMultiTau(nn.Module):
 
 class FunctProbing(nn.Module):
     """
-    Wrapper that uses probing with graph coloring for Laplacian estimation.
+    Wrapper that uses probing for Laplacian estimation.
 
     Wraps any functional and replaces its grad_and_lapl with probing-based version.
+
+    Supports two probing methods:
+    - 'coloring': Graph coloring + random signs (n_colors must be 2 or perfect square)
+    - 'sites': Random site sampling (n_colors can be any int from 1 to L²)
     """
 
-    def __init__(self, base_functional, L, n_colors=4):
+    def __init__(self, base_functional, L, n_colors=4, probing_method='coloring'):
         super().__init__()
         self.F = base_functional
         self.y = base_functional.y
         self.dim = getattr(base_functional, 'dim', 2)
         self.n_colors = n_colors
         self.L = L  # Store L explicitly since base may not have it
+        self.probing_method = probing_method
 
     def forward(self, x):
         return self.F(x)
 
-    def grad_and_lapl(self, x, n_colors=None):
+    def grad_and_lapl(self, x, n_colors=None, probing_method=None):
         """Compute gradient and Laplacian using probing.
 
         Args:
             x: Input tensor
-            n_colors: Override default n_colors (e.g., use more colors for evaluation)
+            n_colors: Override default n_colors (e.g., use more for evaluation)
+            probing_method: Override default probing method ('coloring' or 'sites')
         """
-        return probing_grad_and_lapl(self, x, n_colors=n_colors if n_colors else self.n_colors)
+        nc = n_colors if n_colors is not None else self.n_colors
+        pm = probing_method if probing_method is not None else self.probing_method
+        return probing_grad_and_lapl(self, x, n_probes=nc, probing_method=pm)
 
 
 class Funct3T_Unified(nn.Module):
@@ -721,12 +814,13 @@ class Funct3T_Unified(nn.Module):
     """
 
     def __init__(self, L, dim=2, conv_layers=[4, 4, 4, 4], n_colors=4,
-                 dtype=tr.float32, activation=nn.GELU()):
+                 dtype=tr.float32, activation=nn.GELU(), probing_method='coloring'):
         super().__init__()
 
         self.L = L
         self.dim = dim
         self.n_colors = n_colors
+        self.probing_method = probing_method  # 'coloring' or 'sites'
         self.tau_max = L // 2 + 1  # Number of tau values: 0, 1, ..., L/2
 
         # Tau embedding: learnable embedding for each tau value in [0, L/2]
@@ -810,16 +904,24 @@ class Funct3T_Unified(nn.Module):
 
         return out
 
-    def grad_and_lapl(self, x, tau=None, n_colors=None):
-        """Compute gradient and Laplacian using probing."""
+    def grad_and_lapl(self, x, tau=None, n_colors=None, probing_method=None):
+        """Compute gradient and Laplacian using probing.
+
+        Args:
+            x: Input tensor
+            tau: Tau value (overrides self.y if provided)
+            n_colors: Number of probes (overrides self.n_colors if provided)
+            probing_method: 'coloring' or 'sites' (overrides self.probing_method if provided)
+        """
         if tau is not None:
             self.set_tau(tau)
 
-        nc = n_colors if n_colors else self.n_colors
+        nc = n_colors if n_colors is not None else self.n_colors
+        pm = probing_method if probing_method is not None else self.probing_method
 
         y = self.forward(x)
         grad = tr.autograd.grad(y, x, tr.ones_like(y), create_graph=True)[0]
-        lapl = probing_laplacian(lambda z: self.forward(z), x, grad, n_colors=nc)
+        lapl = probing_laplacian(lambda z: self.forward(z), x, grad, n_probes=nc, method=pm)
         return grad, lapl
 
 
@@ -828,13 +930,141 @@ class Funct3T_Unified_Probing(Funct3T_Unified):
     pass
 
 
+class Funct3TUnified(nn.Module):
+    """
+    Unified Funct3T - same architecture as legacy Funct3T but handles all tau values.
+
+    Architecture (same as Funct3T):
+        Conv layers → Activation → Global Pool → Linear
+
+    Tau conditioning:
+        Tau embedding is concatenated to pooled features before final linear layer.
+        This is simpler than FiLM conditioning used in Funct3T_Unified.
+
+    Symmetry:
+        Due to periodic BC, O(tau) = O(L - tau).
+        We enforce F(tau) = F(L - tau) by folding: tau -> min(tau, L - tau).
+
+    Uses probing for Laplacian estimation.
+    """
+
+    def __init__(self, L, dim=2, conv_layers=[4, 4, 4, 4], n_colors=4,
+                 dtype=tr.float32, activation=nn.GELU(), probing_method='coloring'):
+        super().__init__()
+
+        self.L = L
+        self.dim = dim
+        self.n_colors = n_colors
+        self.probing_method = probing_method
+        self.tau_max = L // 2 + 1  # Number of tau values: 0, 1, ..., L/2
+
+        # Build CNN (same as Funct3T)
+        self.net = nn.Sequential()
+        in_channels = 1
+        for k, out_channels in enumerate(conv_layers):
+            layer = nn.Conv2d(in_channels, out_channels, kernel_size=3,
+                            padding=1, padding_mode='circular')
+            nn.init.xavier_uniform_(layer.weight)
+            self.net.add_module(f'conv{k}', layer)
+            self.net.add_module(f'act{k}', activation)
+            in_channels = out_channels
+
+        self.final_channels = conv_layers[-1]
+
+        # Tau embedding: learnable embedding for each tau value in [0, L/2]
+        self.tau_embed_dim = 8
+        self.tau_embedding = nn.Embedding(self.tau_max, self.tau_embed_dim)
+
+        # Final linear: takes pooled features + tau embedding
+        self.final_linear = nn.Linear(self.final_channels + self.tau_embed_dim, 1, dtype=dtype)
+        nn.init.xavier_uniform_(self.final_linear.weight)
+
+        # Current tau (set before forward pass)
+        self.y = 0
+
+    def _fold_tau(self, tau):
+        """Fold tau to [0, L/2] using symmetry: F(tau) = F(L - tau)."""
+        if tau > self.L // 2:
+            return self.L - tau
+        return tau
+
+    def set_tau(self, tau):
+        """Set the current tau value for forward pass (automatically folded)."""
+        self.y = self._fold_tau(tau)
+
+    def forward(self, x, tau=None):
+        """
+        Forward pass with tau conditioning via concatenation.
+
+        Args:
+            x: Field configuration (batch, L, L)
+            tau: Tau value (int) or None to use self.y
+        """
+        if tau is None:
+            tau = self.y
+        else:
+            tau = self._fold_tau(tau)
+
+        batch_size = x.shape[0]
+
+        # x: (batch, L, L) → (batch, 1, L, L)
+        h = x.unsqueeze(1)
+
+        # Apply conv layers
+        h = self.net(h)  # (batch, C, L, L)
+
+        # Global average pooling
+        h = h.mean(dim=(2, 3))  # (batch, C)
+
+        # Get tau embedding and concatenate
+        tau_tensor = tr.full((batch_size,), tau, dtype=tr.long, device=x.device)
+        tau_embed = self.tau_embedding(tau_tensor)  # (batch, tau_embed_dim)
+        h = tr.cat([h, tau_embed], dim=1)  # (batch, C + tau_embed_dim)
+
+        # Final linear
+        out = self.final_linear(h).squeeze(-1)  # (batch,)
+
+        return out
+
+    def grad_and_lapl(self, x, tau=None, n_colors=None, probing_method=None):
+        """Compute gradient and Laplacian using probing.
+
+        Args:
+            x: Input tensor
+            tau: Tau value (overrides self.y if provided)
+            n_colors: Number of probes (overrides self.n_colors if provided)
+            probing_method: 'coloring' or 'sites' (overrides self.probing_method if provided)
+        """
+        if tau is not None:
+            self.set_tau(tau)
+
+        nc = n_colors if n_colors is not None else self.n_colors
+        pm = probing_method if probing_method is not None else self.probing_method
+
+        y = self.forward(x)
+        grad = tr.autograd.grad(y, x, tr.ones_like(y), create_graph=True)[0]
+        lapl = probing_laplacian(lambda z: self.forward(z), x, grad, n_probes=nc, method=pm)
+        return grad, lapl
+
+
 # Extended factory
 def fast_model_factory_v2(class_name, L, y, conv_layers=[4,4,4,4], activation='gelu',
-                          dtype=tr.float32, n_colors=4, **kwargs):
+                          dtype=tr.float32, n_colors=4, probing_method='coloring', **kwargs):
     """
     Extended factory including V2 fast functionals.
 
     All approximate Laplacian models use probing with n_colors.
+
+    Args:
+        class_name: Model class name
+        L: Lattice size
+        y: Tau value
+        conv_layers: Convolutional layer widths
+        activation: Activation function
+        dtype: Data type
+        n_colors: Number of probes for Laplacian estimation
+        probing_method: 'coloring' (graph coloring, n_colors must be 2 or perfect square)
+                        'sites' (random site sampling, n_colors can be any int from 1 to L²)
     """
     if isinstance(activation, str):
         activ = activation_factory(activation)
@@ -852,7 +1082,7 @@ def fast_model_factory_v2(class_name, L, y, conv_layers=[4,4,4,4], activation='g
         base = original_model_factory('Funct3T', L=L, y=y,
                                       conv_layers=conv_layers,
                                       activation=activ, dtype=dtype)
-        return FunctProbing(base, L=L, n_colors=n_colors)
+        return FunctProbing(base, L=L, n_colors=n_colors, probing_method=probing_method)
 
     elif class_name == 'FunctSeparable':
         return FunctSeparable(L=L, y=y, dtype=dtype, activation=activ,
@@ -882,7 +1112,14 @@ def fast_model_factory_v2(class_name, L, y, conv_layers=[4,4,4,4], activation='g
 
     elif class_name == 'Funct3T_Unified':
         model = Funct3T_Unified(L=L, conv_layers=conv_layers, n_colors=n_colors,
-                                dtype=dtype, activation=activ)
+                                dtype=dtype, activation=activ, probing_method=probing_method)
+        model.set_tau(y)  # Set initial tau
+        return model
+
+    elif class_name == 'Funct3TUnified':
+        # Simpler unified model: same arch as Funct3T, tau via concatenation (not FiLM)
+        model = Funct3TUnified(L=L, conv_layers=conv_layers, n_colors=n_colors,
+                               dtype=dtype, activation=activ, probing_method=probing_method)
         model.set_tau(y)  # Set initial tau
         return model
 
@@ -899,4 +1136,5 @@ ALL_MODELS_V2 = [
     'FunctSmeared2pt',      # CNN smearing + 2pt construction
     'FunctSmeared2ptMultiTau',  # CNN smearing + multi-tau 2pt
     'Funct3T_Unified',      # Single model for ALL tau (FiLM conditioning)
+    'Funct3TUnified',       # Single model for ALL tau (simpler: tau concatenation)
 ]

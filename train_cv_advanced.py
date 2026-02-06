@@ -28,7 +28,7 @@ from pathlib import Path
 # Import project modules
 from control_variates import (
     C2pt, symmetry_checker, ControlModel,
-    model_factory as original_model_factory, activation_factory, device
+    model_factory as original_model_factory, activation_factory
 )
 from fast_functionals_v2 import fast_model_factory_v2 as fast_model_factory, ALL_MODELS_V2 as ALL_MODELS
 import phi4 as qft
@@ -290,14 +290,13 @@ def create_training_figure(all_phases, tau, output_path):
     plt.close(fig)
 
 
-def train_single_tau(tau, args, logger):
+def train_single_tau(tau, args, logger, device):
     """
     Train control variate for a single tau value with modern training strategy.
 
     Training Strategy:
-    - Phase 1: OneCycleLR with base batch size (warmup -> peak -> anneal)
-    - Phase 2: Continue with gradient accumulation (effective 2x batch size)
-               Uses cosine annealing from low LR
+    - All phases: OneCycleLR (warmup -> peak -> anneal)
+    - Later phases: gradient accumulation for larger effective batch size
 
     Key: No reinitialization of phi between phases - continuous thermalization
     """
@@ -333,7 +332,8 @@ def train_single_tau(tau, args, logger):
                                conv_layers=args.conv_l,
                                activation=args.activ,
                                dtype=tr.float,
-                               n_colors=args.n_colors)
+                               n_colors=args.n_colors,
+                               probing_method=args.probing_method)
     funct.to(device)
 
     # Compute initial muO
@@ -355,8 +355,7 @@ def train_single_tau(tau, args, logger):
 
     # =========================================================================
     # Training Loop: n_phases stages with increasing batch size
-    # Phase 1: OneCycleLR with warmup
-    # Phases 2+: CosineAnnealingLR (no warmup), keep optimizer state
+    # All phases: OneCycleLR (warmup -> peak -> anneal)
     # LR scaling: lr / sqrt(accumulation) - less aggressive than 1/accumulation
     # =========================================================================
     for phase_idx in range(args.n_phases):
@@ -374,25 +373,17 @@ def train_single_tau(tau, args, logger):
         for param_group in optimizer.param_groups:
             param_group['lr'] = phase_max_lr
 
-        if phase_idx == 0:
-            # Phase 1: OneCycleLR with 10% warmup
-            scheduler = tr.optim.lr_scheduler.OneCycleLR(
-                optimizer,
-                max_lr=phase_max_lr,
-                epochs=args.epochs,
-                steps_per_epoch=1,
-                pct_start=0.1,
-                anneal_strategy='cos',
-                div_factor=25,
-                final_div_factor=1000
-            )
-        else:
-            # Phases 2+: CosineAnnealingLR - no warmup, just decay
-            scheduler = tr.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer,
-                T_max=args.epochs,
-                eta_min=phase_max_lr / 1000
-            )
+        # OneCycleLR for all phases - better results
+        scheduler = tr.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=phase_max_lr,
+            epochs=args.epochs,
+            steps_per_epoch=1,
+            pct_start=0.1,
+            anneal_strategy='cos',
+            div_factor=25,
+            final_div_factor=1000
+        )
 
         hmc.AcceptReject = []
         loss_hist, lr_hist, phi = train_with_accumulation(
@@ -497,9 +488,11 @@ def main():
     parser.add_argument('-conv_l', type=int, nargs='+', default=[4, 4, 4, 4],
                        help='Convolutional layer widths')
     parser.add_argument('-n_colors', type=int, default=4,
-                       help='Number of colors for probing during training (2, 4, or 9)')
+                       help='Number of probes (coloring: 2,4,9,...; sites: any int up to L²)')
     parser.add_argument('-n_colors_eval', type=int, default=None,
-                       help='Number of colors for evaluation (default: L*L for exact)')
+                       help='Number of probes for evaluation (default: L*L for exact)')
+    parser.add_argument('-probing_method', default='coloring', choices=['coloring', 'sites'],
+                       help='Probing method: coloring (graph coloring) or sites (random site sampling)')
 
     # Training parameters
     parser.add_argument('-epochs', type=int, default=1000,
@@ -528,7 +521,22 @@ def main():
     parser.add_argument('-tau', type=int, default=None,
                        help='Train single tau value only')
 
+    # Device
+    parser.add_argument('-device', default='auto', choices=['auto', 'cpu', 'cuda', 'mps'],
+                       help='Device: auto (default), cpu, cuda, or mps')
+
     args = parser.parse_args()
+
+    # Device selection
+    if args.device == 'auto':
+        if tr.cuda.is_available():
+            device = tr.device('cuda')
+        elif tr.backends.mps.is_available():
+            device = tr.device('mps')
+        else:
+            device = tr.device('cpu')
+    else:
+        device = tr.device(args.device)
 
     # Determine tau range
     if args.tau is not None:
@@ -559,6 +567,7 @@ def main():
     logger.log(f"  Base epochs: {args.epochs}, Max LR: {args.lr}")
     logger.log(f"  Base batch size: {args.batch_size}")
     logger.log(f"  Tau range: {tau_min} to {tau_max}")
+    logger.log(f"  Probing: {args.probing_method} with n_colors={args.n_colors}")
     logger.log(f"  Output: {output_dir}")
     logger.log("="*60)
 
@@ -569,7 +578,7 @@ def main():
 
     for tau in range(tau_min, tau_max + 1):
         try:
-            result = train_single_tau(tau, args, logger)
+            result = train_single_tau(tau, args, logger, device)
             all_results.append(result)
         except Exception as e:
             logger.log(f"ERROR training tau={tau}: {e}")

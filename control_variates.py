@@ -23,17 +23,16 @@ else:
     
 print("Using divice: ",device)
 
-def C2pt(x,tau):
-    """Connected two-point function with vacuum subtraction.
+def C2pt(x, tau):
+    """Connected two-point correlator.
 
-    C_conn(tau) = (1/V) Σ_x [φ(x) - φ̄][φ(x+τ) - φ̄]
+    C_conn(tau) = ⟨φ(x)φ(x+τ)⟩ - ⟨φ⟩²
 
-    Subtracting the mean before computing the correlator is more
-    numerically stable than subtracting φ̄² after.
+    Subtracting the batch mean (ensemble average) before the correlator
+    is equivalent to the vacuum subtraction.
     """
-    # Zero-momentum projection: subtract spatial mean per sample
-    x_sub = x - x.mean(dim=(1,2), keepdim=True)
-    return tr.mean(x_sub * tr.roll(x_sub, shifts=-tau, dims=2), dim=(1,2))
+    xm = x - tr.mean(x)  # subtract ensemble average
+    return tr.mean(xm * tr.roll(xm, shifts=-tau, dims=2), dim=(1,2))
 
 def symmetry_checker(x,model):
     out     = model(x)
@@ -532,12 +531,19 @@ class ControlModel(nn.Module):
         self.c2p_net = c2p_net
         self.muO = nn.Parameter(tr.tensor([muO]),requires_grad=True)
         
-    def computeO(self,x):
-        """Connected wall-to-wall correlator with vacuum subtraction."""
-        x0 = tr.mean(x,dim=self.d).squeeze()
-        # Zero-momentum projection: subtract mean for connected correlator
-        x0_sub = x0 - x0.mean(dim=1, keepdim=True)
-        xx = (x0_sub * tr.roll(x0_sub, dims=1, shifts=-self.y)).mean(dim=1)
+    def computeO(self, x):
+        """Connected wall-to-wall correlator.
+
+        C_conn(tau) = ⟨φ_0(t)φ_0(t+τ)⟩ - ⟨φ_0⟩²
+        where φ_0(t) = (1/L) Σ_x φ(x,t)
+
+        Subtracting the batch mean (ensemble average) before the correlator
+        is equivalent to the vacuum subtraction.
+        """
+        x0 = tr.mean(x, dim=self.d).squeeze()  # wall average: (batch, L)
+        mean_x0 = tr.mean(x0, dim=0, keepdim=True)  # ensemble average: (1, L)
+        x0 = x0 - mean_x0  # subtract ensemble average
+        xx = (x0 * tr.roll(x0, dims=1, shifts=-self.y)).mean(dim=1)
         return xx
 
     def F(self, x, n_colors=None):
