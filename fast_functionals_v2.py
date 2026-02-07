@@ -229,7 +229,7 @@ class FunctSeparable(nn.Module):
     """
 
     def __init__(self, L, dim=2, y=0, site_hidden=[32, 32], agg_hidden=[16],
-                 n_colors=4, dtype=tr.float32, activation=nn.GELU()):
+                 n_colors=4, dtype=tr.float32, activation=nn.GELU(), probing_method='coloring'):
         super().__init__()
 
         self.L = L
@@ -237,6 +237,7 @@ class FunctSeparable(nn.Module):
         self.dim = dim
         self.V = L * L
         self.n_colors = n_colors
+        self.probing_method = probing_method
 
         # Site function h: maps (φₓ, Δφₓ, φₓ₊τ, φₓ₋τ) → scalar
         # Input: 4 features per site
@@ -300,14 +301,17 @@ class FunctSeparable(nn.Module):
 
         return out
 
-    def grad_and_lapl(self, x, n_colors=None):
+    def grad_and_lapl(self, x, n_colors=None, probing_method=None):
         """Compute gradient and Laplacian using probing.
 
         Args:
             x: Input tensor
             n_colors: Override default n_colors (e.g., use more colors for evaluation)
+            probing_method: Override default probing method
         """
-        return probing_grad_and_lapl(self, x, n_colors=n_colors if n_colors else self.n_colors)
+        nc = n_colors if n_colors is not None else self.n_colors
+        pm = probing_method if probing_method is not None else self.probing_method
+        return probing_grad_and_lapl(self, x, n_probes=nc, probing_method=pm)
 
 
 class FunctConvSeparable(nn.Module):
@@ -321,7 +325,8 @@ class FunctConvSeparable(nn.Module):
     """
 
     def __init__(self, L, dim=2, y=0, conv_channels=[8, 16, 32],
-                 mlp_hidden=[16], n_colors=4, dtype=tr.float32, activation=nn.GELU()):
+                 mlp_hidden=[16], n_colors=4, dtype=tr.float32, activation=nn.GELU(),
+                 probing_method='coloring'):
         super().__init__()
 
         self.L = L
@@ -329,6 +334,7 @@ class FunctConvSeparable(nn.Module):
         self.dim = dim
         self.V = L * L
         self.n_colors = n_colors
+        self.probing_method = probing_method
 
         # Build CNN (no pooling until the end)
         conv_layers = []
@@ -370,14 +376,17 @@ class FunctConvSeparable(nn.Module):
 
         return out
 
-    def grad_and_lapl(self, x, n_colors=None):
+    def grad_and_lapl(self, x, n_colors=None, probing_method=None):
         """Compute gradient and Laplacian using probing.
 
         Args:
             x: Input tensor
             n_colors: Override default n_colors (e.g., use more colors for evaluation)
+            probing_method: Override default probing method
         """
-        return probing_grad_and_lapl(self, x, n_colors=n_colors if n_colors else self.n_colors)
+        nc = n_colors if n_colors is not None else self.n_colors
+        pm = probing_method if probing_method is not None else self.probing_method
+        return probing_grad_and_lapl(self, x, n_probes=nc, probing_method=pm)
 
 
 class Funct3T_Vmap(nn.Module):
@@ -389,13 +398,14 @@ class Funct3T_Vmap(nn.Module):
     """
 
     def __init__(self, L, dim=2, y=0, conv_layers=[4, 4, 4, 4],
-                 n_colors=4, dtype=tr.float32, activation=nn.GELU()):
+                 n_colors=4, dtype=tr.float32, activation=nn.GELU(), probing_method='coloring'):
         super().__init__()
 
         self.L = L
         self.y = y
         self.dim = dim
         self.n_colors = n_colors
+        self.probing_method = probing_method
 
         # Build the same architecture as Funct3T
         self.net = nn.Sequential()
@@ -419,14 +429,17 @@ class Funct3T_Vmap(nn.Module):
         out = self.net(x).squeeze(-1)
         return out
 
-    def grad_and_lapl(self, x, n_colors=None):
+    def grad_and_lapl(self, x, n_colors=None, probing_method=None):
         """Compute gradient and Laplacian using probing.
 
         Args:
             x: Input tensor
             n_colors: Override default n_colors (e.g., use more colors for evaluation)
+            probing_method: Override default probing method
         """
-        return probing_grad_and_lapl(self, x, n_colors=n_colors if n_colors else self.n_colors)
+        nc = n_colors if n_colors is not None else self.n_colors
+        pm = probing_method if probing_method is not None else self.probing_method
+        return probing_grad_and_lapl(self, x, n_probes=nc, probing_method=pm)
 
 
 class FunctPolynomial(nn.Module):
@@ -534,8 +547,8 @@ class FunctPolynomial(nn.Module):
         out = (P * self.coeffs[:self.n_poly]).sum(dim=1)
         return out
 
-    def grad_and_lapl(self, x):
-        """Analytical gradient and Laplacian!"""
+    def grad_and_lapl(self, x, n_colors=None, probing_method=None):
+        """Analytical gradient and Laplacian! (n_colors and probing_method ignored)"""
         P, dP, d2P = self._compute_polynomials(x)
 
         # F = Σ_n a_n * P_n
@@ -549,6 +562,193 @@ class FunctPolynomial(nn.Module):
 
         # Laplacian: (batch,)
         lapl = (d2P * coeffs.view(1, -1)).sum(dim=1)
+
+        return grad, lapl
+
+
+class FunctSmeared2ptAnalytic(nn.Module):
+    """
+    Smeared field + 2pt with ANALYTICAL derivatives.
+
+    Like FunctSmeared2pt but with linear smearing and polynomial output,
+    enabling exact gradient and Laplacian computation (no probing needed).
+
+    Architecture:
+        1. Linear smearing: ψ_k = φ + a_k * neighbors(φ)
+           Multiple channels via different smearing parameters a_k
+        2. Build features: C_k(τ), C_k(0), ⟨ψ_k²⟩ for each channel
+        3. Polynomial output: F = Σ c_i * feature_i (linear in features)
+
+    Key insight: Since ψ = φ + a*neighbors is LINEAR in φ:
+        - ∂ψ/∂φ is constant (sparse stencil)
+        - Features like ⟨ψ ψ_τ⟩ have analytical grad and Laplacian
+
+    WARNING: THIS MODEL IS CURRENTLY BUGGY... OR NEEDS MUCH MORE EXPRESSIVITY
+    """
+
+    def __init__(self, L, dim=2, y=0, n_channels=4, n_smear_layers=1,
+                 dtype=tr.float32):
+        super().__init__()
+
+        self.L = L
+        self.y = y
+        self.dim = dim
+        self.V = L * L
+        self.n_channels = n_channels
+        self.n_smear_layers = n_smear_layers
+
+        # NOTE: n_smear_layers > 1 is NOT YET SUPPORTED for analytical derivatives!
+        # The gradient/Laplacian formulas assume single-layer smearing.
+        if n_smear_layers > 1:
+            raise ValueError("n_smear_layers > 1 not yet supported - derivatives are incorrect")
+
+        # Learnable smearing parameters for each channel
+        # Each channel has different smearing strength
+        # Initialize with spread of values
+        init_a = tr.linspace(0.1, 0.5, n_channels)
+        self.smear_a = nn.Parameter(init_a.clone())
+
+        # Features per channel: C(τ), C(0) = 2 features per channel
+        # (removed variance and cross-channel to ensure correct derivatives)
+        n_features = n_channels * 2
+
+        # Polynomial coefficients (linear combination of features)
+        self.coeffs = nn.Parameter(tr.randn(n_features) * 0.1)
+
+    def _neighbors(self, phi):
+        """Sum of 4 nearest neighbors."""
+        return (tr.roll(phi, 1, dims=1) + tr.roll(phi, -1, dims=1) +
+                tr.roll(phi, 1, dims=2) + tr.roll(phi, -1, dims=2))
+
+    def _smear(self, phi, a):
+        """Linear smearing: ψ = φ + a * neighbors(φ)"""
+        return phi + a.view(-1, 1, 1) * self._neighbors(phi).unsqueeze(0).expand(len(a), -1, -1, -1)
+
+    def _apply_smearing(self, phi):
+        """Apply smearing to get multi-channel smeared field.
+
+        Args:
+            phi: (batch, L, L)
+
+        Returns:
+            psi: (batch, n_channels, L, L)
+        """
+        batch = phi.shape[0]
+
+        # First layer of smearing
+        # psi_k = phi + a_k * neighbors(phi)
+        neighbors = self._neighbors(phi)  # (batch, L, L)
+
+        # Broadcast: (batch, n_channels, L, L)
+        psi = phi.unsqueeze(1) + self.smear_a.view(1, -1, 1, 1) * neighbors.unsqueeze(1)
+
+        # Optional second layer
+        if self.n_smear_layers > 1:
+            neighbors2 = self._neighbors(psi.view(-1, self.L, self.L)).view(batch, self.n_channels, self.L, self.L)
+            psi = psi + self.smear_a2.view(1, -1, 1, 1) * neighbors2
+
+        return psi
+
+    def _compute_features_and_derivs(self, phi):
+        """Compute features and their analytical gradients/Laplacians.
+
+        Returns:
+            features: (batch, n_features)
+            d_features: (batch, n_features, L, L) - gradients
+            d2_features: (batch, n_features) - Laplacians
+        """
+        batch = phi.shape[0]
+        V = self.V
+        L = self.L
+
+        # Get smeared fields
+        psi = self._apply_smearing(phi)  # (batch, n_channels, L, L)
+        psi_tau = tr.roll(psi, -self.y, dims=2 + self.dim - 1)
+        psi_mtau = tr.roll(psi, self.y, dims=2 + self.dim - 1)
+
+        features = []
+        d_features = []
+        d2_features = []
+
+        # Smearing stencil: S = I + a * N where N is neighbor sum operator
+        # ∂ψ/∂φ at site z affects sites z and neighbors of z
+        # For ⟨ψ ψ_τ⟩: gradient is (1/V) * S^T (ψ_τ + ψ_{-τ})
+
+        for k in range(self.n_channels):
+            psi_k = psi[:, k]  # (batch, L, L)
+            psi_k_tau = psi_tau[:, k]
+            psi_k_mtau = psi_mtau[:, k]
+            a_k = self.smear_a[k]
+
+            # Feature 1: C_k(τ) = ⟨ψ_k ψ_k,τ⟩
+            C_tau = (psi_k * psi_k_tau).mean(dim=(1, 2))  # (batch,)
+            features.append(C_tau)
+
+            # Gradient of C_tau: (1/V) * [ψ_τ + a*neighbors(ψ_τ) + ψ_{-τ} + a*neighbors(ψ_{-τ})]
+            dC_tau = (psi_k_tau + a_k * self._neighbors(psi_k_tau) +
+                      psi_k_mtau + a_k * self._neighbors(psi_k_mtau)) / V
+            d_features.append(dC_tau)
+
+            # Laplacian of C_tau: Σ_z ∂²C/∂φ_z² = (2/V) Σ_{z,x} ∂ψ_x/∂φ_z · ∂ψ_{x+τ}/∂φ_z
+            # This depends on overlap of smearing stencils at distance τ:
+            # Stencil at site x covers: {x, x±x̂, x±ŷ} (5 sites for 1-layer smearing)
+            # For stencils at x and x+τ to overlap, we need |τ| ≤ 2
+            # - τ=0: full overlap (5 sites), Laplacian = 2(1 + 4a²)
+            # - τ=1: partial overlap (2 sites: z and z-τ), Laplacian = 4a
+            # - τ=2: minimal overlap (1 site: z-x̂), Laplacian = 2a²
+            # - τ≥3: NO overlap, Laplacian = 0
+            if self.y == 0:
+                d2C_tau = 2 * (1 + 4 * a_k**2) * tr.ones(batch, device=phi.device)
+            elif self.y == 1:
+                # τ=1: overlap at {z, z-τ}, contributions are 1*a + a*1 = 2a per site
+                d2C_tau = 4 * a_k * tr.ones(batch, device=phi.device)
+            elif self.y == 2:
+                # τ=2: only overlap via neighbor chain, contribution a*a = a²
+                d2C_tau = 2 * a_k**2 * tr.ones(batch, device=phi.device)
+            else:
+                # τ≥3: stencils don't overlap at all, Laplacian = 0
+                d2C_tau = tr.zeros(batch, device=phi.device)
+            d2_features.append(d2C_tau)
+
+            # Feature 2: C_k(0) = ⟨ψ_k²⟩
+            C_0 = (psi_k * psi_k).mean(dim=(1, 2))
+            features.append(C_0)
+
+            # Gradient: (2/V) * [ψ + a*neighbors(ψ)]
+            dC_0 = 2 * (psi_k + a_k * self._neighbors(psi_k)) / V
+            d_features.append(dC_0)
+
+            # Laplacian: 2 * (1 + 4a²)
+            d2C_0 = 2 * (1 + 4 * a_k**2) * tr.ones(batch, device=phi.device)
+            d2_features.append(d2C_0)
+
+        # Stack
+        features = tr.stack(features, dim=1)  # (batch, n_features)
+        d_features = tr.stack(d_features, dim=1)  # (batch, n_features, L, L)
+        d2_features = tr.stack(d2_features, dim=1)  # (batch, n_features)
+
+        return features, d_features, d2_features
+
+    def forward(self, x):
+        features, _, _ = self._compute_features_and_derivs(x)
+        # Linear combination
+        out = (features * self.coeffs[:features.shape[1]]).sum(dim=1)
+        return out
+
+    def grad_and_lapl(self, x, n_colors=None, probing_method=None):
+        """ANALYTICAL gradient and Laplacian - no probing needed!
+
+        n_colors and probing_method are ignored (accepted for API compatibility).
+        """
+        features, d_features, d2_features = self._compute_features_and_derivs(x)
+
+        coeffs = self.coeffs[:features.shape[1]]
+
+        # Gradient: Σ c_i * ∂feature_i/∂φ
+        grad = (d_features * coeffs.view(1, -1, 1, 1)).sum(dim=1)
+
+        # Laplacian: Σ c_i * Δfeature_i
+        lapl = (d2_features * coeffs.view(1, -1)).sum(dim=1)
 
         return grad, lapl
 
@@ -571,7 +771,7 @@ class FunctSmeared2pt(nn.Module):
 
     def __init__(self, L, dim=2, y=0, conv_channels=[8, 8, 4],
                  mlp_hidden=[16], kernel_size=3, n_colors=4,
-                 dtype=tr.float32, activation=nn.GELU()):
+                 dtype=tr.float32, activation=nn.GELU(), probing_method='coloring'):
         super().__init__()
 
         self.L = L
@@ -579,6 +779,7 @@ class FunctSmeared2pt(nn.Module):
         self.dim = dim
         self.V = L * L
         self.n_colors = n_colors
+        self.probing_method = probing_method
 
         # CNN for smearing (maintains spatial dimensions)
         conv_layers_list = []
@@ -649,14 +850,17 @@ class FunctSmeared2pt(nn.Module):
 
         return out
 
-    def grad_and_lapl(self, x, n_colors=None):
-        """Use probing with graph coloring for Laplacian.
+    def grad_and_lapl(self, x, n_colors=None, probing_method=None):
+        """Use probing for Laplacian.
 
         Args:
             x: Input tensor
             n_colors: Override default n_colors (e.g., use more colors for evaluation)
+            probing_method: Override default probing method
         """
-        return probing_grad_and_lapl(self, x, n_colors=n_colors if n_colors else self.n_colors)
+        nc = n_colors if n_colors is not None else self.n_colors
+        pm = probing_method if probing_method is not None else self.probing_method
+        return probing_grad_and_lapl(self, x, n_probes=nc, probing_method=pm)
 
 
 class FunctSmeared2ptMultiTau(nn.Module):
@@ -677,7 +881,7 @@ class FunctSmeared2ptMultiTau(nn.Module):
 
     def __init__(self, L, dim=2, y=0, conv_channels=[8, 8, 4],
                  mlp_hidden=[32, 16], kernel_size=3, tau_max=None, n_colors=4,
-                 dtype=tr.float32, activation=nn.GELU()):
+                 dtype=tr.float32, activation=nn.GELU(), probing_method='coloring'):
         super().__init__()
 
         self.L = L
@@ -686,6 +890,7 @@ class FunctSmeared2ptMultiTau(nn.Module):
         self.V = L * L
         self.tau_max = tau_max if tau_max is not None else L // 2
         self.n_colors = n_colors
+        self.probing_method = probing_method
 
         # CNN for smearing
         conv_layers_list = []
@@ -744,14 +949,17 @@ class FunctSmeared2ptMultiTau(nn.Module):
         out = self.mlp(features).squeeze(-1)
         return out
 
-    def grad_and_lapl(self, x, n_colors=None):
-        """Use probing with graph coloring for Laplacian.
+    def grad_and_lapl(self, x, n_colors=None, probing_method=None):
+        """Use probing for Laplacian.
 
         Args:
             x: Input tensor
             n_colors: Override default n_colors (e.g., use more colors for evaluation)
+            probing_method: Override default probing method
         """
-        return probing_grad_and_lapl(self, x, n_colors=n_colors if n_colors else self.n_colors)
+        nc = n_colors if n_colors is not None else self.n_colors
+        pm = probing_method if probing_method is not None else self.probing_method
+        return probing_grad_and_lapl(self, x, n_probes=nc, probing_method=pm)
 
 
 class FunctProbing(nn.Module):
@@ -1086,29 +1294,37 @@ def fast_model_factory_v2(class_name, L, y, conv_layers=[4,4,4,4], activation='g
 
     elif class_name == 'FunctSeparable':
         return FunctSeparable(L=L, y=y, dtype=dtype, activation=activ,
-                              n_colors=n_colors)
+                              n_colors=n_colors, probing_method=probing_method)
 
     elif class_name == 'FunctConvSeparable':
         return FunctConvSeparable(L=L, y=y, dtype=dtype, activation=activ,
-                                  n_colors=n_colors)
+                                  n_colors=n_colors, probing_method=probing_method)
 
     elif class_name == 'FunctPolynomial':
         # Analytical Laplacian - no probing needed
         return FunctPolynomial(L=L, y=y, dtype=dtype)
 
+    elif class_name == 'FunctSmeared2ptAnalytic':
+        # Analytical Laplacian with linear smearing + 2pt features
+        # NOTE: only n_smear_layers=1 is supported (derivatives are exact only for single layer)
+        return FunctSmeared2ptAnalytic(L=L, y=y, dtype=dtype,
+                                       n_channels=kwargs.get('n_channels', 4),
+                                       n_smear_layers=kwargs.get('n_smear_layers', 1))
+
     elif class_name == 'Funct3T_Vmap':
         return Funct3T_Vmap(L=L, y=y, conv_layers=conv_layers,
-                           dtype=dtype, activation=activ, n_colors=n_colors)
+                           dtype=dtype, activation=activ, n_colors=n_colors,
+                           probing_method=probing_method)
 
     elif class_name == 'FunctSmeared2pt':
         return FunctSmeared2pt(L=L, y=y, dtype=dtype, activation=activ,
                                conv_channels=kwargs.get('conv_channels', [8, 8, 4]),
-                               n_colors=n_colors)
+                               n_colors=n_colors, probing_method=probing_method)
 
     elif class_name == 'FunctSmeared2ptMultiTau':
         return FunctSmeared2ptMultiTau(L=L, y=y, dtype=dtype, activation=activ,
                                         conv_channels=kwargs.get('conv_channels', [8, 8, 4]),
-                                        n_colors=n_colors)
+                                        n_colors=n_colors, probing_method=probing_method)
 
     elif class_name == 'Funct3T_Unified':
         model = Funct3T_Unified(L=L, conv_layers=conv_layers, n_colors=n_colors,
@@ -1133,6 +1349,7 @@ ALL_MODELS_V2 = [
     'FunctSeparable',       # Separable architecture
     'FunctConvSeparable',   # CNN + separable
     'FunctPolynomial',      # Analytical Laplacian (no probing needed)
+    'FunctSmeared2ptAnalytic',  # Linear smearing + 2pt, analytical Laplacian
     'FunctSmeared2pt',      # CNN smearing + 2pt construction
     'FunctSmeared2ptMultiTau',  # CNN smearing + multi-tau 2pt
     'Funct3T_Unified',      # Single model for ALL tau (FiLM conditioning)
