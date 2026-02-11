@@ -101,3 +101,52 @@ class m_leapfrog(integrator):
         return p,q
 
 
+# r-RESPA (nested) integrator using leapfrog for the fast force
+class rrespa_leapfrog(integrator):
+    def __init__(self, fast_force, slow_force, evolveQ, Nouter, t, Ninner=4, evolveP=simple_evolveP):
+        super().__init__(fast_force, evolveQ, Nouter, t, evolveP)
+        self.fast_force = fast_force
+        self.slow_force = slow_force
+        self.Ninner = int(Ninner)
+
+    def integrate(self, p, q):
+        dt = self.dt
+        dt_inner = dt / self.Ninner
+        for _ in range(self.Nmd):
+            # slow half-step
+            p = self.evolveP(0.5 * dt, self.slow_force(q), p)
+            # inner fast steps (leapfrog)
+            for _ in range(self.Ninner):
+                p = self.evolveP(0.5 * dt_inner, self.fast_force(q), p)
+                q = self.evolveQ(dt_inner, p, q)
+                p = self.evolveP(0.5 * dt_inner, self.fast_force(q), p)
+            # slow half-step
+            p = self.evolveP(0.5 * dt, self.slow_force(q), p)
+        return p, q
+
+
+# r-RESPA (nested) integrator using minnorm2 for the fast force
+class rrespa_minnorm2(integrator):
+    def __init__(self, fast_force, slow_force, evolveQ, Nouter, t, Ninner=4, evolveP=simple_evolveP, lam=0.1931833275037836):
+        super().__init__(fast_force, evolveQ, Nouter, t, evolveP)
+        self.fast_force = fast_force
+        self.slow_force = slow_force
+        self.Ninner = int(Ninner)
+        self.lam = lam
+
+    def integrate(self, p, q):
+        dt = self.dt
+        dt_inner = dt / self.Ninner
+        for _ in range(self.Nmd):
+            # slow half-step
+            p = self.evolveP(0.5 * dt, self.slow_force(q), p)
+            # inner fast steps (minnorm2)
+            for _ in range(self.Ninner):
+                p = self.evolveP(dt_inner * self.lam, self.fast_force(q), p)
+                q = self.evolveQ(0.5 * dt_inner, p, q)
+                p = self.evolveP(dt_inner * (1.0 - 2.0 * self.lam), self.fast_force(q), p)
+                q = self.evolveQ(0.5 * dt_inner, p, q)
+                p = self.evolveP(dt_inner * self.lam, self.fast_force(q), p)
+            # slow half-step
+            p = self.evolveP(0.5 * dt, self.slow_force(q), p)
+        return p, q
