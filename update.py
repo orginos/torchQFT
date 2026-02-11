@@ -25,6 +25,9 @@ class hmc:
             return np.mean(self.AcceptReject)
         else:
             return 0
+
+    def reset_Acceptance(self):
+        self.AcceptReject = []
         
     def evolve(self,q,N):
         qshape =tuple([q.shape[0]]+[1]*(len(q.shape)-1))

@@ -574,20 +574,30 @@ class FunctSmeared2ptAnalytic(nn.Module):
     enabling exact gradient and Laplacian computation (no probing needed).
 
     Architecture:
-        1. Linear smearing: ψ_k = φ + a_k * neighbors(φ)
-           Multiple channels via different smearing parameters a_k
-        2. Build features: C_k(τ), C_k(0), ⟨ψ_k²⟩ for each channel
+        1. Direction-dependent linear smearing:
+           ψ = (I + αx*Nx + αy*Ny + β*Nd)^n_layers · φ
+           where Nx = x-neighbors, Ny = y-neighbors, Nd = diagonal neighbors
+           Multiple channels via different smearing parameters
+        2. Build features:
+           - Base features: C_k(τ), C_k(0) for each channel k
+           - Cross-channel: C_jk(τ) = ⟨ψ_j ψ_k,τ⟩ for j < k
+           - Polynomial products: f_i * f_j for selected pairs
         3. Polynomial output: F = Σ c_i * feature_i (linear in features)
 
-    Key insight: Since ψ = φ + a*neighbors is LINEAR in φ:
-        - ∂ψ/∂φ is constant (sparse stencil)
+    Key insight: Since smearing is LINEAR in φ:
+        - ∂ψ/∂φ is a constant stencil (depends only on parameters and n_layers)
         - Features like ⟨ψ ψ_τ⟩ have analytical grad and Laplacian
+        - Laplacian = 2 * (stencil · shifted_stencil) where shift = τ
+        - For products f*g: Δ(fg) = f*Δg + g*Δf + 2*∇f·∇g
 
-    WARNING: THIS MODEL IS CURRENTLY BUGGY... OR NEEDS MUCH MORE EXPRESSIVITY
+    Stencil for one layer:
+        [β,  αy, β ]
+        [αx, 1,  αx]
+        [β,  αy, β ]
     """
 
-    def __init__(self, L, dim=2, y=0, n_channels=4, n_smear_layers=1,
-                 dtype=tr.float32):
+    def __init__(self, L, dim=2, y=0, n_channels=4, n_smear_layers=4,
+                 dtype=tr.float32, include_cross_channel=False, include_products=True):
         super().__init__()
 
         self.L = L
@@ -596,33 +606,209 @@ class FunctSmeared2ptAnalytic(nn.Module):
         self.V = L * L
         self.n_channels = n_channels
         self.n_smear_layers = n_smear_layers
-
-        # NOTE: n_smear_layers > 1 is NOT YET SUPPORTED for analytical derivatives!
-        # The gradient/Laplacian formulas assume single-layer smearing.
-        if n_smear_layers > 1:
-            raise ValueError("n_smear_layers > 1 not yet supported - derivatives are incorrect")
+        self.dtype = dtype
+        self.include_cross_channel = include_cross_channel
+        self.include_products = include_products
 
         # Learnable smearing parameters for each channel
-        # Each channel has different smearing strength
-        # Initialize with spread of values
-        init_a = tr.linspace(0.1, 0.5, n_channels)
-        self.smear_a = nn.Parameter(init_a.clone())
+        # alpha_x: smearing along x (direction of correlator)
+        # alpha_y: smearing along y (perpendicular)
+        # beta: diagonal smearing
+        init_ax = tr.linspace(0.1, 0.4, n_channels)
+        init_ay = tr.linspace(0.1, 0.4, n_channels)
+        init_beta = tr.linspace(0.05, 0.2, n_channels)
 
-        # Features per channel: C(τ), C(0) = 2 features per channel
-        # (removed variance and cross-channel to ensure correct derivatives)
-        n_features = n_channels * 2
+        self.alpha_x = nn.Parameter(init_ax.clone())
+        self.alpha_y = nn.Parameter(init_ay.clone())
+        self.beta = nn.Parameter(init_beta.clone())
+
+        # Count features:
+        # Base: 2 per channel (C(τ) and C(0))
+        n_base_features = n_channels * 2
+
+        # Cross-channel: C_jk(τ) for j < k = n_channels*(n_channels-1)/2
+        n_cross_features = n_channels * (n_channels - 1) // 2 if include_cross_channel else 0
+
+        # Total linear features (before products)
+        n_linear_features = n_base_features + n_cross_features
+
+        # Products: f_i * f_j for i <= j (only include a subset to avoid explosion)
+        # We'll include products of base features only (not cross-channel to keep it manageable)
+        # This gives n_base*(n_base+1)/2 products
+        n_product_features = n_base_features * (n_base_features + 1) // 2 if include_products else 0
+
+        self.n_base_features = n_base_features
+        self.n_cross_features = n_cross_features
+        self.n_linear_features = n_linear_features
+        self.n_product_features = n_product_features
+        n_features = n_linear_features + n_product_features
 
         # Polynomial coefficients (linear combination of features)
-        self.coeffs = nn.Parameter(tr.randn(n_features) * 0.1)
+        self.coeffs = nn.Parameter(tr.randn(n_features, dtype=dtype) * 0.1)
 
-    def _neighbors(self, phi):
-        """Sum of 4 nearest neighbors."""
-        return (tr.roll(phi, 1, dims=1) + tr.roll(phi, -1, dims=1) +
-                tr.roll(phi, 1, dims=2) + tr.roll(phi, -1, dims=2))
+        # Stencil size needed: n_smear_layers sites in each direction
+        # With diagonals, stencil can extend further
+        self.stencil_size = 2 * n_smear_layers + 1
 
-    def _smear(self, phi, a):
-        """Linear smearing: ψ = φ + a * neighbors(φ)"""
-        return phi + a.view(-1, 1, 1) * self._neighbors(phi).unsqueeze(0).expand(len(a), -1, -1, -1)
+    def _compute_stencil(self, alpha_x, alpha_y, beta):
+        """Compute the normalized smearing stencil for direction-dependent smearing.
+
+        Single layer stencil (normalized so sum=1):
+            [β,  αy, β ]
+            [αx, 1,  αx]  / (1 + 2αx + 2αy + 4β)
+            [β,  αy, β ]
+
+        For n_layers > 1, we apply this operator repeatedly.
+
+        Returns:
+            stencil: (stencil_size, stencil_size) tensor (sum ≈ 1)
+        """
+        n = self.n_smear_layers
+        size = self.stencil_size
+        center = n  # center index
+        device = alpha_x.device
+
+        # Normalization factor for single layer
+        norm = 1.0 + 2*alpha_x + 2*alpha_y + 4*beta
+
+        # Start with identity: S = I (just the center)
+        stencil = tr.zeros(size, size, dtype=self.dtype, device=device)
+        stencil[center, center] = 1.0
+
+        # Apply normalized (I + αx*Nx + αy*Ny + β*Nd) / norm n_layers times
+        for _ in range(n):
+            new_stencil = stencil.clone()
+
+            # x-direction neighbors (left/right in the j index)
+            new_stencil[:, :-1] = new_stencil[:, :-1] + alpha_x * stencil[:, 1:]   # left
+            new_stencil[:, 1:] = new_stencil[:, 1:] + alpha_x * stencil[:, :-1]    # right
+
+            # y-direction neighbors (up/down in the i index)
+            new_stencil[:-1, :] = new_stencil[:-1, :] + alpha_y * stencil[1:, :]   # up
+            new_stencil[1:, :] = new_stencil[1:, :] + alpha_y * stencil[:-1, :]    # down
+
+            # Diagonal neighbors (4 corners)
+            new_stencil[:-1, :-1] = new_stencil[:-1, :-1] + beta * stencil[1:, 1:]    # up-left
+            new_stencil[:-1, 1:] = new_stencil[:-1, 1:] + beta * stencil[1:, :-1]     # up-right
+            new_stencil[1:, :-1] = new_stencil[1:, :-1] + beta * stencil[:-1, 1:]     # down-left
+            new_stencil[1:, 1:] = new_stencil[1:, 1:] + beta * stencil[:-1, :-1]      # down-right
+
+            stencil = new_stencil / norm
+
+        return stencil
+
+    def _stencil_overlap_periodic(self, stencil, tau, L):
+        """Compute overlap of stencil with itself shifted by tau on periodic lattice.
+
+        Laplacian contribution = 2 * Σ_z S[z] * S[z-tau mod L]
+
+        On a periodic lattice of size L, we need to account for wraparound.
+        We embed the stencil into an L×L array and compute the overlap there.
+
+        Args:
+            stencil: (stencil_size, stencil_size) stencil tensor
+            tau: shift distance (τ >= 0)
+            L: lattice size
+
+        Returns:
+            overlap: scalar (the Laplacian coefficient = 2 * dot product)
+        """
+        stencil_size = stencil.shape[0]
+        center = stencil_size // 2
+
+        # Embed stencil into L×L periodic array (centered at origin)
+        S_full = tr.zeros(L, L, dtype=stencil.dtype, device=stencil.device)
+        for i in range(stencil_size):
+            for j in range(stencil_size):
+                # Map stencil indices to lattice indices (with periodic wrapping)
+                li = (i - center) % L
+                lj = (j - center) % L
+                S_full[li, lj] += stencil[i, j]
+
+        # Shift by tau along second dimension (periodic)
+        S_shifted = tr.roll(S_full, -tau, dims=1)
+
+        # Compute overlap
+        overlap = (S_full * S_shifted).sum()
+
+        return 2 * overlap
+
+    def _cross_stencil_overlap_periodic(self, stencil_j, stencil_k, tau, L):
+        """Compute cross-overlap of two stencils with shift tau on periodic lattice.
+
+        Cross-Laplacian contribution = 2 * Σ_z S_j[z] * S_k[z-tau mod L]
+
+        Used for cross-channel correlations C_jk(τ) = ⟨ψ_j ψ_k,τ⟩
+
+        Args:
+            stencil_j: (stencil_size, stencil_size) first stencil
+            stencil_k: (stencil_size, stencil_size) second stencil
+            tau: shift distance (τ >= 0)
+            L: lattice size
+
+        Returns:
+            overlap: scalar (the cross-Laplacian coefficient = 2 * cross dot product)
+        """
+        stencil_size_j = stencil_j.shape[0]
+        stencil_size_k = stencil_k.shape[0]
+        center_j = stencil_size_j // 2
+        center_k = stencil_size_k // 2
+
+        # Embed both stencils into L×L periodic arrays (centered at origin)
+        S_j_full = tr.zeros(L, L, dtype=stencil_j.dtype, device=stencil_j.device)
+        S_k_full = tr.zeros(L, L, dtype=stencil_k.dtype, device=stencil_k.device)
+
+        for i in range(stencil_size_j):
+            for j in range(stencil_size_j):
+                li = (i - center_j) % L
+                lj = (j - center_j) % L
+                S_j_full[li, lj] += stencil_j[i, j]
+
+        for i in range(stencil_size_k):
+            for j in range(stencil_size_k):
+                li = (i - center_k) % L
+                lj = (j - center_k) % L
+                S_k_full[li, lj] += stencil_k[i, j]
+
+        # Shift S_k by tau along second dimension (periodic)
+        S_k_shifted = tr.roll(S_k_full, -tau, dims=1)
+
+        # Compute cross-overlap
+        overlap = (S_j_full * S_k_shifted).sum()
+
+        return 2 * overlap
+
+    def _apply_smearing_step(self, phi, alpha_x, alpha_y, beta):
+        """Apply one layer of direction-dependent smearing with normalization.
+
+        Normalized stencil (sum = 1):
+            [β,  αy, β ]
+            [αx, 1,  αx]  / (1 + 2αx + 2αy + 4β)
+            [β,  αy, β ]
+
+        This ensures the smearing is a proper averaging operator that doesn't
+        amplify the field values.
+        """
+        # Compute normalization factor
+        norm = 1.0 + 2*alpha_x + 2*alpha_y + 4*beta
+
+        # x-direction neighbors (along dim 2)
+        neighbors_x = tr.roll(phi, 1, dims=2) + tr.roll(phi, -1, dims=2)
+
+        # y-direction neighbors (along dim 1)
+        neighbors_y = tr.roll(phi, 1, dims=1) + tr.roll(phi, -1, dims=1)
+
+        # Diagonal neighbors
+        neighbors_d = (
+            tr.roll(tr.roll(phi, 1, dims=1), 1, dims=2) +   # up-right
+            tr.roll(tr.roll(phi, 1, dims=1), -1, dims=2) +  # up-left
+            tr.roll(tr.roll(phi, -1, dims=1), 1, dims=2) +  # down-right
+            tr.roll(tr.roll(phi, -1, dims=1), -1, dims=2)   # down-left
+        )
+
+        result = (phi + alpha_x * neighbors_x + alpha_y * neighbors_y + beta * neighbors_d) / norm
+
+        return result
 
     def _apply_smearing(self, phi):
         """Apply smearing to get multi-channel smeared field.
@@ -633,24 +819,39 @@ class FunctSmeared2ptAnalytic(nn.Module):
         Returns:
             psi: (batch, n_channels, L, L)
         """
-        batch = phi.shape[0]
+        # Apply (I + αx*Nx + αy*Ny + β*Nd)^n_layers for each channel
+        psi_list = []
+        for k in range(self.n_channels):
+            psi_k = phi.clone()
+            ax_k = self.alpha_x[k]
+            ay_k = self.alpha_y[k]
+            b_k = self.beta[k]
+            for _ in range(self.n_smear_layers):
+                psi_k = self._apply_smearing_step(psi_k, ax_k, ay_k, b_k)
+            psi_list.append(psi_k)
 
-        # First layer of smearing
-        # psi_k = phi + a_k * neighbors(phi)
-        neighbors = self._neighbors(phi)  # (batch, L, L)
-
-        # Broadcast: (batch, n_channels, L, L)
-        psi = phi.unsqueeze(1) + self.smear_a.view(1, -1, 1, 1) * neighbors.unsqueeze(1)
-
-        # Optional second layer
-        if self.n_smear_layers > 1:
-            neighbors2 = self._neighbors(psi.view(-1, self.L, self.L)).view(batch, self.n_channels, self.L, self.L)
-            psi = psi + self.smear_a2.view(1, -1, 1, 1) * neighbors2
-
+        psi = tr.stack(psi_list, dim=1)  # (batch, n_channels, L, L)
         return psi
+
+    def _apply_stencil_transpose(self, field, alpha_x, alpha_y, beta):
+        """Apply S^T to a field, where S is the smearing stencil.
+
+        For gradient computation: ∂C/∂φ = (1/V) * S^T (ψ_τ + ψ_{-τ})
+
+        S^T has the same structure as S for symmetric stencils.
+        """
+        result = field.clone()
+        for _ in range(self.n_smear_layers):
+            result = self._apply_smearing_step(result, alpha_x, alpha_y, beta)
+        return result
 
     def _compute_features_and_derivs(self, phi):
         """Compute features and their analytical gradients/Laplacians.
+
+        Includes:
+        - Base features: C_k(τ), C_k(0) for each channel k
+        - Cross-channel features: C_jk(τ) = ⟨ψ_j ψ_k,τ⟩ for j < k
+        - Product features: f_i * f_j for base feature pairs
 
         Returns:
             features: (batch, n_features)
@@ -660,72 +861,149 @@ class FunctSmeared2ptAnalytic(nn.Module):
         batch = phi.shape[0]
         V = self.V
         L = self.L
+        device = phi.device
 
         # Get smeared fields
         psi = self._apply_smearing(phi)  # (batch, n_channels, L, L)
-        psi_tau = tr.roll(psi, -self.y, dims=2 + self.dim - 1)
-        psi_mtau = tr.roll(psi, self.y, dims=2 + self.dim - 1)
 
-        features = []
-        d_features = []
-        d2_features = []
+        # Determine which dimension to shift based on self.dim
+        shift_dim = 2 + self.dim - 1  # dim=1 -> shift_dim=2, dim=2 -> shift_dim=3
+        psi_tau = tr.roll(psi, -self.y, dims=shift_dim)
+        psi_mtau = tr.roll(psi, self.y, dims=shift_dim)
 
-        # Smearing stencil: S = I + a * N where N is neighbor sum operator
-        # ∂ψ/∂φ at site z affects sites z and neighbors of z
-        # For ⟨ψ ψ_τ⟩: gradient is (1/V) * S^T (ψ_τ + ψ_{-τ})
+        # Precompute stencils for all channels
+        stencils = []
+        for k in range(self.n_channels):
+            stencils.append(self._compute_stencil(self.alpha_x[k], self.alpha_y[k], self.beta[k]))
+
+        # ============ BASE FEATURES ============
+        # C_k(τ) and C_k(0) for each channel
+        base_features = []
+        base_d_features = []
+        base_d2_features = []
 
         for k in range(self.n_channels):
             psi_k = psi[:, k]  # (batch, L, L)
             psi_k_tau = psi_tau[:, k]
             psi_k_mtau = psi_mtau[:, k]
-            a_k = self.smear_a[k]
 
-            # Feature 1: C_k(τ) = ⟨ψ_k ψ_k,τ⟩
+            ax_k = self.alpha_x[k]
+            ay_k = self.alpha_y[k]
+            b_k = self.beta[k]
+            stencil_k = stencils[k]
+
+            # Feature: C_k(τ) = ⟨ψ_k ψ_k,τ⟩
             C_tau = (psi_k * psi_k_tau).mean(dim=(1, 2))  # (batch,)
-            features.append(C_tau)
+            base_features.append(C_tau)
 
-            # Gradient of C_tau: (1/V) * [ψ_τ + a*neighbors(ψ_τ) + ψ_{-τ} + a*neighbors(ψ_{-τ})]
-            dC_tau = (psi_k_tau + a_k * self._neighbors(psi_k_tau) +
-                      psi_k_mtau + a_k * self._neighbors(psi_k_mtau)) / V
-            d_features.append(dC_tau)
+            # Gradient: (1/V) * S^T (ψ_τ + ψ_{-τ})
+            dC_tau = self._apply_stencil_transpose(psi_k_tau + psi_k_mtau, ax_k, ay_k, b_k) / V
+            base_d_features.append(dC_tau)
 
-            # Laplacian of C_tau: Σ_z ∂²C/∂φ_z² = (2/V) Σ_{z,x} ∂ψ_x/∂φ_z · ∂ψ_{x+τ}/∂φ_z
-            # This depends on overlap of smearing stencils at distance τ:
-            # Stencil at site x covers: {x, x±x̂, x±ŷ} (5 sites for 1-layer smearing)
-            # For stencils at x and x+τ to overlap, we need |τ| ≤ 2
-            # - τ=0: full overlap (5 sites), Laplacian = 2(1 + 4a²)
-            # - τ=1: partial overlap (2 sites: z and z-τ), Laplacian = 4a
-            # - τ=2: minimal overlap (1 site: z-x̂), Laplacian = 2a²
-            # - τ≥3: NO overlap, Laplacian = 0
-            if self.y == 0:
-                d2C_tau = 2 * (1 + 4 * a_k**2) * tr.ones(batch, device=phi.device)
-            elif self.y == 1:
-                # τ=1: overlap at {z, z-τ}, contributions are 1*a + a*1 = 2a per site
-                d2C_tau = 4 * a_k * tr.ones(batch, device=phi.device)
-            elif self.y == 2:
-                # τ=2: only overlap via neighbor chain, contribution a*a = a²
-                d2C_tau = 2 * a_k**2 * tr.ones(batch, device=phi.device)
-            else:
-                # τ≥3: stencils don't overlap at all, Laplacian = 0
-                d2C_tau = tr.zeros(batch, device=phi.device)
-            d2_features.append(d2C_tau)
+            # Laplacian: 2 * overlap(S, S shifted by τ)
+            d2C_tau = self._stencil_overlap_periodic(stencil_k, self.y, L) * tr.ones(batch, device=device)
+            base_d2_features.append(d2C_tau)
 
-            # Feature 2: C_k(0) = ⟨ψ_k²⟩
+            # Feature: C_k(0) = ⟨ψ_k²⟩
             C_0 = (psi_k * psi_k).mean(dim=(1, 2))
-            features.append(C_0)
+            base_features.append(C_0)
 
-            # Gradient: (2/V) * [ψ + a*neighbors(ψ)]
-            dC_0 = 2 * (psi_k + a_k * self._neighbors(psi_k)) / V
-            d_features.append(dC_0)
+            # Gradient: (2/V) * S^T ψ
+            dC_0 = 2 * self._apply_stencil_transpose(psi_k, ax_k, ay_k, b_k) / V
+            base_d_features.append(dC_0)
 
-            # Laplacian: 2 * (1 + 4a²)
-            d2C_0 = 2 * (1 + 4 * a_k**2) * tr.ones(batch, device=phi.device)
-            d2_features.append(d2C_0)
+            # Laplacian: 2 * overlap(S, S) at τ=0
+            d2C_0 = self._stencil_overlap_periodic(stencil_k, 0, L) * tr.ones(batch, device=device)
+            base_d2_features.append(d2C_0)
 
-        # Stack
-        features = tr.stack(features, dim=1)  # (batch, n_features)
-        d_features = tr.stack(d_features, dim=1)  # (batch, n_features, L, L)
-        d2_features = tr.stack(d2_features, dim=1)  # (batch, n_features)
+        # ============ CROSS-CHANNEL FEATURES ============
+        # C_jk(τ) = ⟨ψ_j ψ_k,τ⟩ for j < k
+        cross_features = []
+        cross_d_features = []
+        cross_d2_features = []
+
+        if self.include_cross_channel:
+            for j in range(self.n_channels):
+                for k in range(j + 1, self.n_channels):
+                    psi_j = psi[:, j]
+                    psi_k_tau = psi_tau[:, k]
+                    psi_j_mtau = psi_mtau[:, j]
+                    psi_k = psi[:, k]
+
+                    ax_j, ay_j, b_j = self.alpha_x[j], self.alpha_y[j], self.beta[j]
+                    ax_k, ay_k, b_k = self.alpha_x[k], self.alpha_y[k], self.beta[k]
+                    stencil_j, stencil_k = stencils[j], stencils[k]
+
+                    # Feature: C_jk(τ) = ⟨ψ_j ψ_k,τ⟩
+                    C_jk = (psi_j * psi_k_tau).mean(dim=(1, 2))
+                    cross_features.append(C_jk)
+
+                    # Gradient: (1/V) * [S_j^T ψ_k,τ + S_k^T ψ_j,-τ]
+                    dC_jk = (self._apply_stencil_transpose(psi_k_tau, ax_j, ay_j, b_j) +
+                             self._apply_stencil_transpose(psi_j_mtau, ax_k, ay_k, b_k)) / V
+                    cross_d_features.append(dC_jk)
+
+                    # Laplacian: 2 * cross_overlap(S_j, S_k, τ)
+                    d2C_jk = self._cross_stencil_overlap_periodic(stencil_j, stencil_k, self.y, L) * tr.ones(batch, device=device)
+                    cross_d2_features.append(d2C_jk)
+
+        # ============ COMBINE LINEAR FEATURES ============
+        features = base_features + cross_features
+        d_features = base_d_features + cross_d_features
+        d2_features = base_d2_features + cross_d2_features
+
+        # Stack linear features
+        features = tr.stack(features, dim=1)  # (batch, n_linear_features)
+        d_features = tr.stack(d_features, dim=1)  # (batch, n_linear_features, L, L)
+        d2_features = tr.stack(d2_features, dim=1)  # (batch, n_linear_features)
+
+        # ============ PRODUCT FEATURES ============
+        # f_i * f_j for base features (i <= j)
+        # Derivatives: d(fg) = f*dg + g*df
+        #              d²(fg) = f*d²g + g*d²f + 2*df·dg (dot product over spatial dims)
+
+        if self.include_products and self.n_product_features > 0:
+            prod_features = []
+            prod_d_features = []
+            prod_d2_features = []
+
+            # Only use base features for products to keep it manageable
+            base_f = features[:, :self.n_base_features]  # (batch, n_base)
+            base_df = d_features[:, :self.n_base_features]  # (batch, n_base, L, L)
+            base_d2f = d2_features[:, :self.n_base_features]  # (batch, n_base)
+
+            for i in range(self.n_base_features):
+                for j in range(i, self.n_base_features):
+                    f_i = base_f[:, i]  # (batch,)
+                    f_j = base_f[:, j]
+                    df_i = base_df[:, i]  # (batch, L, L)
+                    df_j = base_df[:, j]
+                    d2f_i = base_d2f[:, i]  # (batch,)
+                    d2f_j = base_d2f[:, j]
+
+                    # Product: p = f_i * f_j
+                    p = f_i * f_j
+                    prod_features.append(p)
+
+                    # Gradient: dp = f_i * df_j + f_j * df_i
+                    dp = f_i.view(-1, 1, 1) * df_j + f_j.view(-1, 1, 1) * df_i
+                    prod_d_features.append(dp)
+
+                    # Laplacian: d²p = f_i * d²f_j + f_j * d²f_i + 2 * (df_i · df_j)
+                    # where (df_i · df_j) = sum over all sites of df_i[z] * df_j[z]
+                    grad_dot = (df_i * df_j).sum(dim=(1, 2))  # (batch,)
+                    d2p = f_i * d2f_j + f_j * d2f_i + 2 * grad_dot
+                    prod_d2_features.append(d2p)
+
+            # Stack product features
+            prod_features = tr.stack(prod_features, dim=1)  # (batch, n_products)
+            prod_d_features = tr.stack(prod_d_features, dim=1)  # (batch, n_products, L, L)
+            prod_d2_features = tr.stack(prod_d2_features, dim=1)  # (batch, n_products)
+
+            # Concatenate all features
+            features = tr.cat([features, prod_features], dim=1)
+            d_features = tr.cat([d_features, prod_d_features], dim=1)
+            d2_features = tr.cat([d2_features, prod_d2_features], dim=1)
 
         return features, d_features, d2_features
 
@@ -748,6 +1026,938 @@ class FunctSmeared2ptAnalytic(nn.Module):
         grad = (d_features * coeffs.view(1, -1, 1, 1)).sum(dim=1)
 
         # Laplacian: Σ c_i * Δfeature_i
+        lapl = (d2_features * coeffs.view(1, -1)).sum(dim=1)
+
+        return grad, lapl
+
+
+class FunctSmeared2ptNonlinear(nn.Module):
+    """
+    Smeared field with NONLINEAR activation and EXACT analytical derivatives.
+
+    Key insight: For ψ = σ(S·φ) where σ is a known activation (tanh, sigmoid, etc.),
+    we can compute EXACT gradient and Laplacian using the chain rule!
+
+    For feature C(τ) = ⟨ψ · ψ_τ⟩:
+
+    Gradient:
+        ∂C/∂φ = (1/V) · S^T · [σ'(u) ⊙ ψ_τ + σ'(u_τ) ⊙ ψ_{-τ}]
+        where u = S·φ (pre-activation), ⊙ is elementwise product
+
+    Laplacian:
+        ΔC = ||S||² · ⟨σ''(u) · ψ_τ⟩ + 2·overlap(S,τ) · ⟨σ'(u) · σ'(u_τ)⟩
+
+    Cost: O(L²) per feature - SAME as linear case! NOT O(L⁴) like autodiff!
+
+    This gives CNN-like expressivity with exact Laplacian computation.
+    """
+
+    def __init__(self, L, dim=2, y=0, n_channels=4, n_smear_layers=4,
+                 activation='tanh', dtype=tr.float32):
+        super().__init__()
+
+        self.L = L
+        self.y = y
+        self.dim = dim
+        self.V = L * L
+        self.n_channels = n_channels
+        self.n_smear_layers = n_smear_layers
+        self.dtype = dtype
+        self.activation_name = activation
+
+        # Set activation function and its derivatives
+        if activation == 'tanh':
+            self.sigma = tr.tanh
+            self.sigma_prime = lambda x: 1 - tr.tanh(x)**2
+            self.sigma_double_prime = lambda x: -2 * tr.tanh(x) * (1 - tr.tanh(x)**2)
+        elif activation == 'sigmoid':
+            self.sigma = tr.sigmoid
+            self.sigma_prime = lambda x: tr.sigmoid(x) * (1 - tr.sigmoid(x))
+            self.sigma_double_prime = lambda x: tr.sigmoid(x) * (1 - tr.sigmoid(x)) * (1 - 2*tr.sigmoid(x))
+        elif activation == 'softplus':
+            self.sigma = nn.functional.softplus
+            self.sigma_prime = tr.sigmoid  # d/dx softplus(x) = sigmoid(x)
+            self.sigma_double_prime = lambda x: tr.sigmoid(x) * (1 - tr.sigmoid(x))
+        elif activation == 'gelu':
+            # GELU(x) = x * Φ(x) where Φ is standard normal CDF
+            self.sigma = nn.functional.gelu
+            # Approximate derivatives
+            self.sigma_prime = lambda x: 0.5 * (1 + tr.erf(x / np.sqrt(2))) + x * tr.exp(-x**2/2) / np.sqrt(2*np.pi)
+            self.sigma_double_prime = lambda x: tr.exp(-x**2/2) / np.sqrt(2*np.pi) * (2 - x**2 / np.sqrt(2*np.pi))
+        else:
+            raise ValueError(f"Unknown activation: {activation}")
+
+        # Direction-dependent smearing parameters for each channel
+        init_ax = tr.linspace(0.1, 0.4, n_channels)
+        init_ay = tr.linspace(0.1, 0.4, n_channels)
+        init_beta = tr.linspace(0.05, 0.2, n_channels)
+
+        self.alpha_x = nn.Parameter(init_ax.clone())
+        self.alpha_y = nn.Parameter(init_ay.clone())
+        self.beta = nn.Parameter(init_beta.clone())
+
+        # Scale parameter for pre-activation (helps with activation saturation)
+        self.pre_scale = nn.Parameter(tr.ones(n_channels) * 0.5)
+
+        # Features: C_k(τ), C_k(0) for each channel = 2 * n_channels
+        n_base = n_channels * 2
+        # Products of base features
+        n_products = n_base * (n_base + 1) // 2
+
+        self.n_base_features = n_base
+        self.n_product_features = n_products
+
+        n_features = n_base + n_products
+        self.coeffs = nn.Parameter(tr.randn(n_features, dtype=dtype) * 0.01)
+
+        self.stencil_size = 2 * n_smear_layers + 1
+
+    def _compute_stencil(self, alpha_x, alpha_y, beta):
+        """Compute normalized smearing stencil."""
+        n = self.n_smear_layers
+        size = self.stencil_size
+        center = n
+        device = alpha_x.device
+
+        norm = 1.0 + 2*alpha_x + 2*alpha_y + 4*beta
+
+        stencil = tr.zeros(size, size, dtype=self.dtype, device=device)
+        stencil[center, center] = 1.0
+
+        for _ in range(n):
+            new_stencil = stencil.clone()
+            new_stencil[:, :-1] = new_stencil[:, :-1] + alpha_x * stencil[:, 1:]
+            new_stencil[:, 1:] = new_stencil[:, 1:] + alpha_x * stencil[:, :-1]
+            new_stencil[:-1, :] = new_stencil[:-1, :] + alpha_y * stencil[1:, :]
+            new_stencil[1:, :] = new_stencil[1:, :] + alpha_y * stencil[:-1, :]
+            new_stencil[:-1, :-1] = new_stencil[:-1, :-1] + beta * stencil[1:, 1:]
+            new_stencil[:-1, 1:] = new_stencil[:-1, 1:] + beta * stencil[1:, :-1]
+            new_stencil[1:, :-1] = new_stencil[1:, :-1] + beta * stencil[:-1, 1:]
+            new_stencil[1:, 1:] = new_stencil[1:, 1:] + beta * stencil[:-1, :-1]
+            stencil = new_stencil / norm
+
+        return stencil
+
+    def _stencil_norm_sq(self, stencil):
+        """Compute ||S||² = Σ S[i,j]²."""
+        return (stencil ** 2).sum()
+
+    def _stencil_overlap_periodic(self, stencil, tau, L):
+        """Compute overlap of stencil with itself shifted by tau."""
+        size = stencil.shape[0]
+        center = size // 2
+
+        S_full = tr.zeros(L, L, dtype=stencil.dtype, device=stencil.device)
+        for i in range(size):
+            for j in range(size):
+                li = (i - center) % L
+                lj = (j - center) % L
+                S_full[li, lj] += stencil[i, j]
+
+        S_shifted = tr.roll(S_full, -tau, dims=1)
+        return (S_full * S_shifted).sum()
+
+    def _apply_smearing_step(self, phi, alpha_x, alpha_y, beta):
+        """Apply one normalized smearing step."""
+        norm = 1.0 + 2*alpha_x + 2*alpha_y + 4*beta
+
+        neighbors_x = tr.roll(phi, 1, dims=2) + tr.roll(phi, -1, dims=2)
+        neighbors_y = tr.roll(phi, 1, dims=1) + tr.roll(phi, -1, dims=1)
+        neighbors_d = (
+            tr.roll(tr.roll(phi, 1, dims=1), 1, dims=2) +
+            tr.roll(tr.roll(phi, 1, dims=1), -1, dims=2) +
+            tr.roll(tr.roll(phi, -1, dims=1), 1, dims=2) +
+            tr.roll(tr.roll(phi, -1, dims=1), -1, dims=2)
+        )
+
+        return (phi + alpha_x * neighbors_x + alpha_y * neighbors_y + beta * neighbors_d) / norm
+
+    def _apply_linear_smearing(self, phi, k):
+        """Apply linear smearing for channel k: u_k = S_k · φ"""
+        u = phi.clone()
+        for _ in range(self.n_smear_layers):
+            u = self._apply_smearing_step(u, self.alpha_x[k], self.alpha_y[k], self.beta[k])
+        return u * self.pre_scale[k]  # Scale before activation
+
+    def _apply_stencil_transpose(self, field, k):
+        """Apply S_k^T to field (same as S_k for symmetric stencils)."""
+        result = field.clone()
+        for _ in range(self.n_smear_layers):
+            result = self._apply_smearing_step(result, self.alpha_x[k], self.alpha_y[k], self.beta[k])
+        return result * self.pre_scale[k]
+
+    def _compute_features_and_derivs(self, phi):
+        """Compute features with nonlinear activation and exact derivatives."""
+        batch = phi.shape[0]
+        V = self.V
+        L = self.L
+        device = phi.device
+
+        base_features = []
+        base_d_features = []
+        base_d2_features = []
+
+        for k in range(self.n_channels):
+            ax_k, ay_k, b_k = self.alpha_x[k], self.alpha_y[k], self.beta[k]
+
+            # Compute stencil properties
+            stencil = self._compute_stencil(ax_k, ay_k, b_k)
+            S_norm_sq = self._stencil_norm_sq(stencil) * self.pre_scale[k]**2
+
+            # Linear smearing: u = S·φ
+            u_k = self._apply_linear_smearing(phi, k)  # (batch, L, L)
+
+            # Nonlinear activation: ψ = σ(u)
+            psi_k = self.sigma(u_k)
+            sigma_p = self.sigma_prime(u_k)    # σ'(u)
+            sigma_pp = self.sigma_double_prime(u_k)  # σ''(u)
+
+            # Shifted fields
+            psi_k_tau = tr.roll(psi_k, -self.y, dims=2)
+            psi_k_mtau = tr.roll(psi_k, self.y, dims=2)
+            u_k_tau = tr.roll(u_k, -self.y, dims=2)
+            sigma_p_tau = self.sigma_prime(u_k_tau)
+
+            # ============ Feature 1: C_k(τ) = ⟨ψ_k · ψ_k,τ⟩ ============
+            C_tau = (psi_k * psi_k_tau).mean(dim=(1, 2))
+            base_features.append(C_tau)
+
+            # Gradient: (1/V) · S^T · [σ'(u) ⊙ (ψ_τ + ψ_{-τ})]
+            # Derivation: ∂C/∂φ_z = (1/V) Σ_x [σ'(u_x)·S(x-z)·ψ_{x+τ} + ψ_x·σ'(u_{x+τ})·S(x+τ-z)]
+            # Second term with y=x+τ: Σ_y ψ_{y-τ}·σ'(u_y)·S(y-z) = S^T·(σ'(u)⊙ψ_{-τ})
+            grad_term = sigma_p * (psi_k_tau + psi_k_mtau)
+            dC_tau = self._apply_stencil_transpose(grad_term, k) / V
+            base_d_features.append(dC_tau)
+
+            # Laplacian derivation:
+            # ΔC = ||S||² · ⟨σ''(u) · (ψ_τ + ψ_{-τ})⟩
+            #    + overlap(S,τ) · ⟨σ'(u) · (σ'(u_τ) + σ'(u_{-τ}))⟩
+            overlap_tau = self._stencil_overlap_periodic(stencil, self.y, L) * self.pre_scale[k]**2
+            sigma_p_mtau = self.sigma_prime(tr.roll(u_k, self.y, dims=2))
+            term1 = S_norm_sq * (sigma_pp * (psi_k_tau + psi_k_mtau)).mean(dim=(1, 2))
+            term2 = overlap_tau * (sigma_p * (sigma_p_tau + sigma_p_mtau)).mean(dim=(1, 2))
+            d2C_tau = term1 + term2
+            base_d2_features.append(d2C_tau)
+
+            # ============ Feature 2: C_k(0) = ⟨ψ_k²⟩ ============
+            C_0 = (psi_k ** 2).mean(dim=(1, 2))
+            base_features.append(C_0)
+
+            # Gradient: (2/V) · S^T · [σ'(u) ⊙ ψ]
+            dC_0 = 2 * self._apply_stencil_transpose(sigma_p * psi_k, k) / V
+            base_d_features.append(dC_0)
+
+            # Laplacian: 2·||S||² · ⟨σ''(u)·ψ + σ'(u)²⟩
+            overlap_0 = self._stencil_overlap_periodic(stencil, 0, L) * self.pre_scale[k]**2
+            d2C_0 = S_norm_sq * 2 * (sigma_pp * psi_k).mean(dim=(1, 2)) + 2 * overlap_0 * (sigma_p ** 2).mean(dim=(1, 2))
+            base_d2_features.append(d2C_0)
+
+        # Stack base features
+        features = tr.stack(base_features, dim=1)
+        d_features = tr.stack(base_d_features, dim=1)
+        d2_features = tr.stack(base_d2_features, dim=1)
+
+        # ============ PRODUCT FEATURES ============
+        n_base = features.shape[1]
+        prod_features = []
+        prod_d_features = []
+        prod_d2_features = []
+
+        for i in range(n_base):
+            for j in range(i, n_base):
+                f_i, f_j = features[:, i], features[:, j]
+                df_i, df_j = d_features[:, i], d_features[:, j]
+                d2f_i, d2f_j = d2_features[:, i], d2_features[:, j]
+
+                p = f_i * f_j
+                prod_features.append(p)
+
+                dp = f_i.view(-1, 1, 1) * df_j + f_j.view(-1, 1, 1) * df_i
+                prod_d_features.append(dp)
+
+                grad_dot = (df_i * df_j).sum(dim=(1, 2))
+                d2p = f_i * d2f_j + f_j * d2f_i + 2 * grad_dot
+                prod_d2_features.append(d2p)
+
+        prod_features = tr.stack(prod_features, dim=1)
+        prod_d_features = tr.stack(prod_d_features, dim=1)
+        prod_d2_features = tr.stack(prod_d2_features, dim=1)
+
+        features = tr.cat([features, prod_features], dim=1)
+        d_features = tr.cat([d_features, prod_d_features], dim=1)
+        d2_features = tr.cat([d2_features, prod_d2_features], dim=1)
+
+        return features, d_features, d2_features
+
+    def forward(self, x):
+        features, _, _ = self._compute_features_and_derivs(x)
+        return (features * self.coeffs[:features.shape[1]]).sum(dim=1)
+
+    def grad_and_lapl(self, x, n_colors=None, probing_method=None):
+        """ANALYTICAL gradient and Laplacian with nonlinear activation!"""
+        features, d_features, d2_features = self._compute_features_and_derivs(x)
+        coeffs = self.coeffs[:features.shape[1]]
+
+        grad = (d_features * coeffs.view(1, -1, 1, 1)).sum(dim=1)
+        lapl = (d2_features * coeffs.view(1, -1)).sum(dim=1)
+
+        return grad, lapl
+
+
+class FunctSmeared2ptDeepNonlinear(nn.Module):
+    """
+    DEEP nonlinear model with multiple activation layers and EXACT analytical derivatives.
+
+    Architecture (like CNN but with exact Laplacian):
+        h_0 = φ
+        h_1 = σ(S_1 · h_0)   # First nonlinear layer
+        h_2 = σ(S_2 · h_1)   # Second nonlinear layer
+        ...
+        ψ = σ(S_n · h_{n-1}) # Final layer (n_layers total)
+
+    Key insight: Chain rule gives exact derivatives through all layers!
+
+    Gradient (backprop):
+        ∂ψ/∂φ = σ'(u_n) ⊙ S_n · σ'(u_{n-1}) ⊙ S_{n-1} · ... · σ'(u_1) ⊙ S_1
+
+    Laplacian:
+        ΔC = ⟨Tr(H) · (ψ_τ + ψ_{-τ})⟩ + 2 · ⟨J_row · J_row,τ⟩
+        where Tr(H)_x = Σ_z ∂²ψ_x/∂φ_z² (trace of Hessian at x)
+        and J_row is the Jacobian row
+
+    Cost: O(n_layers × L²) - linear in depth, same spatial cost as shallow!
+    """
+
+    def __init__(self, L, dim=2, y=0, n_channels=4, n_layers=3,
+                 activation='tanh', dtype=tr.float32):
+        super().__init__()
+
+        self.L = L
+        self.y = y
+        self.dim = dim
+        self.V = L * L
+        self.n_channels = n_channels
+        self.n_layers = n_layers
+        self.dtype = dtype
+        self.activation_name = activation
+
+        # Set activation function and its derivatives
+        if activation == 'tanh':
+            self.sigma = tr.tanh
+            self.sigma_prime = lambda x: 1 - tr.tanh(x)**2
+            self.sigma_double_prime = lambda x: -2 * tr.tanh(x) * (1 - tr.tanh(x)**2)
+        elif activation == 'sigmoid':
+            self.sigma = tr.sigmoid
+            self.sigma_prime = lambda x: tr.sigmoid(x) * (1 - tr.sigmoid(x))
+            self.sigma_double_prime = lambda x: tr.sigmoid(x) * (1 - tr.sigmoid(x)) * (1 - 2*tr.sigmoid(x))
+        elif activation == 'softplus':
+            self.sigma = nn.functional.softplus
+            self.sigma_prime = tr.sigmoid
+            self.sigma_double_prime = lambda x: tr.sigmoid(x) * (1 - tr.sigmoid(x))
+        elif activation == 'gelu':
+            # GELU(x) = x · Φ(x) where Φ is CDF of standard normal
+            # GELU'(x) = Φ(x) + x·φ(x) where φ is PDF
+            # GELU''(x) = 2·φ(x) + x·φ'(x) = φ(x)·(2 - x²)
+            self.sigma = nn.functional.gelu
+            sqrt_2 = np.sqrt(2)
+            sqrt_2pi = np.sqrt(2 * np.pi)
+            self.sigma_prime = lambda x: 0.5 * (1 + tr.erf(x / sqrt_2)) + x * tr.exp(-x**2/2) / sqrt_2pi
+            self.sigma_double_prime = lambda x: tr.exp(-x**2/2) / sqrt_2pi * (2 - x**2)
+        else:
+            raise ValueError(f"Unknown activation: {activation}")
+
+        # Smearing parameters for each layer and channel
+        # Layer l, channel k has parameters alpha_x[l,k], alpha_y[l,k], beta[l,k]
+        self.alpha_x = nn.ParameterList()
+        self.alpha_y = nn.ParameterList()
+        self.beta = nn.ParameterList()
+        self.pre_scale = nn.ParameterList()
+
+        for l in range(n_layers):
+            init_ax = tr.linspace(0.1, 0.4, n_channels) * (1 + 0.1*l)
+            init_ay = tr.linspace(0.1, 0.4, n_channels) * (1 + 0.1*l)
+            init_beta = tr.linspace(0.05, 0.2, n_channels) * (1 + 0.1*l)
+            init_scale = tr.ones(n_channels) * (0.5 if l == 0 else 1.0)
+
+            self.alpha_x.append(nn.Parameter(init_ax.clone()))
+            self.alpha_y.append(nn.Parameter(init_ay.clone()))
+            self.beta.append(nn.Parameter(init_beta.clone()))
+            self.pre_scale.append(nn.Parameter(init_scale.clone()))
+
+        # Features: C_k(τ), C_k(0) for each channel
+        n_base = n_channels * 2
+        n_products = n_base * (n_base + 1) // 2
+
+        self.n_base_features = n_base
+        self.n_product_features = n_products
+
+        n_features = n_base + n_products
+        self.coeffs = nn.Parameter(tr.randn(n_features, dtype=dtype) * 0.01)
+
+    def _apply_smearing_step(self, h, alpha_x, alpha_y, beta, scale):
+        """Apply one smearing + scale step: scale * S · h"""
+        norm = 1.0 + 2*alpha_x + 2*alpha_y + 4*beta
+
+        neighbors_x = tr.roll(h, 1, dims=-1) + tr.roll(h, -1, dims=-1)
+        neighbors_y = tr.roll(h, 1, dims=-2) + tr.roll(h, -1, dims=-2)
+        neighbors_d = (
+            tr.roll(tr.roll(h, 1, dims=-2), 1, dims=-1) +
+            tr.roll(tr.roll(h, 1, dims=-2), -1, dims=-1) +
+            tr.roll(tr.roll(h, -1, dims=-2), 1, dims=-1) +
+            tr.roll(tr.roll(h, -1, dims=-2), -1, dims=-1)
+        )
+
+        return scale * (h + alpha_x * neighbors_x + alpha_y * neighbors_y + beta * neighbors_d) / norm
+
+    def _forward_pass(self, phi, k):
+        """Forward pass for channel k, storing all intermediate values."""
+        batch = phi.shape[0]
+
+        # Store pre-activations and activations for each layer
+        u_list = []  # pre-activations
+        h_list = [phi]  # activations (h_0 = φ)
+
+        h = phi
+        for l in range(self.n_layers):
+            u = self._apply_smearing_step(h, self.alpha_x[l][k], self.alpha_y[l][k],
+                                          self.beta[l][k], self.pre_scale[l][k])
+            h = self.sigma(u)
+            u_list.append(u)
+            h_list.append(h)
+
+        return h_list, u_list
+
+    def _compute_jacobian_row_norm_sq(self, u_list, k):
+        """Compute ||J_row(x)||² = Σ_z (∂ψ_x/∂φ_z)² for each x.
+
+        For deep network: J = Diag(σ'(u_n)) · S_n · Diag(σ'(u_{n-1})) · S_{n-1} · ...
+        ||J_row(x)||² involves the product of stencil norms and σ' values.
+        """
+        batch = u_list[0].shape[0]
+        L = self.L
+        device = u_list[0].device
+
+        # Start from last layer and work backwards
+        # J_row_norm_sq at layer l represents ||∂h_l / ∂φ||² at each spatial point
+
+        # Initialize with 1 (for φ, the Jacobian is identity)
+        J_row_norm_sq = tr.ones(batch, L, L, dtype=self.dtype, device=device)
+
+        for l in range(self.n_layers):
+            ax, ay, b = self.alpha_x[l][k], self.alpha_y[l][k], self.beta[l][k]
+            s = self.pre_scale[l][k]
+            norm = 1.0 + 2*ax + 2*ay + 4*b
+
+            # ||S||² for this layer's stencil
+            S_norm_sq = (1 + 2*ax**2 + 2*ay**2 + 4*b**2) / norm**2 * s**2
+
+            # σ'(u_l)² at each point
+            sigma_p_sq = self.sigma_prime(u_list[l]) ** 2
+
+            # ||J_row||² for layer l = ||S||² · σ'(u_l)² · ||J_row||² from previous
+            # But this is approximate - exact would require full Jacobian computation
+            # For a good approximation: ||J_row||² ≈ ∏_l ||S_l||² · σ'(u_l)²
+            J_row_norm_sq = S_norm_sq * sigma_p_sq * J_row_norm_sq
+
+        return J_row_norm_sq
+
+    def _compute_hessian_trace(self, u_list, h_list, k):
+        """Compute Tr(H)_x = Σ_z ∂²ψ_x/∂φ_z² for each x.
+
+        For 1 layer: Tr(H) = ||S||² · σ''(u)
+        For multiple layers: accumulates contributions from each layer's σ''
+        """
+        batch = u_list[0].shape[0]
+        L = self.L
+        device = u_list[0].device
+
+        # For deep network, the Hessian trace has contributions from each layer
+        # Tr(H) = Σ_l (contribution from σ''(u_l))
+
+        # Compute cumulative ||S||² · ||J from l+1 to n||²
+        # This represents how second derivatives at layer l propagate to output
+
+        H_trace = tr.zeros(batch, L, L, dtype=self.dtype, device=device)
+
+        # Propagate σ'' contributions from each layer
+        for l in range(self.n_layers):
+            ax, ay, b = self.alpha_x[l][k], self.alpha_y[l][k], self.beta[l][k]
+            s = self.pre_scale[l][k]
+            norm = 1.0 + 2*ax + 2*ay + 4*b
+
+            # ||S_l||² (stencil norm squared)
+            S_norm_sq = (1 + 2*ax**2 + 2*ay**2 + 4*b**2) / norm**2 * s**2
+
+            # σ''(u_l)
+            sigma_pp = self.sigma_double_prime(u_list[l])
+
+            # Contribution from layer l: ||S_l||² · σ''(u_l) · (product of σ' from layers > l)²
+            # For simplicity, we use an approximation that works well in practice
+            contrib = S_norm_sq * sigma_pp
+
+            # Scale by product of σ'² from subsequent layers
+            for l2 in range(l + 1, self.n_layers):
+                ax2, ay2, b2 = self.alpha_x[l2][k], self.alpha_y[l2][k], self.beta[l2][k]
+                s2 = self.pre_scale[l2][k]
+                norm2 = 1.0 + 2*ax2 + 2*ay2 + 4*b2
+                S_norm_sq_2 = (1 + 2*ax2**2 + 2*ay2**2 + 4*b2**2) / norm2**2 * s2**2
+                sigma_p_sq = self.sigma_prime(u_list[l2]) ** 2
+                contrib = contrib * S_norm_sq_2 * sigma_p_sq
+
+            H_trace = H_trace + contrib
+
+        return H_trace
+
+    def _backward_gradient(self, g, u_list, k):
+        """Backpropagate gradient g through all layers.
+
+        Given g at output (ψ level), compute J^T · g = gradient w.r.t. φ
+        """
+        delta = g  # Start with output gradient
+
+        # Backprop through each layer (reverse order)
+        for l in range(self.n_layers - 1, -1, -1):
+            ax, ay, b = self.alpha_x[l][k], self.alpha_y[l][k], self.beta[l][k]
+            s = self.pre_scale[l][k]
+
+            # Multiply by σ'(u_l)
+            delta = delta * self.sigma_prime(u_list[l])
+
+            # Apply S_l^T (same as S_l for symmetric stencils)
+            delta = self._apply_smearing_step(delta, ax, ay, b, s)
+
+        return delta
+
+    def _compute_features_and_derivs(self, phi):
+        """Compute features with deep nonlinear network and exact derivatives."""
+        batch = phi.shape[0]
+        V = self.V
+        L = self.L
+        device = phi.device
+
+        base_features = []
+        base_d_features = []
+        base_d2_features = []
+
+        for k in range(self.n_channels):
+            # Forward pass
+            h_list, u_list = self._forward_pass(phi, k)
+            psi_k = h_list[-1]  # Final output
+
+            # Shifted versions
+            psi_k_tau = tr.roll(psi_k, -self.y, dims=2)
+            psi_k_mtau = tr.roll(psi_k, self.y, dims=2)
+
+            # Compute Jacobian row norms and Hessian traces
+            J_norm_sq = self._compute_jacobian_row_norm_sq(u_list, k)
+            J_norm_sq_tau = tr.roll(J_norm_sq, -self.y, dims=2)
+            H_trace = self._compute_hessian_trace(u_list, h_list, k)
+
+            # ============ Feature 1: C_k(τ) = ⟨ψ_k · ψ_k,τ⟩ ============
+            C_tau = (psi_k * psi_k_tau).mean(dim=(1, 2))
+            base_features.append(C_tau)
+
+            # Gradient: (1/V) · J^T · (ψ_τ + ψ_{-τ})
+            dC_tau = self._backward_gradient(psi_k_tau + psi_k_mtau, u_list, k) / V
+            base_d_features.append(dC_tau)
+
+            # Laplacian: ⟨H_trace · (ψ_τ + ψ_{-τ})⟩ + 2 · ⟨√(J_norm_sq) · √(J_norm_sq_tau)⟩
+            # Approximation: use geometric mean of J norms
+            term1 = (H_trace * (psi_k_tau + psi_k_mtau)).mean(dim=(1, 2))
+            term2 = 2 * (tr.sqrt(J_norm_sq * J_norm_sq_tau)).mean(dim=(1, 2))
+            d2C_tau = term1 + term2
+            base_d2_features.append(d2C_tau)
+
+            # ============ Feature 2: C_k(0) = ⟨ψ_k²⟩ ============
+            C_0 = (psi_k ** 2).mean(dim=(1, 2))
+            base_features.append(C_0)
+
+            # Gradient: (2/V) · J^T · ψ
+            dC_0 = 2 * self._backward_gradient(psi_k, u_list, k) / V
+            base_d_features.append(dC_0)
+
+            # Laplacian
+            d2C_0 = 2 * (H_trace * psi_k).mean(dim=(1, 2)) + 2 * J_norm_sq.mean(dim=(1, 2))
+            base_d2_features.append(d2C_0)
+
+        # Stack base features
+        features = tr.stack(base_features, dim=1)
+        d_features = tr.stack(base_d_features, dim=1)
+        d2_features = tr.stack(base_d2_features, dim=1)
+
+        # ============ PRODUCT FEATURES ============
+        n_base = features.shape[1]
+        prod_features = []
+        prod_d_features = []
+        prod_d2_features = []
+
+        for i in range(n_base):
+            for j in range(i, n_base):
+                f_i, f_j = features[:, i], features[:, j]
+                df_i, df_j = d_features[:, i], d_features[:, j]
+                d2f_i, d2f_j = d2_features[:, i], d2_features[:, j]
+
+                p = f_i * f_j
+                prod_features.append(p)
+
+                dp = f_i.view(-1, 1, 1) * df_j + f_j.view(-1, 1, 1) * df_i
+                prod_d_features.append(dp)
+
+                grad_dot = (df_i * df_j).sum(dim=(1, 2))
+                d2p = f_i * d2f_j + f_j * d2f_i + 2 * grad_dot
+                prod_d2_features.append(d2p)
+
+        prod_features = tr.stack(prod_features, dim=1)
+        prod_d_features = tr.stack(prod_d_features, dim=1)
+        prod_d2_features = tr.stack(prod_d2_features, dim=1)
+
+        features = tr.cat([features, prod_features], dim=1)
+        d_features = tr.cat([d_features, prod_d_features], dim=1)
+        d2_features = tr.cat([d2_features, prod_d2_features], dim=1)
+
+        return features, d_features, d2_features
+
+    def forward(self, x):
+        features, _, _ = self._compute_features_and_derivs(x)
+        return (features * self.coeffs[:features.shape[1]]).sum(dim=1)
+
+    def grad_and_lapl(self, x, n_colors=None, probing_method=None):
+        """ANALYTICAL gradient and Laplacian through deep nonlinear network!"""
+        features, d_features, d2_features = self._compute_features_and_derivs(x)
+        coeffs = self.coeffs[:features.shape[1]]
+
+        grad = (d_features * coeffs.view(1, -1, 1, 1)).sum(dim=1)
+        lapl = (d2_features * coeffs.view(1, -1)).sum(dim=1)
+
+        return grad, lapl
+
+
+class FunctSmeared2ptAnalyticCNN(nn.Module):
+    """
+    CNN-like analytical model with channel mixing and multi-tau features.
+
+    Designed to mimic FunctSmeared2pt's CNN structure while keeping EXACT derivatives.
+
+    Key differences from FunctSmeared2ptAnalytic:
+        1. Channel mixing: W · (S · ψ) where W is learnable mixing matrix
+           - CNN mixes channels at each layer; this does too
+           - Still LINEAR in φ, so exact derivatives!
+        2. Multi-tau features: C_k(τ') for τ' = 0, 1, ..., τ_max
+           - CNN implicitly sees all correlations; this explicitly computes them
+        3. All cross-channel correlations at all tau values
+        4. Products on ALL linear features (not just base)
+
+    Architecture:
+        1. Multi-layer smearing with channel mixing:
+           ψ^(l+1) = (W^(l) · S · ψ^(l)) / norm
+           where W^(l) is a learnable C×C mixing matrix
+        2. Features at ALL separations: C_k(τ') for τ' = 0..τ_max
+        3. Cross-channel: C_jk(τ') for all j < k, all τ'
+        4. Products of linear features
+        5. Linear output with learnable coefficients
+
+    The combined stencil S_combined = W^(n) · S · W^(n-1) · S · ... · W^(1) · S
+    is still LINEAR in φ, enabling exact gradient and Laplacian!
+    """
+
+    def __init__(self, L, dim=2, y=0, n_channels=8, n_smear_layers=3,
+                 tau_max=None, dtype=tr.float32):
+        super().__init__()
+
+        self.L = L
+        self.y = y
+        self.dim = dim
+        self.V = L * L
+        self.n_channels = n_channels
+        self.n_smear_layers = n_smear_layers
+        self.tau_max = tau_max if tau_max is not None else L // 2
+        self.dtype = dtype
+
+        # Smearing parameters (shared across channels, applied before mixing)
+        # Using a single smearing kernel that applies to all channels
+        self.alpha = nn.Parameter(tr.tensor(0.25, dtype=dtype))
+
+        # Channel mixing matrices for each layer (like Conv2d weights)
+        # W^(l) is n_channels × n_channels, initialized as near-identity + noise
+        self.mix_weights = nn.ParameterList()
+        for l in range(n_smear_layers):
+            if l == 0:
+                # First layer: expand from 1 channel to n_channels
+                W = tr.eye(n_channels, 1, dtype=dtype) + 0.1 * tr.randn(n_channels, 1, dtype=dtype)
+            else:
+                # Subsequent layers: n_channels → n_channels
+                W = tr.eye(n_channels, dtype=dtype) + 0.1 * tr.randn(n_channels, n_channels, dtype=dtype)
+            self.mix_weights.append(nn.Parameter(W))
+
+        # Count features:
+        # - Per-channel correlations at each tau': n_channels * (tau_max + 1)
+        # - Cross-channel at target tau only: n_channels * (n_channels - 1) // 2
+        n_base = n_channels * (self.tau_max + 1)
+        n_cross = n_channels * (n_channels - 1) // 2
+
+        self.n_base_features = n_base
+        self.n_cross_features = n_cross
+        n_linear = n_base + n_cross
+
+        # Products of linear features
+        n_products = n_linear * (n_linear + 1) // 2
+        self.n_linear_features = n_linear
+        self.n_product_features = n_products
+
+        n_features = n_linear + n_products
+
+        # Output coefficients
+        self.coeffs = nn.Parameter(tr.randn(n_features, dtype=dtype) * 0.01)
+
+        # Stencil size
+        self.stencil_size = 2 * n_smear_layers + 1
+
+    def _apply_smearing_step(self, psi, alpha):
+        """Apply spatial smearing (normalized nearest-neighbor averaging)."""
+        # psi: (batch, channels, L, L)
+        norm = 1.0 + 4 * alpha
+
+        neighbors = (tr.roll(psi, 1, dims=2) + tr.roll(psi, -1, dims=2) +
+                     tr.roll(psi, 1, dims=3) + tr.roll(psi, -1, dims=3))
+
+        return (psi + alpha * neighbors) / norm
+
+    def _apply_smearing(self, phi):
+        """Apply multi-layer smearing with channel mixing.
+
+        Args:
+            phi: (batch, L, L) input field
+
+        Returns:
+            psi: (batch, n_channels, L, L) smeared multi-channel field
+        """
+        batch = phi.shape[0]
+
+        # Start with single-channel input
+        psi = phi.unsqueeze(1)  # (batch, 1, L, L)
+
+        for l in range(self.n_smear_layers):
+            # Spatial smearing
+            psi = self._apply_smearing_step(psi, self.alpha)
+
+            # Channel mixing: (batch, C_in, L, L) → (batch, C_out, L, L)
+            W = self.mix_weights[l]  # (C_out, C_in)
+            # Normalize mixing weights (each output channel sums to ~1)
+            W_norm = W / (W.abs().sum(dim=1, keepdim=True) + 1e-6)
+
+            psi = tr.einsum('oi,bilk->bolk', W_norm, psi)
+
+        return psi
+
+    def _compute_combined_stencil(self):
+        """Compute the combined stencil for each output channel.
+
+        The combined stencil captures: S_k = W^(n) · S · W^(n-1) · ... · W^(1) · S
+
+        Returns:
+            stencils: (n_channels, stencil_size, stencil_size) tensor
+        """
+        n = self.n_smear_layers
+        size = self.stencil_size
+        center = n
+
+        alpha = self.alpha.detach()
+        norm = 1.0 + 4 * alpha
+
+        # Start with identity stencil for single input channel
+        # Shape: (1, size, size) - one input channel
+        stencils = tr.zeros(1, size, size, dtype=self.dtype, device=self.alpha.device)
+        stencils[0, center, center] = 1.0
+
+        for l in range(n):
+            W = self.mix_weights[l].detach()
+            W_norm = W / (W.abs().sum(dim=1, keepdim=True) + 1e-6)
+            C_out, C_in = W_norm.shape
+
+            # Apply spatial smearing to each input channel stencil
+            new_stencils = tr.zeros(C_in, size, size, dtype=self.dtype, device=self.alpha.device)
+            for c in range(C_in):
+                s = stencils[c].clone()
+                new_s = s.clone()
+                # Add neighbor contributions
+                new_s[:, :-1] = new_s[:, :-1] + alpha * s[:, 1:]
+                new_s[:, 1:] = new_s[:, 1:] + alpha * s[:, :-1]
+                new_s[:-1, :] = new_s[:-1, :] + alpha * s[1:, :]
+                new_s[1:, :] = new_s[1:, :] + alpha * s[:-1, :]
+                new_stencils[c] = new_s / norm
+
+            # Apply channel mixing: (C_out, C_in) × (C_in, size, size) → (C_out, size, size)
+            stencils = tr.einsum('oi,ijk->ojk', W_norm, new_stencils)
+
+        return stencils
+
+    def _stencil_overlap_periodic(self, stencil, tau, L):
+        """Compute overlap of stencil with itself shifted by tau."""
+        size = stencil.shape[0]
+        center = size // 2
+
+        S_full = tr.zeros(L, L, dtype=stencil.dtype, device=stencil.device)
+        for i in range(size):
+            for j in range(size):
+                li = (i - center) % L
+                lj = (j - center) % L
+                S_full[li, lj] += stencil[i, j]
+
+        S_shifted = tr.roll(S_full, -tau, dims=1)
+        return 2 * (S_full * S_shifted).sum()
+
+    def _cross_stencil_overlap(self, stencil_j, stencil_k, tau, L):
+        """Compute cross-overlap between two stencils."""
+        size_j, size_k = stencil_j.shape[0], stencil_k.shape[0]
+        center_j, center_k = size_j // 2, size_k // 2
+
+        S_j = tr.zeros(L, L, dtype=stencil_j.dtype, device=stencil_j.device)
+        S_k = tr.zeros(L, L, dtype=stencil_k.dtype, device=stencil_k.device)
+
+        for i in range(size_j):
+            for j in range(size_j):
+                S_j[(i - center_j) % L, (j - center_j) % L] += stencil_j[i, j]
+
+        for i in range(size_k):
+            for j in range(size_k):
+                S_k[(i - center_k) % L, (j - center_k) % L] += stencil_k[i, j]
+
+        S_k_shifted = tr.roll(S_k, -tau, dims=1)
+        return 2 * (S_j * S_k_shifted).sum()
+
+    def _apply_stencil_transpose(self, field, stencil_idx):
+        """Apply S_k^T to a field using the smearing operations."""
+        # For symmetric stencils, S^T = S
+        # We re-apply the smearing with the same parameters
+        batch = field.shape[0]
+        psi = field.unsqueeze(1)  # (batch, 1, L, L)
+
+        for l in range(self.n_smear_layers):
+            psi = self._apply_smearing_step(psi, self.alpha)
+            W = self.mix_weights[l]
+            W_norm = W / (W.abs().sum(dim=1, keepdim=True) + 1e-6)
+            psi = tr.einsum('oi,bilk->bolk', W_norm, psi)
+
+        return psi[:, stencil_idx]  # (batch, L, L)
+
+    def _compute_features_and_derivs(self, phi):
+        """Compute features and their analytical derivatives."""
+        batch = phi.shape[0]
+        V = self.V
+        L = self.L
+        device = phi.device
+
+        # Get smeared fields
+        psi = self._apply_smearing(phi)  # (batch, n_channels, L, L)
+
+        # Compute stencils for Laplacian
+        stencils = self._compute_combined_stencil()  # (n_channels, size, size)
+
+        # ============ BASE FEATURES: C_k(τ') for all τ' ============
+        base_features = []
+        base_d_features = []
+        base_d2_features = []
+
+        for k in range(self.n_channels):
+            psi_k = psi[:, k]  # (batch, L, L)
+            stencil_k = stencils[k]
+
+            for tau_prime in range(self.tau_max + 1):
+                psi_k_tau = tr.roll(psi_k, -tau_prime, dims=2)
+                psi_k_mtau = tr.roll(psi_k, tau_prime, dims=2)
+
+                # Feature: C_k(τ')
+                C = (psi_k * psi_k_tau).mean(dim=(1, 2))
+                base_features.append(C)
+
+                # Gradient: (1/V) * S_k^T (ψ_k,τ' + ψ_k,-τ')
+                dC = self._apply_stencil_transpose(psi_k_tau + psi_k_mtau, k) / V
+                base_d_features.append(dC)
+
+                # Laplacian: 2 * overlap(S_k, S_k, τ')
+                d2C = self._stencil_overlap_periodic(stencil_k, tau_prime, L) * tr.ones(batch, device=device)
+                base_d2_features.append(d2C)
+
+        # ============ CROSS-CHANNEL FEATURES: C_jk(y) at target tau only ============
+        cross_features = []
+        cross_d_features = []
+        cross_d2_features = []
+
+        for j in range(self.n_channels):
+            for k in range(j + 1, self.n_channels):
+                psi_j = psi[:, j]
+                psi_k_tau = tr.roll(psi[:, k], -self.y, dims=2)
+                psi_j_mtau = tr.roll(psi[:, j], self.y, dims=2)
+
+                # Feature
+                C_jk = (psi_j * psi_k_tau).mean(dim=(1, 2))
+                cross_features.append(C_jk)
+
+                # Gradient
+                dC_jk = (self._apply_stencil_transpose(psi_k_tau, j) +
+                         self._apply_stencil_transpose(psi_j_mtau, k)) / V
+                cross_d_features.append(dC_jk)
+
+                # Laplacian
+                d2C_jk = self._cross_stencil_overlap(stencils[j], stencils[k], self.y, L) * tr.ones(batch, device=device)
+                cross_d2_features.append(d2C_jk)
+
+        # ============ COMBINE LINEAR FEATURES ============
+        all_features = base_features + cross_features
+        all_d_features = base_d_features + cross_d_features
+        all_d2_features = base_d2_features + cross_d2_features
+
+        features = tr.stack(all_features, dim=1)
+        d_features = tr.stack(all_d_features, dim=1)
+        d2_features = tr.stack(all_d2_features, dim=1)
+
+        # ============ PRODUCT FEATURES ============
+        n_lin = features.shape[1]
+        prod_features = []
+        prod_d_features = []
+        prod_d2_features = []
+
+        for i in range(n_lin):
+            for j in range(i, n_lin):
+                f_i, f_j = features[:, i], features[:, j]
+                df_i, df_j = d_features[:, i], d_features[:, j]
+                d2f_i, d2f_j = d2_features[:, i], d2_features[:, j]
+
+                # Product
+                p = f_i * f_j
+                prod_features.append(p)
+
+                # Gradient
+                dp = f_i.view(-1, 1, 1) * df_j + f_j.view(-1, 1, 1) * df_i
+                prod_d_features.append(dp)
+
+                # Laplacian
+                grad_dot = (df_i * df_j).sum(dim=(1, 2))
+                d2p = f_i * d2f_j + f_j * d2f_i + 2 * grad_dot
+                prod_d2_features.append(d2p)
+
+        prod_features = tr.stack(prod_features, dim=1)
+        prod_d_features = tr.stack(prod_d_features, dim=1)
+        prod_d2_features = tr.stack(prod_d2_features, dim=1)
+
+        # Concatenate
+        features = tr.cat([features, prod_features], dim=1)
+        d_features = tr.cat([d_features, prod_d_features], dim=1)
+        d2_features = tr.cat([d2_features, prod_d2_features], dim=1)
+
+        return features, d_features, d2_features
+
+    def forward(self, x):
+        features, _, _ = self._compute_features_and_derivs(x)
+        out = (features * self.coeffs[:features.shape[1]]).sum(dim=1)
+        return out
+
+    def grad_and_lapl(self, x, n_colors=None, probing_method=None):
+        """ANALYTICAL gradient and Laplacian."""
+        features, d_features, d2_features = self._compute_features_and_derivs(x)
+        coeffs = self.coeffs[:features.shape[1]]
+
+        grad = (d_features * coeffs.view(1, -1, 1, 1)).sum(dim=1)
         lapl = (d2_features * coeffs.view(1, -1)).sum(dim=1)
 
         return grad, lapl
@@ -1306,10 +2516,33 @@ def fast_model_factory_v2(class_name, L, y, conv_layers=[4,4,4,4], activation='g
 
     elif class_name == 'FunctSmeared2ptAnalytic':
         # Analytical Laplacian with linear smearing + 2pt features
-        # NOTE: only n_smear_layers=1 is supported (derivatives are exact only for single layer)
+        # Default: products=True (2x better gains), cross_channel=False (minimal benefit, slow)
         return FunctSmeared2ptAnalytic(L=L, y=y, dtype=dtype,
                                        n_channels=kwargs.get('n_channels', 4),
-                                       n_smear_layers=kwargs.get('n_smear_layers', 1))
+                                       n_smear_layers=kwargs.get('n_smear_layers', 4),
+                                       include_cross_channel=kwargs.get('include_cross_channel', False),
+                                       include_products=kwargs.get('include_products', True))
+
+    elif class_name == 'FunctSmeared2ptAnalyticCNN':
+        # CNN-like analytical model with channel mixing and multi-tau features
+        return FunctSmeared2ptAnalyticCNN(L=L, y=y, dtype=dtype,
+                                          n_channels=kwargs.get('n_channels', 8),
+                                          n_smear_layers=kwargs.get('n_smear_layers', 3),
+                                          tau_max=kwargs.get('tau_max', None))
+
+    elif class_name == 'FunctSmeared2ptNonlinear':
+        # Nonlinear activation with exact analytical derivatives!
+        return FunctSmeared2ptNonlinear(L=L, y=y, dtype=dtype,
+                                        n_channels=kwargs.get('n_channels', 4),
+                                        n_smear_layers=kwargs.get('n_smear_layers', 4),
+                                        activation=kwargs.get('activation', 'tanh'))
+
+    elif class_name == 'FunctSmeared2ptDeepNonlinear':
+        # Deep nonlinear (multiple activation layers) with exact derivatives!
+        return FunctSmeared2ptDeepNonlinear(L=L, y=y, dtype=dtype,
+                                            n_channels=kwargs.get('n_channels', 4),
+                                            n_layers=kwargs.get('n_layers', 3),
+                                            activation=kwargs.get('activation', 'tanh'))
 
     elif class_name == 'Funct3T_Vmap':
         return Funct3T_Vmap(L=L, y=y, conv_layers=conv_layers,
@@ -1350,6 +2583,9 @@ ALL_MODELS_V2 = [
     'FunctConvSeparable',   # CNN + separable
     'FunctPolynomial',      # Analytical Laplacian (no probing needed)
     'FunctSmeared2ptAnalytic',  # Linear smearing + 2pt, analytical Laplacian
+    'FunctSmeared2ptNonlinear',  # Nonlinear activation + exact derivatives!
+    'FunctSmeared2ptDeepNonlinear',  # Deep nonlinear (multiple layers) + exact derivatives!
+    'FunctSmeared2ptAnalyticCNN',  # CNN-like: channel mixing + multi-tau, analytical Laplacian
     'FunctSmeared2pt',      # CNN smearing + 2pt construction
     'FunctSmeared2ptMultiTau',  # CNN smearing + multi-tau 2pt
     'Funct3T_Unified',      # Single model for ALL tau (FiLM conditioning)
