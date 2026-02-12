@@ -31,15 +31,31 @@ def pack2x2(x: tr.Tensor) -> tr.Tensor:
     return tr.cat([c00, c01, c10, c11], dim=1)
 
 
-def cov_loss(Phi: tr.Tensor, pi: tr.Tensor) -> tr.Tensor:
-    Phi_c = Phi - Phi.mean()
+def cov_loss(Phi: tr.Tensor, pi: tr.Tensor, return_corr: bool = False):
+    # Feature covariances between A=[Phi,Phi^2,Phi^3] and B=[pi,pi^2,pi^3]
     pi4 = pack2x2(pi)
+    A = [Phi, Phi**2, Phi**3]
+    B = [pi4, pi4**2, pi4**3]
+
     loss = 0.0
-    for c in range(pi4.shape[1]):
-        pc = pi4[:, c] - pi4[:, c].mean()
-        cov = (Phi_c * pc).mean()
-        loss = loss + cov * cov
-    return loss / pi4.shape[1]
+    count = 0
+    for a in A:
+        ac = a - a.mean()
+        astd = ac.std() + 1e-8
+        ac = ac / astd
+        for b in B:
+            for c in range(b.shape[1]):
+                bc = b[:, c] - b[:, c].mean()
+                bstd = bc.std() + 1e-8
+                bc = bc / bstd
+                cov = (ac * bc).mean()
+                loss = loss + cov * cov
+                count += 1
+    loss = loss / max(count, 1)
+    if return_corr:
+        mean_abs_corr = tr.sqrt(loss)
+        return loss, mean_abs_corr
+    return loss
 
 
 def main():
@@ -117,12 +133,12 @@ def main():
             opt.zero_grad()
             psi = vmap.g(cur)
             Phi, pi = rg.coarsen(psi)
-            loss = cov_loss(Phi, pi)
+            loss, mean_abs_corr = cov_loss(Phi, pi, return_corr=True)
             loss.backward()
             opt.step()
 
             if it % 50 == 0:
-                print(f"level {level} iter {it} loss {loss.item()}")
+                print(f"level {level} iter {it} loss {loss.item()} mean|corr| {mean_abs_corr.item()}")
 
         ckpt_path = os.path.join(args.out_dir, f"map_level_{level}.pt")
         tr.save(
