@@ -1,8 +1,8 @@
-
 import math
 import torch as tr
 import numpy as np
 import time
+from scipy.stats import chi2 as chi2dist
 
 """
 Created on Wed Nov 2 03:30:00 2025
@@ -11,131 +11,49 @@ Created on Wed Nov 2 03:30:00 2025
 
 """
 
-def get_observables_hist(sg,hmc, phi, Nwarm, Nmeas, Nskip):
+def get_observables_hist(sg, hmc, phi, Nwarm, Nmeas, Nskip, pp="no"):
+    """
+    Measures observables during an HMC evolution.
+    """
+    tic = time.perf_counter()
+    Vol = sg.Vol
+    lat = [phi.shape[1], phi.shape[2]]
+    toc = time.perf_counter()
 
-    tic=time.perf_counter()
-    Vol=sg.Vol
-    lat=[phi.shape[1], phi.shape[2]]
-    toc=time.perf_counter()
-
-    print(f"time {(toc - tic)*1.0e6/Nwarm:0.4f} micro-seconds per HMC trajecrory")
+    print(f"Time {(toc - tic)*1.0e6/Nwarm:0.4f} microseconds per HMC trajectory")
 
     lC2p = []
     lchi_m = []
     E = []
     av_phi = []
-    phase=tr.tensor(np.exp(1j*np.indices(tuple(lat))[0]*2*np.pi/lat[0]))
+    phase = tr.tensor(np.exp(1j*np.indices(tuple(lat))[0]*2*np.pi/lat[0]), dtype=sg.dtype, device=sg.device)
+    
     for k in range(Nmeas):
         ttE = sg.action(phi)/Vol
         E.append(ttE)
-        av_sigma = tr.mean(phi.view(sg.Bs,Vol),axis=1)
+        av_sigma = tr.mean(phi.view(sg.Bs, Vol), axis=1)
         av_phi.append(av_sigma)
         chi_m = av_sigma*av_sigma*Vol
-        p1_av_sig = tr.mean(phi.view(sg.Bs,Vol)*phase.view(1,Vol),axis=1)
+        p1_av_sig = tr.mean(phi.view(sg.Bs, Vol)*phase.view(1, Vol), axis=1)
         C2p = tr.real(tr.conj(p1_av_sig)*p1_av_sig)*Vol
-        if(k%100==0):
-            print("k= ",k,"(av_phi,chi_m, c2p, E) ", av_sigma.mean().numpy(),chi_m.mean().numpy(),C2p.mean().numpy(),ttE.mean().numpy())
-            print("len(C2p): ", len(C2p))
+        
+        if(k % 100 == 0) and pp == "print":
+            print(f"k={k} (av_phi, chi_m, c2p, E) {av_sigma.mean().item():.4f}, {chi_m.mean().item():.4f}, {C2p.mean().item():.4f}, {ttE.mean().item():.4f}")
+            
         lC2p.append(C2p)
         lchi_m.append(chi_m)
-        ## HMC update but also V cycle
-        phi = hmc.evolve(phi,Nskip)
+        phi = hmc.evolve(phi, Nskip)
 
     return lC2p, lchi_m, E, av_phi, phi
 
-### Gamma method implementation
-
 def compute_gradient_autograd(f, mean_a):
     """
-    Eq. (17): Compute gradient f_alpha = df/dA_alpha using autograd at the mean point.
+    Eq. (17): Compute gradient f_alpha = ∂f/∂A_alpha using autograd at the mean point. [cite: 103, 104]
     """
     mean_a = mean_a.clone().detach().requires_grad_(True)
     f_value = f(mean_a)
     f_value.backward()
     return mean_a.grad.detach()
-
-def project_observable(data: tr.Tensor, grad_f: tr.Tensor) -> tr.Tensor:
-    """
-    Eq. (37): Project a_i^alpha to a_i^f = sum_alpha f_alpha * a_i^alpha
-    """
-    return data @ grad_f
-
-def autocorrelation_proj_with_error(data: tr.Tensor, max_lag: int) -> tuple:
-    """
-    Eq. (31), (33) and the error estimation comes from Lüscher:
-    Estimate normalized autocorrelation function rho(t) = Gamma_F(t)/Gamma_F(0)
-    and its statistical error.
-    """
-    N = len(data)
-    mean = data.mean()
-    var = data.var(unbiased=True)
-    acf = tr.zeros(max_lag)
-    err = tr.zeros(max_lag)
-
-    for t in range(max_lag):
-        d1 = data[:N - t] - mean
-        d2 = data[t:] - mean
-        acf[t] = (d1 * d2).mean()
-
-    acf /= var
-
-    for t in range(max_lag):
-        temp = 0.0
-        for k in range(1, max_lag - t):
-            term = acf[k + t] + acf[k - t] - 2 * acf[k] * acf[t]
-            temp += term * term
-        err[t] = math.sqrt(temp / N)
-
-    return acf, err
-
-
-def integrated_autocorrelation_time(acf: tr.Tensor, W: int) -> float:
-    """
-    Eq. (25): Truncated estimate of tau_int,F
-    """
-    return 0.5 + acf[1:W+1].sum().item()
-
-def compute_tau_hat(tau_int: float) -> float:
-    """
-    Eq. (51): Estimate decay scale tau from tau_int using logarithmic expansion.
-    """
-    if tau_int <= 0.5:
-        return 1e-10
-    return (1.0 / tau_int + 1.0 / (12.0 * tau_int**3))**(-1) 
-
-def g_function(W: int, tau_hat: float, N: int) -> float:
-    """
-    Eq. (52): Window optimization criterion.
-    """
-    return math.exp(-W / tau_hat) - tau_hat / math.sqrt(W * N)
-
-def find_optimal_window(acf: tr.Tensor, N: int, S: float = 1.5, maxW: int = 100):
-    """
-    Eq. (43)–(52): Automatic window selection.
-    Returns W_opt, tau_int[W], error[tau_int[W]], and full history of tau_int(W) and its error.
-    """
-    tau_values = []
-    tau_errors = []
-    W_hist = []
-    for W in range(1, min(maxW, N // 2)):
-        tau_int = integrated_autocorrelation_time(acf, W)
-        var_tau = 4 / N * (W + 0.5 - tau_int) * tau_int**2
-        err_tau = math.sqrt(max(var_tau, 0))
-        tau_values.append(tau_int)
-        tau_errors.append(err_tau)
-        W_hist.append(W)
-        tau_hat = compute_tau_hat(tau_int)*S
-        if g_function(W, tau_hat, N) < 0:
-            print(f"Optimal window found: W = {W}")
-            return W, tau_int, err_tau, tau_values, tau_errors, W_hist
-    last_W = min(maxW, N // 2)
-    tau_int = integrated_autocorrelation_time(acf, last_W)
-    var_tau = 4 / N * (last_W + 0.5 - tau_int) * tau_int**2
-    err_tau = math.sqrt(max(var_tau, 0))
-    tau_values.append(tau_int)
-    tau_errors.append(err_tau)
-    W_hist.append(last_W)
-    return last_W, tau_int, err_tau, tau_values, tau_errors, W_hist
 
 def split_first_dim_to_list(tensor: tr.Tensor) -> list:
     """
@@ -149,200 +67,232 @@ def split_first_dim_to_list(tensor: tr.Tensor) -> list:
     """
     return [tensor[i] for i in range(tensor.shape[0])]
 
-def gamma_method_with_replicas(data_replicas: list, f, S: float = 1.0):
+
+def autocorrelation_proj_with_replicas(data_replicas, grad_f, max_lag):
     """
-    Uli Wolff's Gamma analysis for arbitrary general scalar functional F(A, B, C, ...)
-    if we want to do a analysis for a principal observable A, we can just set F(A,A, B, C, ...) = A.
-    and autograd will take care of the gradient which is 1
-    Returns:
-        - acf: normalized autocorrelation function
-        - acf_error: statistical error of acf
-        - tau_int: integrated autocorrelation time
-        - dtau_int: error of tau_int
-        - tau_int_history: list of tau_int(W)
-        - dtau_int_history: corresponding error bars
-        - W_hist: list of W values for each tau_int(W)
-        - W_opt: optimal window
-        - value: estimate of F = f(A)
-        - dvalue: error of value
-        - ddvalue: error of the error estimate
-        - Q: goodness-of-fit across replicas (Eq. 27–30) I still have to fix it 
+    Eq. (31): Implementation of the Gamma-method autocorrelation for multiple replicas. [cite: 159]
+    Estimates the projected autocorrelation function within each replica to avoid boundary noise. [cite: 162, 163]
+    """
+    # Project each replica separately Eq. (37) [cite: 191]
+    projected_reps = [rep @ grad_f for rep in data_replicas]
+    
+    N_total = sum(len(r) for r in projected_reps)
+    R = len(projected_reps)
+    
+    # Global mean based on all measurements Eq. (7) [cite: 69]
+    all_projected = tr.cat(projected_reps)
+    mean_global = all_projected.mean()
+    
+    gamma = tr.zeros(max_lag)
+    
+    for t in range(max_lag):
+        s_sum = 0.0
+        # Correlate within each replicum and then average Eq. (31) 
+        for rep in projected_reps:
+            if len(rep) > t:
+                d1 = rep[:len(rep)-t] - mean_global
+                d2 = rep[t:] - mean_global
+                s_sum += (d1 * d2).sum()
+        
+        # Proper normalization for replica averages [cite: 159, 161]
+        gamma[t] = s_sum / (N_total - R * t)
+
+    rho = gamma / gamma[0] # Normalized autocorrelation rho(t) [cite: 433]
+    
+    # Statistical error of the autocorrelation function [cite: 434]
+    rho_err = tr.zeros(max_lag)
+    for t in range(max_lag):
+        # Approximation based on the Madras-Sokal formula [cite: 207, 316]
+        # In a real scenario, this helps in visual inspection of the plateau [cite: 281]
+        rho_err[t] = math.sqrt(abs(2 * (1 + 2 * rho[1:t+1].sum()) / N_total))
+        
+    return rho, gamma, rho_err
+
+
+def autocorrelation_proj_with_replicas(data_replicas, grad_f, max_lag):
+    """
+    Eq. (31): Implementation of the Gamma-method autocorrelation.
+    """
+    projected_reps = [rep @ grad_f for rep in data_replicas]
+    
+    # Calculate N_total and R
+    N_total = sum(len(r) for r in projected_reps)
+    R = len(projected_reps)
+    
+    all_projected = tr.cat(projected_reps)
+    mean_global = all_projected.mean()
+    
+    # SAFETY GUARD: Ensure max_lag is smaller than the shortest replica
+    # Wolff suggests max_lag should not exceed min(Nr)/2 [cite: 415]
+    min_Nr = min(len(rep) for rep in projected_reps)
+    actual_max_lag = min(max_lag, min_Nr - 1) 
+    
+    if actual_max_lag <= 0:
+        raise ValueError(f"Replica length ({min_Nr}) is too short for the requested lag.")
+
+    gamma = tr.zeros(actual_max_lag)
+    
+    for t in range(actual_max_lag):
+        s_sum = 0.0
+        for rep in projected_reps:
+            if len(rep) > t:
+                d1 = rep[:len(rep)-t] - mean_global
+                d2 = rep[t:] - mean_global
+                s_sum += (d1 * d2).sum()
+        
+        # Proper normalization Eq. (31) 
+        denominator = N_total - R * t
+        if denominator <= 0:
+            # Fallback for edge cases where t is too large for the dataset
+            gamma[t] = 0.0 
+        else:
+            gamma[t] = s_sum / denominator
+
+    rho = gamma / gamma[0] # [cite: 433]
+    
+    # Statistical error calculation [cite: 434]
+    rho_err = tr.zeros(actual_max_lag)
+    for t in range(actual_max_lag):
+        rho_err[t] = math.sqrt(abs(2 * (1 + 2 * rho[1:t+1].sum()) / N_total))
+        
+    return rho, gamma, rho_err
+
+
+def find_optimal_window(rho, N, S, maxW):
+    """
+    Eq. (50)-(52): Automatic window selection procedure. [cite: 269, 274, 277]
+    Balances systematic truncation error with statistical noise. [cite: 216, 290]
+    """
+    tau_hist, dtau_hist, W_hist = [], [], []
+    
+    for W in range(1, min(maxW, N // 2)):
+        # Eq. (25): Integrated autocorrelation time at window W [cite: 128]
+        tau_int = 0.5 + rho[1:W+1].sum().item()
+        
+        # Eq. (42): Statistical error of tau_int [cite: 212]
+        var_tau = (4.0 / N) * (W + 0.5 - tau_int) * (tau_int**2)
+        err_tau = math.sqrt(max(var_tau, 0))
+        
+        tau_hist.append(tau_int)
+        dtau_hist.append(err_tau)
+        W_hist.append(W)
+        
+        # Eq. (51): Estimate decay scale tau [cite: 271, 272]
+        if tau_int <= 0.5:
+            tau_hat = 1e-10
+        else:
+            tau_hat = (1.0 / tau_int + 1.0 / (12.0 * tau_int**3))**(-1)
+        
+        # Windowing criterion Eq. (52) [cite: 274, 277]
+        # We use S * tau_hat as the hypothesis for the decay scale [cite: 280]
+        if (math.exp(-W / (S * tau_hat)) - (S * tau_hat) / math.sqrt(W * N)) < 0:
+            return W, tau_int, err_tau, tau_hist, dtau_hist, W_hist
+            
+    return W_hist[-1], tau_hist[-1], dtau_hist[-1], tau_hist, dtau_hist, W_hist
+
+def gamma_method_with_replicas(data_replicas, f, S=1.5, max_lag=200):
+    """
+    Ulli Wolff's Gamma analysis for general scalar functionals. [cite: 15, 17]
+    Handles multiple replicas, bias correction, and error of the error. [cite: 53, 110, 202]
     """
     all_data = tr.cat(data_replicas, dim=0)
+    N_total = len(all_data)
     mean_a = all_data.mean(dim=0)
+    
+    # Gradient calculation using autograd
     grad_f = compute_gradient_autograd(f, mean_a)
-    projected = tr.cat([project_observable(rep, grad_f) for rep in data_replicas])
+    
+    # Calculate ACF and variances using replica-aware logic
+    rho, gamma, rho_err = autocorrelation_proj_with_replicas(data_replicas, grad_f, max_lag)
+    
+    # Automated selection of the summation window W Eq. (43) [cite: 217, 266]
+    W_opt, tau_int, dtau_int, tau_hist, dtau_hist, W_hist = find_optimal_window(rho, N_total, S, max_lag)
 
-    max_lag = 100
-    acf_avg, acf_err = autocorrelation_proj_with_error(projected, max_lag=max_lag)
-    W_opt, tau_int, dtau_int, tau_hist, dtau_hist, W_hist = find_optimal_window(acf_avg, len(projected), S=S)
-
-    var_f = acf_avg[0] * (2 * tau_int / len(projected))
-    dvalue = math.sqrt(var_f.item())
-    ddvalue = 0.5 * dvalue * dtau_int / tau_int if tau_int > 0 else 0.0
+    # Eq. (34): Naive variance disregarding autocorrelations [cite: 176, 179]
+    v_F = gamma[0].item()
+    
+    # Eq. (49): Apply bias correction for the variance estimate [cite: 262, 265]
+    bias_factor = (1.0 + (2.0 * W_opt + 1.0) / N_total)
+    corrected_variance_F = (v_F * 2.0 * tau_int) * bias_factor
+    
+    # Eq. (23): Final statistical error of the derived quantity [cite: 119]
+    dvalue = math.sqrt(corrected_variance_F / N_total)
+    
+    # Eq. (40): Error of the error estimate (ddvalue) [cite: 207, 218]
+    ddvalue = dvalue * math.sqrt((W_opt + 0.5) / N_total)
+    
+    # Mean value of the derived quantity Eq. (14) [cite: 97]
     value = f(mean_a).item()
 
-    F_r = tr.tensor([f(rep.mean(dim=0)).item() for rep in data_replicas])
-    N_r = tr.tensor([len(rep) for rep in data_replicas])
-    chi2 = tr.sum((F_r - value)**2 * N_r / var_f).item()
-    from scipy.stats import chi2 as chi2dist
-    Q = 1 - chi2dist.cdf(chi2, df=len(data_replicas) - 1) if len(data_replicas) > 1 else None
+    # Eq. (27)-(29): Consistency check across replicas (Goodness of fit) [cite: 139, 142]
+    if len(data_replicas) > 1:
+        # Per-replica means and variance contribution
+        F_r = tr.tensor([f(rep.mean(dim=0)).item() for rep in data_replicas])
+        N_r = tr.tensor([len(rep) for rep in data_replicas])
+        chi2 = tr.sum((F_r - value)**2 * N_r / (v_F * 2.0 * tau_int)).item()
+        Q = 1 - chi2dist.cdf(chi2, df=len(data_replicas) - 1)
+    else:
+        Q = None
 
     return {
-        "acf": acf_avg,
-        "acf_error": acf_err,
-        "tau_int": tau_int,
-        "dtau_int": dtau_int,
-        "tau_int_history": tau_hist,
-        "dtau_int_history": dtau_hist,
-        "W_hist": W_hist,
-        "W_opt": W_opt,
         "value": value,
         "dvalue": dvalue,
         "ddvalue": ddvalue,
-        "Q": Q
+        "tau_int": tau_int,
+        "dtau_int": dtau_int,
+        "W_opt": W_opt,
+        "Q": Q,
+        "acf": rho,
+        "acf_error": rho_err,
+        "tau_int_history": tau_hist,
+        "dtau_int_history": dtau_hist,
+        "W_hist": W_hist
     }
 
+# --- Test Utilities (Simulating section C.2 of the paper) ---
 
 def generate_autocorrelated_sequence(N, tau, seed=None):
     """
-    Generates an autocorrelated Gaussian sequence using an AR(1)-like process:
-    
-        nu[0] = eta[0]
-        nu[i+1] = sqrt(1 - a^2) * eta[i+1] + a * nu[i]
-
-    where:
-        a = (2*tau - 1)/(2*tau + 1)
-    
-    Parameters:
-        N (int): number of samples
-        tau (float): target autocorrelation time
-        seed (int or None): for reproducibility
-
-    Returns:
-        Tensor of shape [N]
+    Generates autocorrelated Gaussian sequence using AR(1) logic (Eq. 68). [cite: 445]
     """
-    if seed is not None:
-        tr.manual_seed(seed)
-
+    if seed is not None: tr.manual_seed(seed)
     eta = tr.randn(N)
     nu = tr.zeros(N)
-    a = (2 * tau - 1) / (2 * tau + 1)
+    a = (2.0 * tau - 1.0) / (2.0 * tau + 1.0)
     nu[0] = eta[0]
     for i in range(1, N):
-        nu[i] = math.sqrt(1 - a ** 2) * eta[i] + a * nu[i - 1]
+        nu[i] = math.sqrt(1 - a**2) * eta[i] + a * nu[i-1]
     return nu
 
-def simulate_logmass_testcase(Nrep=8, Nperrep=1000, m=0.2, tau1=4, tau2=8, q=0.2, seed=123):
+def main():
     """
-    Simulates the example in Wolff's paper (section: Test in a simulator).
-    Generates 8 replicas of 1000 measurements each for the observable:
-
-        F = log(G(0)/G(1))  with  G(z) = exp(-mz)
-
-    The two primary observables (a1, a2) are:
-        a1_i = G(0) + q * (nu1_i + nu2_i)
-        a2_i = G(1) + q * (nu1_i + nu3_i)
-
-    Where each nu_j is an autocorrelated Gaussian noise sequence with specified tau.
+    Main execution simulating the log-mass test case (Section C.2). [cite: 438]
+    """
+    # Parameters from the paper test case [cite: 509, 510]
+    m, tau1, tau2, q = 0.2, 4.0, 8.0, 0.2
+    Nrep, Nperrep = 8, 1000
+    G0, G1 = 1.0, math.exp(-m)
     
-    Returns:
-        data_replicas: list of 8 tensors, each of shape [1000, 2]
-    """
-    G0 = math.exp(-m * 0)
-    G1 = math.exp(-m * 1)
     data_replicas = []
-
     for r in range(Nrep):
-        seed_offset = seed + r * 100
-        nu1 = generate_autocorrelated_sequence(Nperrep, tau1, seed=seed_offset)
-        nu2 = generate_autocorrelated_sequence(Nperrep, tau2, seed=seed_offset + 1)
-        nu3 = generate_autocorrelated_sequence(Nperrep, tau2, seed=seed_offset + 2)
-
+        nu1 = generate_autocorrelated_sequence(Nperrep, tau1, seed=r)
+        nu2 = generate_autocorrelated_sequence(Nperrep, tau2, seed=r+100)
+        nu3 = generate_autocorrelated_sequence(Nperrep, tau2, seed=r+200)
+        
         a1 = G0 + q * (nu1 + nu2)
         a2 = G1 + q * (nu1 + nu3)
+        data_replicas.append(tr.stack([a1, a2], dim=1))
 
-        replica = tr.stack([a1, a2], dim=1)  # shape [Nperrep, 2]
-        data_replicas.append(replica)
-
-    return data_replicas
-
-def print_results(results):
-    print("Gamma-method results:")
-    print(f"F = {results['value']:.6f} ± {results['dvalue']:.6f} (±{results['ddvalue']:.6f})")
-    print(f"tau_int = {results['tau_int']:.3f} ± {results['dtau_int']:.3f}")
-    print(f"W_opt = {results['W_opt']}, Q = {results['Q']}")
-
-import matplotlib.pyplot as plt
-
-def plot_figure_2(results, max_lag=40):
-    """
-    Reproduce Fig. 2 from Wolff (2006) using output of gamma_method_with_replicas.
-    Includes:
-    - Top: autocorrelation function rho(t) with error bars.
-    - Bottom: tau_int(W) with error bars.
-    """
-    acf = results["acf"]
-    acf_error = results["acf_error"]
-    tau_all = results["tau_int_history"]
-    dtau_all = results["dtau_int_history"]
-    tau= results["tau_int"]
-    dtau= results["dtau_int"]
-    W_vals = results["W_hist"]
-    W_opt = results["W_opt"]
-    tau_opt = results["tau_int"]
-
-    fig, axs = plt.subplots(2, 1, figsize=(16, 16), sharex=False)
-
-    # Top plot: autocorrelation rho(t)
-    axs[0].errorbar(
-        range(min(len(acf), max_lag)),
-        acf[:max_lag],
-        yerr=acf_error[:max_lag],
-        fmt='o', capsize=3, label=r"$\rho(t)$"
-    )
-    axs[0].set_title("Normalized autocorrelation of observable")
-    axs[0].set_xlabel(r"$\tau$")
-    axs[0].set_ylabel(r"$\rho(t)$")
-    axs[0].grid(True)
-
-    # Bottom plot: tau_int(W)
-    axs[1].errorbar(
-        W_vals,
-        tau_all,
-        yerr=dtau_all,
-        fmt='s', capsize=3,
-        label=r"$\tau_{\mathrm{int}}(W)$"
-    )
-    axs[1].axvline(W_opt, color='r', linestyle='--', label=f"Optimal $W = {W_opt}$")
-    axs[1].axhline(tau_opt, color='g', linestyle=':', label=fr"$\tau_{{\mathrm{{int}}}}$ = {tau_opt:.2f} $\pm${dtau:.2f}")
-    axs[1].set_xlabel("$W$")
-    axs[1].set_ylabel(r"$\tau_{\mathrm{int}}(W)$")
-    axs[1].set_title("Integrated autocorrelation time")
-    axs[1].legend()
-    axs[1].grid(True)
-
-    plt.tight_layout()
-    plt.show()
-
-def main():
-    data_replicas = simulate_logmass_testcase()
-    print(tr.stack(data_replicas).shape)
-
-    # Define observable: F = log(a1 / a2)
+    # Observable: F = log(a1 / a2) [cite: 440]
     f = lambda A: tr.log(A[0] / A[1])
 
-    # run Γ-method analysis
-    results = gamma_method_with_replicas(data_replicas, f)
+    results = gamma_method_with_replicas(data_replicas, f, S=1.5)
 
-    # print results
-    print(f"F = {results['value']:.6f} ± {results['dvalue']:.6f} (±{results['ddvalue']:.6f})")
-    print(f"tau_int = {results['tau_int']:.3f} ± {results['dtau_int']:.3f}")
-    print(f"W_opt = {results['W_opt']}, Q = {results['Q']}")
-
-    # plot figure 2
-    plot_figure_2(results)
-    
+    print("--- Gamma-Method Analysis Results ---")
+    print(f"F        = {results['value']:.6f} +/- {results['dvalue']:.6f} (stat error of error: +/- {results['ddvalue']:.6f})")
+    print(f"tau_int  = {results['tau_int']:.3f} +/- {results['dtau_int']:.3f}")
+    print(f"W_opt    = {results['W_opt']}")
+    print(f"Q-value  = {results['Q']:.4f}" if results['Q'] is not None else "Q-value  = N/A (1 replicum)")
 
 if __name__ == "__main__":
     main()

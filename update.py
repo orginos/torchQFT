@@ -29,6 +29,8 @@ class hmc:
     def evolve(self,q,N):
         qshape =tuple([q.shape[0]]+[1]*(len(q.shape)-1))
         for k in range(N):
+            if hasattr(self.T, 'generate_phi'):
+                self.T.generate_phi(q)
             q0=q.clone() # copy the q
             p0 = self.T.refreshP()
             H0 = self.T.kinetic(p0) + self.T.action(q0)
