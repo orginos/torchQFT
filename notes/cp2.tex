@@ -1,0 +1,161 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{bm}
+
+\title{CP(2) Notes (Implementation Summary)}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{Fields and Geometry}
+We simulate the 2D $\mathrm{CP}(2)$ model on a square lattice with volume $V=L_x L_y$.
+The field at each site is a complex vector
+\begin{equation}
+  z(x) \in \mathbb{C}^3, \qquad z(x)^\dagger z(x)=1,
+\end{equation}
+representing a point in $\mathrm{CP}(2) \simeq \mathrm{SU}(3)/\mathrm{U}(2)$. We use the rank--1 projector
+\begin{equation}
+  P(x)=z(x) z(x)^\dagger,
+\end{equation}
+which satisfies $P^2=P$ and $\mathrm{Tr}\,P=1$.
+
+\section*{Lattice Action}
+We use the quartic (projector) action
+\begin{equation}
+  S[z] = \beta \Big(N_d V - \sum_{x,\mu} \big|z(x)^\dagger z(x+\hat\mu)\big|^2\Big),
+  \label{eq:action}
+\end{equation}
+so aligned fields give $S=0$.
+This action corresponds to the standard CP($N-1$) lattice formulation with a compact U(1) link variable
+$U_{x,\mu}$ coupling neighboring $z$ fields; integrating out the link yields a quartic action in $z$.\cite{Bruckmann2015}
+
+We also use the unshifted energy
+\begin{equation}
+  S_0[z] = -\beta \sum_{x,\mu} \big|z(x)^\dagger z(x+\hat\mu)\big|^2
+\end{equation}
+for monitoring fluctuations.
+
+\section*{Lie-Derivative Force}
+Let $T_a$ be the anti-Hermitian generators of $\mathfrak{su}(3)$ (normalization
+$\mathrm{Tr}[T_a T_b] = -\tfrac12 \delta_{ab}$), as in \texttt{LieGroups/su3.py}.
+The Lie derivative is
+\begin{equation}
+  \partial_x^a z(y) = T_a\,\delta_{xy}\, z(y).
+\end{equation}
+Define
+\begin{equation}
+  M(x) = \sum_{\mu} \Big(P(x+\hat\mu)+P(x-\hat\mu)\Big),
+\end{equation}
+then the force components are
+\begin{equation}
+  F_a(x) = -\sum_a T_a\,\partial_x^a S = \beta\,\mathrm{Tr}\Big(T_a [P(x), M(x)]\Big).
+\end{equation}
+We implement both the 8-component real force $F_a(x)$ and the matrix force
+$F(x)=\sum_a F_a(x)T_a$.
+
+\section*{Momenta and Kinetic Energy}
+We use two equivalent representations for momenta:
+\begin{enumerate}
+  \item Components $p_a(x)\in\mathbb{R}^8$, with kinetic energy
+  \begin{equation}
+    K = \tfrac12 \sum_{x,a} p_a(x)^2.
+  \end{equation}
+  \item Matrix momenta $P(x)=\sum_a p_a(x)T_a$ (anti-Hermitian, traceless), with
+  \begin{equation}
+    K = -\sum_x \mathrm{Tr}\,[P(x)^2].
+  \end{equation}
+\end{enumerate}
+The two are equivalent by the generator normalization.
+
+\section*{Molecular Dynamics Update}
+The field update uses the group exponential
+\begin{equation}
+  z \leftarrow \exp\big(\Delta t\,P\big)\, z,
+\end{equation}
+with the SU(3) exponential as implemented in \texttt{LieGroups/su3.py}.
+
+\section*{Topological Charge}
+\paragraph{U(1) plaquette definition.}
+The induced compact U(1) links are
+\begin{equation}
+  u_\mu(x) = \frac{z(x)^\dagger z(x+\hat\mu)}{|z(x)^\dagger z(x+\hat\mu)|},
+\end{equation}
+and the plaquette phase is
+\begin{equation}
+  U_p(x) = u_x(x)\,u_y(x+\hat x)\,u_x(x+\hat y)^*\,u_y(x)^*.
+\end{equation}
+The lattice topological charge is
+\begin{equation}
+  Q = \frac{1}{2\pi}\sum_x \mathrm{Arg}\, U_p(x).
+\end{equation}
+The plaquette product and its logarithm define the compact U(1) field strength in terms of link variables,\cite{U1FieldStrength}
+and the topological charge as a sum of plaquette angles follows directly from $F_{12} = \mathrm{Arg}\,U_p$ in 2D.\cite{U1FieldStrength}
+
+\paragraph{Continuum-inspired discretization.}
+We also compute
+\begin{equation}
+  Q_{\mathrm{cont}} = \frac{1}{2\pi i}\sum_x \mathrm{Tr}\Big(P\,[\partial_x P,\partial_y P]\Big),
+\end{equation}
+using forward differences on the lattice. This is the standard continuum expression
+for the CP($N-1$) topological charge in terms of the projector.\cite{TopologicalElectrostatics}
+
+\section*{Two-Point Function and Correlation Length}
+Define the traceless projector field
+\begin{equation}
+  X(x) = P(x) - \tfrac13 I.
+\end{equation}
+We measure a two-point function along the $x$ direction
+\begin{equation}
+  C(r) = \langle \mathrm{Tr}[X(x) X(x+r\hat x)] \rangle,
+\end{equation}
+averaged over sites and configurations.
+We also compute a second-moment correlation length using
+\begin{equation}
+  \xi^2 = \frac{1}{4\sin^2(\pi/L)}\left(\frac{\chi}{C_{2p}}-1\right),
+\end{equation}
+where $\chi = V\,\langle |\bar X|^2\rangle$ is the zero-momentum susceptibility
+and $C_{2p}$ is the correlator at momentum $(2\pi/L,0)$. This mirrors the standard
+O($N$) second-moment estimator.
+
+\section*{Autocorrelation (Madras--Sokal)}
+We provide a helper in \texttt{analysis/autocorr.py} to compute the integrated autocorrelation time
+with the Madras--Sokal automatic window, and the corresponding effective sample size.\cite{MadrasSokal,PyHMC}
+
+\section*{Visualization}
+We visualize $z$ configurations in four complementary ways:
+\begin{enumerate}
+  \item RGB from the projector diagonal: $\mathrm{diag}(P)=\big(|z_0|^2,|z_1|^2,|z_2|^2\big)$.
+  \item Same RGB with brightness modulated by $\arg(P_{01})$.
+  \item HSV mapping with hue $\arg(P_{01})$ and value $|P_{01}|$.
+  \item Plaquette-angle map $\theta(x)=\arg U_p(x)$.
+\end{enumerate}
+
+\begin{thebibliography}{9}
+\bibitem{Bruckmann2015}
+  F. Bruckmann, C. Gattringer, T. Kloiber, T. Sulejmanpasic,
+  ``Dual lattice representations for O(N) and CP(N-1) models with a chemical potential,''
+  Phys. Lett. B 749 (2015) 495--501.
+
+\bibitem{U1FieldStrength}
+  S. Onoda,
+  ``’t Hooft Line in 4D U(1) Lattice Gauge Theory and a Microscopic Description of Dyon’s Statistics,''
+  Prog. Theor. Exp. Phys. 2026, 013B04 (2026).
+
+\bibitem{TopologicalElectrostatics}
+  B. Dou\c{c}ot, R. Moessner, D. L. Kovrizhin,
+  ``Topological electrostatics,''
+  J. Phys.: Condens. Matter 35, 074001 (2023) (arXiv:2107.10700).
+
+\bibitem{MadrasSokal}
+  N. Madras and A. D. Sokal,
+  ``The pivot algorithm: A highly efficient Monte Carlo method for the self-avoiding walk,''
+  J. Stat. Phys. 50, 109 (1988).
+
+\bibitem{PyHMC}
+  ``pyhmc.integrated\_autocorr6 documentation,''
+  pythonhosted.org/pyhmc.
+\end{thebibliography}
+
+\end{document}
