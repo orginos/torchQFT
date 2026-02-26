@@ -187,15 +187,17 @@ def main():
     lat = [Lx, Ly]
     Vol = np.prod(lat)
 
-    fine = s.phi4(lat, cfg["physics"]["lam"], cfg["physics"]["mass"],
-                  batch_size=cfg["run"]["batch_size"], device=device)
+        fine = s.phi4(lat, cfg["physics"]["lam"], cfg["physics"]["mass"],
+                      batch_size=cfg["run"]["batch_size"], device=device)
     phi = fine.hotStart()
 
     fine_hmc_cfg = cfg["fine_hmc"]
+    fine_Nmd = fine_hmc_cfg["Nmd"][0] if isinstance(fine_hmc_cfg["Nmd"], list) else fine_hmc_cfg["Nmd"]
+    fine_tau = fine_hmc_cfg["tau"][0] if isinstance(fine_hmc_cfg["tau"], list) else fine_hmc_cfg["tau"]
     if fine_hmc_cfg["integrator"] == "minnorm2":
-        fine_I = i.minnorm2(fine.force, fine.evolveQ, fine_hmc_cfg["Nmd"], fine_hmc_cfg["tau"])
+        fine_I = i.minnorm2(fine.force, fine.evolveQ, fine_Nmd, fine_tau)
     else:
-        fine_I = i.leapfrog(fine.force, fine.evolveQ, fine_hmc_cfg["Nmd"], fine_hmc_cfg["tau"])
+        fine_I = i.leapfrog(fine.force, fine.evolveQ, fine_Nmd, fine_tau)
     fine_hmc = u.hmc(T=fine, I=fine_I, verbose=False)
 
     vmaps = build_vmaps(cfg, levels)
@@ -237,10 +239,16 @@ def main():
 
         fine_acc = fine_hmc.calc_Acceptance()
         print(f"Acceptance after warmup ({run_mode}): fine={fine_acc}")
-        for l in range(1, levels):
+        for l in range(levels):
+            level_num = l + 1
+            size = (Lx // (2 ** level_num), Ly // (2 ** level_num))
             ad = (acc_down_sum[l] / trials_down_sum[l]) if trials_down_sum[l] > 0 else float("nan")
+            print(f"  level {level_num} ({size[0]}x{size[1]}) down={ad}")
+        for l in range(1, levels):
+            level_num = l
+            size = (Lx // (2 ** level_num), Ly // (2 ** level_num))
             au = (acc_up_sum[l] / trials_up_sum[l]) if trials_up_sum[l] > 0 else float("nan")
-            print(f"  level {l} down={ad} up={au}")
+            print(f"  level {level_num} ({size[0]}x{size[1]}) up={au}")
 
         fine_hmc.reset_Acceptance()
         acc_down_sum = [0.0] * levels
@@ -304,10 +312,16 @@ def main():
 
         fine_acc = fine_hmc.calc_Acceptance()
         print(f"Acceptance after measurements ({run_mode}): fine={fine_acc}")
-        for l in range(1, levels):
+        for l in range(levels):
+            level_num = l + 1
+            size = (Lx // (2 ** level_num), Ly // (2 ** level_num))
             ad = (acc_down_sum[l] / trials_down_sum[l]) if trials_down_sum[l] > 0 else float("nan")
+            print(f"  level {level_num} ({size[0]}x{size[1]}) down={ad}")
+        for l in range(1, levels):
+            level_num = l
+            size = (Lx // (2 ** level_num), Ly // (2 ** level_num))
             au = (acc_up_sum[l] / trials_up_sum[l]) if trials_up_sum[l] > 0 else float("nan")
-            print(f"  level {l} down={ad} up={au}")
+            print(f"  level {level_num} ({size[0]}x{size[1]}) up={au}")
 
         E = np.stack(lE, axis=0)
         av_phi = np.stack(lav_phi, axis=0)

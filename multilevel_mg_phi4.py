@@ -165,8 +165,8 @@ def multilevel_vcycle_hmc_update(
     fine_theory: s.phi4,
     vmaps: List[nn.Module],
     block: int,
-    Nmd: int,
-    tau: float,
+    Nmd,
+    tau,
     Nhmc: int,
     integrator: str = "minnorm2",
     verbose: bool = False,
@@ -192,10 +192,12 @@ def multilevel_vcycle_hmc_update(
 
         # update Phi_next using maps[0..l] and pis[0..l]
         level_theory = LevelCoarsePhi4(fine_theory, pis[: l + 1], vmaps[: l + 1], block)
+        Nmd_l = Nmd[l] if isinstance(Nmd, list) else Nmd
+        tau_l = tau[l] if isinstance(tau, list) else tau
         if integrator == "minnorm2":
-            I = i.minnorm2(level_theory.force, level_theory.evolveQ, Nmd, tau)
+            I = i.minnorm2(level_theory.force, level_theory.evolveQ, Nmd_l, tau_l)
         elif integrator == "leapfrog":
-            I = i.leapfrog(level_theory.force, level_theory.evolveQ, Nmd, tau)
+            I = i.leapfrog(level_theory.force, level_theory.evolveQ, Nmd_l, tau_l)
         else:
             raise ValueError("Unknown integrator: " + str(integrator))
         hmc = u.hmc(T=level_theory, I=I, verbose=verbose)
@@ -212,10 +214,12 @@ def multilevel_vcycle_hmc_update(
         Phis[l] = vmaps[l].f(psi)
 
         level_theory = LevelCoarsePhi4(fine_theory, pis[:l], vmaps[:l], block)
+        Nmd_l = Nmd[l-1] if isinstance(Nmd, list) else Nmd
+        tau_l = tau[l-1] if isinstance(tau, list) else tau
         if integrator == "minnorm2":
-            I = i.minnorm2(level_theory.force, level_theory.evolveQ, Nmd, tau)
+            I = i.minnorm2(level_theory.force, level_theory.evolveQ, Nmd_l, tau_l)
         elif integrator == "leapfrog":
-            I = i.leapfrog(level_theory.force, level_theory.evolveQ, Nmd, tau)
+            I = i.leapfrog(level_theory.force, level_theory.evolveQ, Nmd_l, tau_l)
         else:
             raise ValueError("Unknown integrator: " + str(integrator))
         hmc = u.hmc(T=level_theory, I=I, verbose=verbose)
