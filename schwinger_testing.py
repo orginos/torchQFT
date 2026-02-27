@@ -18,7 +18,6 @@ import time;
 import matplotlib.pyplot as plt;
 import pandas as pd;
 #High performance compiler
-from numba import njit, jit
 
 #Gauge theory HMC integrator test
 def dH_eps2():
@@ -61,11 +60,12 @@ def pure_gauge_Savg():
     #Average over a batch of configurations
     #Parameters imitate that of Duane 1987 HMC Paper
     #16^2 lattice to more closely align with Lang 1986 paper
-    L=16
-    batch_size=10 
-    lam =np.sqrt(1.0/0.970)
-    mass= 0.1
-    sch = s.schwinger([L,L],lam,mass,batch_size=batch_size)
+    L=32
+    L2=16
+    batch_size=100 
+    lam =np.sqrt(1.0/10)
+    mass= 0.1*lam
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     u = sch.hotStart()
 
@@ -93,7 +93,7 @@ def pure_gauge_Savg():
     for n in np.arange(0, 50):
         #Tune integrator to desired step size
         im2 = i.minnorm2(sch.force,sch.evolveQ,50, 1.0)
-        sim = h.hmc(sch, im2, True)
+        sim = h.hmc(sch, im2, False)
         #Evolve, one HMC step
         q = sim.evolve_f(q, 1)
         cq = sim.evolve_f(cq, 1)
@@ -867,7 +867,7 @@ def f_pi_triplet(x, m, A):
 def f_analytical_pi_triplet(x, mc):
     #Coupling
     lam = 1.0/np.sqrt(10.0)
-    return 2.066*tr.pow(((x-mc)/lam)**2, 1.0/3.0) * lam
+    return 2.066*np.power(((x-mc)/lam)**2, 1.0/3.0) * lam
 
 
 #Fit function for finite volume effects
@@ -958,16 +958,16 @@ def quenched_Pion_Triplet_Fit():
 
 def compute_Quenched_Critical_Mass():
     #Measurement process -given function for correlator of pi plus
-    batch_size=50
+    batch_size=100
     #lam =np.sqrt(1.0/0.970)
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass... Need critical mass offset for analytical comparison
     L = 32
     L2 = 16
 
-    mq_list = tr.linspace(-0.1*lam, 0.0, 20, dtype=tr.complex64)
-    m_pi_list = tr.zeros_like(mq_list)
-    m_pi_err_list = tr.zeros_like(mq_list)
+    mq_list = tr.linspace(-0.10*lam, 0.0, 20, dtype=tr.complex64)
+    m_pi_list = tr.zeros_like(mq_list, dtype=tr.float32)
+    m_pi_err_list = tr.zeros_like(mq_list, dtype=tr.float32)
     x=0
 
     for mass in mq_list:
@@ -1012,13 +1012,17 @@ def compute_Quenched_Critical_Mass():
 
         #Fit the effective mass curve
         popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(0, L), tr.abs(c_avg), sigma = tr.abs(c_err))
-        mq_list[x] = popt[0]
-        m_pi_err_list[x] = np.sqrt(pcov[0,0])/np.sqrt(tr.numel(c[:,0]) - 1)
+        m_pi_list[x] = float(popt[0].item())
+        m_pi_err_list[x] = float(np.sqrt(pcov[0,0]).item())
+        #print(m_pi_list[x], m_pi_err_list[x])
         print(x)
         x += 1
 
     #Now fit the data given to find the zero point
-    popt, pcov = sp.optimize.curve_fit(f_analytical_pi_triplet, mq_list, m_pi_list, sigma= m_pi_err_list)
+    print(tr.real(mq_list))
+    print(m_pi_list)
+    print(m_pi_err_list)
+    popt, pcov = sp.optimize.curve_fit(f_analytical_pi_triplet, tr.real(mq_list).numpy(), m_pi_list.numpy(), sigma= m_pi_err_list.numpy())
     print(popt)
     print(pcov)
 
@@ -1026,11 +1030,11 @@ def compute_Quenched_Critical_Mass():
     #TODO: Write more descriptive datafile name
     df.to_csv("output.csv", index = False)
 
-    fig, ax = plt.subplot(1,1)
+    fig, ax = plt.subplots(1,1)
     ax.set_yscale('log', nonpositive='clip')
 
-    ax.errorbar(mq_list, m_pi_list, m_pi_err_list)
-    ax.plot(mq_list, f_analytical_pi_triplet(mq_list, popt))
+    ax.errorbar(tr.real(mq_list), m_pi_list, m_pi_err_list)
+    ax.plot(tr.real(mq_list), f_analytical_pi_triplet(tr.real(mq_list).numpy(), popt))
     plt.show()
 
 
@@ -1332,7 +1336,7 @@ def main():
     #quenched_pi_plus_mass()
     #fermion_action()
     #fermion_force()
-    #pure_gauge_Savg()
+    pure_gauge_Savg()
     #trivial_D_inspect()
     #dynamical_action()
     #dynamical_dH_vs_eps2()
@@ -1342,7 +1346,7 @@ def main():
     #autograd_dynamical_action()
     #pi_plus_comparison()
     #autograd_pi_plus_mass()
-    quenched_Pion_Triplet_Fit()
+    #quenched_Pion_Triplet_Fit()
     #compute_Quenched_Critical_Mass()
     #pion_triplet_fit()
     #import_fit()

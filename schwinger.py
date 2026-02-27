@@ -497,7 +497,7 @@ class schwinger():
             d00 = d_rolled[:, 0:(xcut_1+2*(ov-1))*2*self.V[1], 0:(xcut_1+2*(ov-1))*2*self.V[1]]
 
 
-        boundary_only = True
+        boundary_only = False
         if boundary_only:
             bound_d = tr.zeros((self.Bs, 2*2*ov*self.V[1], 2*2*ov*self.V[1]), dtype=tr.complex64)
 
@@ -601,7 +601,7 @@ class schwinger():
         bc[:, 0, self.V[0]-1, :] = -2.0*u[:, 0, self.V[0] - 1, :]
         u_bc = u + bc
 
-        for mu in [0,1]:
+        for mu in [1]:
             #Forward shifted indices
             p_s =  tr.roll(p, shifts = -1, dims=mu)
             #Flatten the 2D reps of lattice/field to one dimension
@@ -622,7 +622,7 @@ class schwinger():
 
         #Diagonal
         d_dir = tr.zeros([self.Bs, self.V[0]*self.V[1], self.V[0]*self.V[1]], dtype=tr.complex64)
-        d_dir[:, p_f, p_f] = -4.0
+        d_dir[:, p_f, p_f] = -2.0
         laplacian = laplacian+ tr.kron(d_dir, tr.eye(2))
 
         #Reduce to the complement domain
@@ -632,7 +632,7 @@ class schwinger():
         
 
         #Or try just the boundaries
-        boundary_only = True
+        boundary_only = False
         if boundary_only:
             bound_laplacian = tr.zeros((self.Bs, 2*2*ov*self.V[1], 2*2*ov*self.V[1]), dtype=tr.complex64)
 
@@ -643,7 +643,7 @@ class schwinger():
         else:
             L, V = tr.linalg.eigh(-1.0*r_l)
         sorted_L, sorted_ind = tr.sort(tr.real(L), descending=False)
-        print(sorted_L[0, :])
+        #print(sorted_L[0, :])
 
         projs = tr.zeros((self.Bs, k+1, 2*self.V[0]*self.V[1]), dtype=tr.complex64)
 
@@ -965,7 +965,7 @@ class schwinger():
                 summed = summed + tr.einsum('bx, by-> bxy', ensembleL[:, xi, :], 
                                             ensembleR[:, xi, :])
 
-            #Remove overlap spaces from the right complement domain
+            #Remove overlap spaces from the right complement domain and right componenet of the summed measurement
             ensembleR =ensembleR[:, :, (ov-1)*2*self.V[1]:(self.V[0]+1 -ov)*2*self.V[1]]
             summed = summed[:, :, (ov-1)*2*self.V[1]:(self.V[0]+1 -ov)*2*self.V[1]]
 
@@ -1143,15 +1143,15 @@ class schwinger():
                 #First record distance between timeslices
                 dist = min(sink_ts - source_ts, source_ts + self.V[0] - sink_ts)
                 if corr_magnitude[dist-1] == None:
-                    factorized_corr_magnitude[dist-1] = factorized_corr
-                    corr_magnitude[dist- 1] = corr
+                    factorized_corr_magnitude[dist-1] = factorized_corr.unsqueeze(0)
+                    corr_magnitude[dist- 1] = corr.unsqueeze(0)
                 else:
                     # temp = tr.cat((factorized_corr_magnitude[dist- bw -1], factorized_corr), 0)
-                    temp = tr.cat((factorized_corr_magnitude[dist-1], factorized_corr), 0)
+                    temp = tr.cat((factorized_corr_magnitude[dist-1], factorized_corr.unsqueeze(0)), 0)
                     factorized_corr_magnitude[dist-1] = temp
                     #factorized_corr_magnitude[dist - 1, :] = tr.cat((factorized_corr_magnitude[dist - 1, :],
                     #                                                      factorized_corr), dim=0)
-                    temp = tr.cat((corr_magnitude[dist-1], corr), 0)
+                    temp = tr.cat((corr_magnitude[dist-1], corr.unsqueeze(0)), 0)
                     corr_magnitude[dist-1] = temp
                     #corr_magnitude[dist - 1, :] = tr.cat((corr_magnitude[dist - 1, :],
                     #                                                      corr), dim=0)
@@ -1163,7 +1163,7 @@ class schwinger():
 
         return factorized_corr_magnitude, corr_magnitude
     
-    #TODO: Check this still works with newest bugfix
+    #Returns factorized measurements based on localized subdomains
     def measure_Factorized_Pion_Correlator(self, q, f_propogator, xcut_1, xcut_2, bw, p = 0.0, ov=1, factorized_only=False):
 
         max_length = int((self.V[0])/2)
@@ -1211,14 +1211,14 @@ class schwinger():
                 f_c = (1.0/np.sqrt(1.0*self.V[1])) * f_c
 
                 if corr[dist-1] == None:
-                    factorized_corr[dist -1] = f_c
-                    corr[dist - 1] = c
+                    factorized_corr[dist -1] = f_c.unsqueeze(0)
+                    corr[dist - 1] = c.unsqueeze(0)
                 else:
-                    temp = tr.cat((factorized_corr[dist -1], f_c), 0)
+                    temp = tr.cat((factorized_corr[dist -1], f_c.unsqueeze(0)), 0)
                     factorized_corr[dist -1] = temp
                     #factorized_corr_magnitude[dist - 1, :] = tr.cat((factorized_corr_magnitude[dist - 1, :],
                     #                                                      factorized_corr), dim=0)
-                    temp = tr.cat((corr[dist -1], c), 0)
+                    temp = tr.cat((corr[dist -1], c.unsqueeze(0)), 0)
                     corr[dist-1] = temp
 
                 source_t += 1
@@ -1228,6 +1228,138 @@ class schwinger():
             return factorized_corr, corr
         else:
             return factorized_corr
+    
+    def measure_Factorized_Subdomain_Inverses(self, q, xcut_1, ov = 1):
+
+        if ov != 1:
+            #First seperate sections of the Dirac operator
+            d = self.diracOperator(q[0]).to_dense()
+
+            d_rolled = d.roll(((ov-1)*self.V[1]*2, (ov-1)*self.V[1]*2),
+                                dims=(1,2))
+            
+            #Contains all dirac matrix points within the first subdomain
+            s1 = d_rolled[:, :(2*(ov-1) + xcut_1)*self.V[1]*2, 
+                          :(2*(ov-1) + xcut_1)*self.V[1]*2]
+            
+            #Contains second subdomain and both frozen boundaries
+            bulk = d[:,xcut_1*self.V[1]*2:, xcut_1*self.V[1]*2:]
+
+            s1_inv = tr.inverse(s1)
+            bulk_inv = tr.inverse(bulk)
+
+            #Boundary interface
+            d_rolled = d.roll((ov-1)*self.V[1]*2, 2)
+            d10 = d_rolled[:, xcut_1*self.V[1]*2:, :(2*(ov-1) + xcut_1)*self.V[1]*2]
+
+            #Product for left factorization piece
+            bulk_prod = tr.einsum('bxy, byz->bxz', bulk_inv, d10)
+
+
+        else:
+            #First seperate sections of the Dirac operator
+            d = self.diracOperator(q[0]).to_dense()
+
+            #Contains all dirac matrix points within the first subdomain
+            s1 = d[:, :xcut_1*self.V[1]*2, :xcut_1*self.V[1]*2]
+
+            #Contains second subdomain and both frozen boundaries
+            bulk = d[:,xcut_1*self.V[1]*2:, xcut_1*self.V[1]*2:]
+
+            s1_inv = tr.inverse(s1)
+            bulk_inv = tr.inverse(bulk)
+
+            #Boundary interface
+            d10 = d[:, xcut_1*self.V[1]*2:, 0:xcut_1*2*self.V[1]]
+
+            #Product for left factorization piece
+            bulk_prod = tr.einsum('bxy, byz->bxz', bulk_inv, d10)
+        
+        return bulk_prod, s1_inv
+    
+    def measure_Two_Lvl_Factorized_Pion_Correlator(self, bulk_prod, s1_inv, xcut_1, projs, bw, ov=1, p=0.0):
+        
+        subdomain_index_ct = tr.numel(s1_inv[0,0,:])
+        bulk_index_ct = tr.numel(bulk_prod[0,:,0])
+
+        if projs.ndim==2:
+            num_proj = tr.numel(projs[:,0])
+        else:
+            num_proj = tr.numel(projs[0,:,0])
+
+        ensembleL = tr.zeros([self.Bs, num_proj, bulk_index_ct], dtype=tr.complex64)
+        ensembleR = tr.zeros([self.Bs, num_proj, subdomain_index_ct], dtype=tr.complex64)
+        summed = tr.zeros([self.Bs, bulk_index_ct, subdomain_index_ct])
+
+        for xi in tr.arange(num_proj):
+            #Need to update to allow for batch of projectors
+            if projs.ndim == 2:
+                proj = projs[xi, :]
+                proj = proj.repeat(self.Bs, 1)
+            else:
+                proj = projs[:, xi, :]
+
+            #roll projector for right piece
+            p_r = proj.roll((ov-1)*self.V[1]*2, 1)
+
+            #Slice projector relevant to complement subdomain size
+            projector = p_r[:, :(xcut_1+2*(ov-1))*self.V[1]*2]
+
+            ensembleR[:, xi, :] = tr.einsum('bx, bxy->by', tr.conj(projector), s1_inv)
+
+            ensembleL[:, xi, :] = tr.einsum('bxy, by-> bx', bulk_prod, projector)
+            
+
+            summed = summed + tr.einsum('bx, by-> bxy', ensembleL[:, xi, :], 
+                                        ensembleR[:, xi, :])
+
+        #Remove overlap spaces from the right complement domain and right component of the summed measurement
+        f_propogator = summed[:, :, (ov-1)*2*self.V[1]:(self.V[0]+1 -ov)*2*self.V[1]]
+
+        #Now do scanning-like measurement as before
+        max_length = int((self.V[0])/2)
+
+        factorized_corr = [None]* (max_length)
+        
+
+        #Accounts for shifting of the lattice indices in the factorizing process
+        sink_adj = -2*(xcut_1)*self.V[1]
+        
+        sink_t = xcut_1+ bw
+
+        while sink_t < self.V[0] - bw:
+            source_t = 0
+            while source_t < xcut_1:
+                f_c = tr.zeros(self.Bs)
+                for sink_x in tr.arange(self.V[1]):
+                    #TODO: Why does using more than one source spatial index break this?
+                    #Probably has to do with distance between points: encode a source-sink difference?
+                    for source_x in (0,):
+                        source_ind = 2*self.V[1]*source_t + 2*source_x
+                        sink_ind = 2*self.V[1]*sink_t + 2*sink_x + sink_adj
+                        factorized_prop = f_propogator[:, sink_ind:sink_ind+2, source_ind:source_ind+2]
+                        f_c = f_c -  tr.sum(tr.einsum('bij, bkj-> bik', factorized_prop, factorized_prop.conj()), dim=(1,2)) \
+                            *np.exp(-1.0j*p*sink_x)
+
+                dist = min(sink_t - source_t, source_t + self.V[0] - sink_t)
+
+                #Multiply by fourier transform factor 
+                f_c = (1.0/np.sqrt(1.0*self.V[1])) * f_c
+
+                if factorized_corr[dist-1] == None:
+                    factorized_corr[dist -1] = f_c.unsqueeze(0)
+                else:
+                    temp = tr.cat((factorized_corr[dist -1], f_c.unsqueeze(0)), 0)
+                    factorized_corr[dist -1] = temp
+
+                source_t += 1
+            #print('sink position: ', sink_t)
+            sink_t += 1
+        
+        return factorized_corr
+
+
+
 
 
 
