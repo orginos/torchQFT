@@ -143,7 +143,7 @@ class schwinger():
         pl = u[:,0,:,:]*tr.roll(u[:,1,:,:], shifts=-1, dims=1) \
             * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:]) 
         
-        S = (1/self.lam**2) *(tr.sum(tr.real(tr.ones_like(pl) - pl),dim=(1,2)))
+        S = (1/self.lam**2) *(tr.sum(1.0 -tr.real(pl),dim=(1,2)))
         return S
 
 
@@ -183,6 +183,7 @@ class schwinger():
         if len(q) == 1:
             #Force is already real, force cast for downstream errors
             #Additional negative sign added from Hamilton's eqs.
+            #TODO:Check on this minus sign
             return (-1.0)*tr.real(fg).type(self.dtype)
         #start = time.time()
         #Otherwise, compute force of the fermion fields
@@ -296,6 +297,8 @@ class schwinger():
     def evolveQ(self,dt,P,Q):
         #Update the gauge field itself
         u_upd = Q[0]*tr.exp(1.0j*dt*P)
+        #Renormalize to stop numerical drift
+        u_upd /= tr.abs(u_upd)
         #Update dirac operator with new field if fermions are in theory
         if len(Q) == 1:
             return (u_upd,)

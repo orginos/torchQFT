@@ -56,10 +56,8 @@ def dH_eps2():
 
 #Testing equlibration of gauge theory HMC
 def pure_gauge_Savg():
-    #Gauge theory plaquette average
+    #Gauge theory action per plaquette average
     #Average over a batch of configurations
-    #Parameters imitate that of Duane 1987 HMC Paper
-    #16^2 lattice to more closely align with Lang 1986 paper
     L=32
     L2=16
     batch_size=100 
@@ -93,7 +91,7 @@ def pure_gauge_Savg():
     for n in np.arange(0, 50):
         #Tune integrator to desired step size
         im2 = i.minnorm2(sch.force,sch.evolveQ,50, 1.0)
-        sim = h.hmc(sch, im2, False)
+        sim = h.hmc(sch, im2, True)
         #Evolve, one HMC step
         q = sim.evolve_f(q, 1)
         cq = sim.evolve_f(cq, 1)
@@ -115,6 +113,60 @@ def pure_gauge_Savg():
     ax1.set_xlabel(r'n')
     ax1.legend(loc='lower right')
     plt.show()
+
+def plaquette_average():
+    #Gauge theory plaquette average
+    #Average over a batch of configurations
+    L=32
+    L2=16
+    batch_size=10 
+    lam =np.sqrt(1.0/10)
+    mass= 0.1*lam
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    u = sch.hotStart()
+
+    pl_avg = []
+    pl_err = []
+
+    #Gauge theory- tuple contains one element, the gauge field
+    q = (u,)
+
+    #Tune integrator to desired step size
+    im2 = i.minnorm2(sch.force,sch.evolveQ,50, 1.0)
+    sim = h.hmc(sch, im2, False)
+
+    #Skip some for equilibration:
+    q = sim.evolve_f(q, 500)
+
+    for n in np.arange(0, 5000):
+        
+        #Evolve, one HMC step
+        q = sim.evolve_f(q, 1)
+        u = q[0]
+
+
+        #Average plaquette
+        pl = u[:,0,:,:]*tr.roll(u[:,1,:,:], shifts=-1, dims=1) \
+            * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:]) 
+
+        pl_avg.append(tr.mean(tr.real(pl)))
+        pl_err.append(tr.std(tr.real(pl))/np.sqrt(tr.numel(pl) - 1))
+        if n % 100 == 0:
+            print(n, pl_avg[n], tr.sum(tr.abs(tr.abs(u)-1)), tr.max(tr.abs(tr.abs(u)-1)))
+
+    final_avg = sum(pl_avg) / len(pl_avg)
+    
+    print("Final average of " + str(n) + " configs: " + str(final_avg))
+
+    fig, ax1 = plt.subplots(1,1)
+
+    ax1.errorbar(np.arange(n+1), pl_avg, pl_err, label="Hot Start")
+    ax1.set_ylabel(r'$\langle Plaquette \rangle$')
+    ax1.set_xlabel(r'n')
+    ax1.legend(loc='lower right')
+    plt.show()
+
 
 #Quick look at D operator of trivial gauge field
 def trivial_D_inspect():
@@ -1336,7 +1388,8 @@ def main():
     #quenched_pi_plus_mass()
     #fermion_action()
     #fermion_force()
-    pure_gauge_Savg()
+    #pure_gauge_Savg()
+    plaquette_average()
     #trivial_D_inspect()
     #dynamical_action()
     #dynamical_dH_vs_eps2()

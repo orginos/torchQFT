@@ -3416,8 +3416,8 @@ def two_Level_Quenched_Pion_Mass():
 
     for x in np.arange(bw, len(factorized_corr)):
         adj_fc_avg[x] = global_fc_avg[x] + fc_splicing_bias_avg[x]
-        #adj_fc_err[x] = np.sqrt(global_fc_err[x]**2 + fc_splicing_bias_err[x]**2)
-        adj_fc_err[x] = global_fc_err[x]
+        adj_fc_err[x] = np.sqrt(global_fc_err[x]**2 + fc_splicing_bias_err[x]**2)
+        #adj_fc_err[x] = global_fc_err[x]
 
     
     #Save data
