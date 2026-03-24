@@ -2571,6 +2571,24 @@ def fast_model_factory_v2(class_name, L, y, conv_layers=[4,4,4,4], activation='g
                                dtype=dtype, activation=activ, probing_method=probing_method)
         model.set_tau(y)  # Set initial tau
         return model
+    ## first derivative approaches to do the comparison 
+    elif class_name == 'gscalar':
+        # First-order scalar MLP g(phi); uses hidden_dim rather than conv_layers.
+        return original_model_factory('gscalar', L=L, y=y,
+                                      hidden_dim=conv_layers,
+                                      activation=activ, dtype=dtype)
+
+    elif class_name == 'gscalar_sym':
+        # Symmetrized first-order scalar MLP g(phi).
+        return original_model_factory('gscalar', sym_flag=True, L=L, y=y,
+                                      hidden_dim=conv_layers,
+                                      activation=activ, dtype=dtype)
+
+    elif class_name == 'LinScalar':
+        # Backward-compatible alias for gscalar.
+        return original_model_factory('gscalar', L=L, y=y,
+                                      hidden_dim=conv_layers,
+                                      activation=activ, dtype=dtype)
 
     else:
         raise ValueError(f"Unknown model: {class_name}. Available: {ALL_MODELS_V2}")
@@ -2590,4 +2608,7 @@ ALL_MODELS_V2 = [
     'FunctSmeared2ptMultiTau',  # CNN smearing + multi-tau 2pt
     'Funct3T_Unified',      # Single model for ALL tau (FiLM conditioning)
     'Funct3TUnified',       # Single model for ALL tau (simpler: tau concatenation)
+    'gscalar',              # First-order scalar MLP g(phi)
+    'gscalar_sym',          # Symmetrized first-order scalar MLP g(phi)
+    'LinScalar',            # Backward-compatible alias for gscalar
 ]

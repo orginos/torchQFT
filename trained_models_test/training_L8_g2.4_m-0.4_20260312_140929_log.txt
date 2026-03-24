@@ -1,0 +1,69 @@
+[2026-03-12 14:09:29] ============================================================
+[2026-03-12 14:09:29] Advanced Control Variate Training
+[2026-03-12 14:09:29] ============================================================
+[2026-03-12 14:09:29] Device: cuda
+[2026-03-12 14:09:29] Configuration:
+[2026-03-12 14:09:29]   L=8, g=2.4, m=-0.4
+[2026-03-12 14:09:29]   Model: LinScalar, Activation: gelu
+[2026-03-12 14:09:29]   Conv layers: [4, 4, 4, 4]
+[2026-03-12 14:09:29]   Base epochs: 50, Max LR: 0.01
+[2026-03-12 14:09:29]   Base batch size: 128
+[2026-03-12 14:09:29]   Tau range: 2 to 2
+[2026-03-12 14:09:29]   Probing: coloring with n_colors=4
+[2026-03-12 14:09:29]   Output: trained_models_test
+[2026-03-12 14:09:29] ============================================================
+[2026-03-12 14:09:29] 
+============================================================
+[2026-03-12 14:09:29] Training tau = 2
+[2026-03-12 14:09:29] ============================================================
+[2026-03-12 14:09:29] Warming up HMC (200 steps)...
+[2026-03-12 14:09:29]   HMC warmup: 1.49 ms/trajectory
+[2026-03-12 14:09:29]   HMC acceptance: 0.867
+[2026-03-12 14:09:29] Model parameter count: 309
+[2026-03-12 14:09:33] 
+--- Phase1_Batch1x ---
+[2026-03-12 14:09:33]   Epochs: 50, Max LR: 1.00e-02
+[2026-03-12 14:09:33]   Effective batch: 128
+[2026-03-12 14:09:38]   HMC acceptance: 0.952
+[2026-03-12 14:09:38]   Initial loss: 0.023935
+[2026-03-12 14:09:38]   Final loss: 0.008368
+[2026-03-12 14:09:38]   Best loss: 0.007364
+[2026-03-12 14:09:38] 
+--- Final Evaluation (tau=2) ---
+[2026-03-12 14:09:39]   Using n_colors=64 for evaluation
+[2026-03-12 14:09:39]   Variance of O: 0.037637
+[2026-03-12 14:09:39]   Variance of imp(O): 0.011481
+[2026-03-12 14:09:39]   Variance improvement: 3.28x
+[2026-03-12 14:09:39]   muO: 0.212779
+[2026-03-12 14:09:39]   Mean(O): 0.153713
+[2026-03-12 14:09:39]   Mean(impO): 0.226482
+[2026-03-12 14:09:39]   Correlation(F,O): 0.8397
+[2026-03-12 14:09:39] 
+--- Symmetry Check ---
+[2026-03-12 14:09:39] ERROR training tau=2: view size is not compatible with input tensor's size and stride (at least one dimension spans across two contiguous subspaces). Use .reshape(...) instead.
+[2026-03-12 14:09:39] Traceback (most recent call last):
+  File "/sciclone/pscr/yacahuanamedra/variates/train_cv_advanced.py", line 584, in main
+    result = train_single_tau(tau, args, logger, device)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/sciclone/pscr/yacahuanamedra/variates/train_cv_advanced.py", line 425, in train_single_tau
+    symmetry_checker(x, funct)
+  File "/sciclone/pscr/yacahuanamedra/variates/control_variates.py", line 40, in symmetry_checker
+    r90out  = model(tr.rot90(x,k=1,dims=(1,2)))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/sciclone/home/yacahuanamedra/.conda/envs/torchQFT-env/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/sciclone/home/yacahuanamedra/.conda/envs/torchQFT-env/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/sciclone/pscr/yacahuanamedra/variates/control_variates.py", line 520, in forward
+    x_flat = x.view(x.shape[0], -1)
+             ^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: view size is not compatible with input tensor's size and stride (at least one dimension spans across two contiguous subspaces). Use .reshape(...) instead.
+
+[2026-03-12 14:09:39] 
+============================================================
+[2026-03-12 14:09:39] TRAINING COMPLETE - SUMMARY
+[2026-03-12 14:09:39] ============================================================
+[2026-03-12 14:09:39] 
+Done!

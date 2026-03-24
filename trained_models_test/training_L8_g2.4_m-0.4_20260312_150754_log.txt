@@ -1,0 +1,56 @@
+[2026-03-12 15:07:54] ============================================================
+[2026-03-12 15:07:54] Advanced Control Variate Training
+[2026-03-12 15:07:54] ============================================================
+[2026-03-12 15:07:54] Device: cuda
+[2026-03-12 15:07:54] Configuration:
+[2026-03-12 15:07:54]   L=8, g=2.4, m=-0.4
+[2026-03-12 15:07:54]   Model: gscalar, Activation: gelu
+[2026-03-12 15:07:54]   Conv layers: [4, 4, 4, 4]
+[2026-03-12 15:07:54]   Base epochs: 200, Max LR: 0.01
+[2026-03-12 15:07:54]   Base batch size: 200
+[2026-03-12 15:07:54]   Tau range: 2 to 2
+[2026-03-12 15:07:54]   Probing: coloring with n_colors=4
+[2026-03-12 15:07:54]   Output: trained_models_test
+[2026-03-12 15:07:54] ============================================================
+[2026-03-12 15:07:54] 
+============================================================
+[2026-03-12 15:07:54] Training tau = 2
+[2026-03-12 15:07:54] ============================================================
+[2026-03-12 15:07:54] Warming up HMC (200 steps)...
+[2026-03-12 15:07:55]   HMC warmup: 1.51 ms/trajectory
+[2026-03-12 15:07:55]   HMC acceptance: 0.832
+[2026-03-12 15:07:55] Model parameter count: 309
+[2026-03-12 15:07:55] 
+--- Phase1_Batch1x ---
+[2026-03-12 15:07:55]   Epochs: 200, Max LR: 1.00e-02
+[2026-03-12 15:07:55]   Effective batch: 200
+[2026-03-12 15:07:55] ERROR training tau=2: 'gscalar' object has no attribute 'discrete_sym'
+[2026-03-12 15:07:55] Traceback (most recent call last):
+  File "/sciclone/pscr/yacahuanamedra/variates/train_cv_advanced.py", line 584, in main
+    result = train_single_tau(tau, args, logger, device)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/sciclone/pscr/yacahuanamedra/variates/train_cv_advanced.py", line 392, in train_single_tau
+    loss_hist, lr_hist, phi = train_with_accumulation(
+                              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/sciclone/pscr/yacahuanamedra/variates/train_cv_advanced.py", line 122, in train_with_accumulation
+    loss = CM.loss(x) / accumulation_steps
+           ^^^^^^^^^^
+  File "/sciclone/pscr/yacahuanamedra/variates/control_variates.py", line 843, in loss
+    return ((self.Delta(x, n_colors=n_colors) - self.muO)**2).mean()
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/sciclone/pscr/yacahuanamedra/variates/control_variates.py", line 839, in Delta
+    return self.computeO(x) - self.F(x, n_colors=n_colors)
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/sciclone/pscr/yacahuanamedra/variates/control_variates.py", line 829, in F
+    g_shift = self.g_net.discrete_sym(x_shift)  # (batch,)
+              ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/sciclone/home/yacahuanamedra/.conda/envs/torchQFT-env/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1729, in __getattr__
+    raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+AttributeError: 'gscalar' object has no attribute 'discrete_sym'
+
+[2026-03-12 15:07:55] 
+============================================================
+[2026-03-12 15:07:55] TRAINING COMPLETE - SUMMARY
+[2026-03-12 15:07:55] ============================================================
+[2026-03-12 15:07:55] 
+Done!

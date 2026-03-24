@@ -27,7 +27,7 @@ from pathlib import Path
 
 # Import project modules
 from control_variates import (
-    C2pt, symmetry_checker, ControlModel,
+    C2pt, symmetry_checker, ControlModel, ControlModel_g,
     model_factory as original_model_factory, activation_factory
 )
 from fast_functionals_v2 import fast_model_factory_v2 as fast_model_factory, ALL_MODELS_V2 as ALL_MODELS
@@ -340,7 +340,10 @@ def train_single_tau(tau, args, logger, device):
     muO = C2pt(phi, tau).mean().cpu().numpy().item()
 
     # Create control model
-    CM = ControlModel(muO=muO, force=sg.force, c2p_net=funct)
+    if args.model in ('Gfunc1', 'Gfunc_sym', 'gscalar', 'gscalar_sym', 'LinScalar'):
+        CM = ControlModel_g(muO=muO, force=sg.force, g_net=funct)
+    else:
+        CM = ControlModel(muO=muO, force=sg.force, c2p_net=funct)
     CM.to(device)
 
     # Count parameters
@@ -483,7 +486,7 @@ def main():
 
     # Model parameters
     parser.add_argument('-model', default='Funct3T',
-                       help='Model: Funct3T, Funct3T_Hutch, FunctFourier, FunctLocal, FunctQuadratic')
+                       help=f'Model name. Available: {ALL_MODELS}')
     parser.add_argument('-activ', default='gelu', help='Activation function')
     parser.add_argument('-conv_l', type=int, nargs='+', default=[4, 4, 4, 4],
                        help='Convolutional layer widths')

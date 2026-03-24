@@ -1,0 +1,41 @@
+{
+  "phases": [],
+  "config": {
+    "L": 8,
+    "g": 2.4,
+    "m": -0.4,
+    "model": "gscalar",
+    "activ": "gelu",
+    "conv_l": [
+      4,
+      4,
+      4,
+      4
+    ],
+    "n_colors": 4,
+    "n_colors_eval": null,
+    "probing_method": "coloring",
+    "epochs": 200,
+    "lr": 0.01,
+    "batch_size": 200,
+    "grad_clip": 1.0,
+    "n_phases": 1,
+    "Nwarm": 200,
+    "Nskip": 5,
+    "Nmd": 2,
+    "output_dir": "trained_models_test",
+    "tau_min": null,
+    "tau_max": null,
+    "tau": 2,
+    "device": "cuda"
+  },
+  "results": [
+    {
+      "tau": 2,
+      "model_path": "trained_models_test/cv_L_8_m_-0.4_g_2.4_tau_2_gscalar.dict",
+      "final_loss": 0.03426807001233101,
+      "variance_gain": 1.0005676663666496,
+      "correlation": 0.02938400319054728
+    }
+  ]
+}

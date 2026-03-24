@@ -467,6 +467,193 @@ class Funct3T(nn.Module):
                 lapl+=foo[:,i,j]
         return grad,lapl 
 
+
+class gscalar(nn.Module):
+    """Linear scalar model from LAP26 adapted for variates framework.
+    
+    Simple fully-connected network that produces scalar output from field configurations.
+    Compatible with ControlModel_g for first-order control variates.
+    
+    Architecture:
+    - Flattens input field (batch, L, L) -> (batch, L*L)
+    - Multiple linear layers with Tanh activation
+    - Final layer initialized to zero for stable training
+    - Outputs scalar values (batch,)
+    """
+    
+    def __init__(self, L, hidden_dim=[4,4,4], dtype=tr.float32, y=0, dim=2,
+                 activation=tr.nn.Tanh(), initializer=tr.nn.init.xavier_uniform_):
+        super().__init__()
+        
+        self.L = L
+        self.y = y  # Required for ControlModel_g compatibility
+        self.dim = dim  # Required for ControlModel_g compatibility
+        self.dtype = dtype
+        
+        # Calculate volume
+        vol = L * L
+        
+        # Build network architecture
+        sizes = [vol] + hidden_dim + [1]
+        layers = []
+        
+        for i in range(len(sizes) - 1):
+            layer = nn.Linear(sizes[i], sizes[i+1], bias=False, dtype=dtype)
+            if i < len(sizes) - 2:
+                # Initialize hidden layers
+                initializer(layer.weight)
+            else:
+                # Initialize final layer to zero (like LAP26)
+                tr.nn.init.zeros_(layer.weight)
+            
+            layers.append(layer)
+            
+            # Add activation except for final layer
+            if i < len(sizes) - 2:
+                layers.append(activation)
+        
+        self.net = nn.Sequential(*layers)
+        
+    def forward(self, x):
+        """Forward pass: (batch, L, L) -> (batch,)"""
+        # Flatten the field configuration
+        x_flat = x.reshape(x.shape[0], -1)
+        return self.net(x_flat).squeeze(-1)
+    
+    def grad(self, x):
+        """Compute gradient dg/dphi for compatibility with Gfunc1 API."""
+        y = self.forward(x)
+        return tr.autograd.grad(y, x, tr.ones_like(y), create_graph=True)[0]
+
+
+class Gfunc1(nn.Module):
+    """Scalar g(phi) model with discrete symmetries except translation.
+
+    Symmetries enforced:
+      - parity: phi -> -phi
+      - 180-degree rotation
+      - single-axis flip (the other axis follows from rot180+flip)
+    No translation averaging is applied here.
+    """
+
+    def __init__(self, L, dim=2, y=0, conv_layers=[4,4], dtype=tr.float32,
+                 activation=tr.nn.Tanh(), initializer=tr.nn.init.xavier_uniform_):
+        super().__init__()
+
+        self.trunk = nn.Sequential()
+        self.dtype = dtype
+        self.y = y
+        self.dim = dim
+        self.L = L
+
+        in_dim = 1
+        k = 0
+        for l in conv_layers:
+            layer = nn.Conv2d(in_dim, l, kernel_size=3, stride=1, padding=1, padding_mode='circular')
+            initializer(layer.weight)
+            self.trunk.add_module('lin'+str(k), layer)
+            self.trunk.add_module('act'+str(k), activation)
+            in_dim = l
+            k += 1
+
+        # Local readout (no global pooling): translation covariance is preserved.
+        # We pick one anchor site after symmetrization to define scalar g0.
+        self.readout = nn.Conv2d(in_dim, 1, kernel_size=1, stride=1, padding=0)
+        initializer(self.readout.weight)
+        if self.readout.bias is not None:
+            nn.init.zeros_(self.readout.bias)
+
+    def par(self, x, f):
+        return 0.5 * (f(x) + f(-x))
+    def rot180(self, x, f):
+        return 0.5 * (f(x) + f(tr.rot90(x, k=2, dims=(2, 3))))
+    def flip(self, x, f, dims=[2]):
+        return 0.5 * (f(x) + f(tr.flip(x, dims=dims)))
+
+    def scalar_from_map(self, x):
+        h = self.trunk(x)
+        m = self.readout(h)  # (B,1,L,L)
+        # Anchor-site scalar: intentionally not translation invariant.
+        return m[:, 0, 0, 0]
+
+    def forward(self, x):
+        x = x.unsqueeze(1)
+        return self.par(x, lambda z: self.rot180(z, lambda zz: self.flip(zz, self.scalar_from_map)))
+
+    def grad(self, x):
+        """Return first derivative d g / d phi."""
+        y = self.forward(x)
+        return tr.autograd.grad(y, x, tr.ones_like(y), create_graph=True)[0]
+
+
+class Gfunc_sym(nn.Module):
+    """Translation-symmetrized wrapper for scalar g(phi).
+
+    Enforces periodic translation invariance by averaging G over all lattice
+    shifts. Intended to wrap Gfunc1 (or any scalar model with same API).
+    """
+
+    def __init__(self, G):
+        super().__init__()
+        self.G = G
+        self.y = G.y
+        self.dim = G.dim
+
+    def forward(self, x):
+        Lx, Ly = x.shape[1], x.shape[2]
+        out = tr.zeros(x.shape[0], device=x.device, dtype=x.dtype)
+        norm = float(Lx * Ly)
+        for sx in range(Lx):
+            for sy in range(Ly):
+                out += self.G(tr.roll(x, shifts=(sx, sy), dims=(1, 2)))
+        return out / norm
+
+    def grad(self, x):
+        """Return first derivative d g_sym / d phi."""
+        y = self.forward(x)
+        return tr.autograd.grad(y, x, tr.ones_like(y), create_graph=True)[0]
+
+
+class gscalar_sym(nn.Module):
+    """Symmetrized wrapper for gscalar.
+
+    Enforces parity, 180-degree rotation, single-axis flip, and
+    periodic translation invariance by averaging over all shifts.
+    """
+
+    def __init__(self, G):
+        super().__init__()
+        self.G = G
+        self.y = G.y
+        self.dim = G.dim
+
+    def par(self, x, f):
+        return 0.5 * (f(x) + f(-x))
+
+    def rot180(self, x, f):
+        return 0.5 * (f(x) + f(tr.rot90(x, k=2, dims=(1, 2))))
+
+    def flip(self, x, f, dims=[1]):
+        return 0.5 * (f(x) + f(tr.flip(x, dims=dims)))
+
+    def _discrete_sym(self, x):
+        return self.par(x, lambda z: self.rot180(z, lambda zz: self.flip(zz, self.G)))
+
+    def forward(self, x):
+        Lx, Ly = x.shape[1], x.shape[2]
+        out = tr.zeros(x.shape[0], device=x.device, dtype=x.dtype)
+        norm = float(Lx * Ly)
+        for sx in range(Lx):
+            for sy in range(Ly):
+                out += self._discrete_sym(tr.roll(x, shifts=(sx, sy), dims=(1, 2)))
+        return out / norm
+
+    def grad(self, x):
+        """Return first derivative d gscalar_sym / d phi."""
+        y = self.forward(x)
+        return tr.autograd.grad(y, x, tr.ones_like(y), create_graph=True)[0]
+
+
 #symmetrizer wrapper class
 #I need to eliminate the symmetric modules as those are much slower
 #i.e. train assymetric --- symmetrize at the end gives major improvement
@@ -583,6 +770,79 @@ class ControlModel(nn.Module):
         return ((self.Delta(x, n_colors=n_colors) - self.muO)**2).mean()
 
 
+class ControlModel_g(nn.Module):
+    """First-order control variate model based on g(phi), no second derivatives.
+
+    Uses the Schwinger-Dyson / integration-by-parts identity componentwise:
+        <d_i g> = <g d_i S>
+    and builds a scalar zero-mean control variate by summing over lattice dof:
+        F_g(phi) = sum_i d_i g(phi) + g(phi) * sum_i force_i(phi)
+    where force = -dS/dphi in this codebase convention.
+    """
+
+    def __init__(self, muO=1.0, force=None, g_net=None):
+        super(ControlModel_g, self).__init__()
+        self.y = g_net.y
+        if(g_net.dim == 1):
+            self.d = 2
+        else:
+            self.d = 1
+
+        self.force = force
+        self.g_net = g_net
+        self.muO = nn.Parameter(tr.tensor([muO]), requires_grad=True)#activa parameter for minimization
+
+    def computeO(self, x):
+        """Connected wall-to-wall correlator."""
+        x0 = tr.mean(x, dim=self.d).squeeze()
+        mean_x0 = tr.mean(x0, dim=0, keepdim=True)
+        x0 = x0 - mean_x0
+        xx = (x0 * tr.roll(x0, dims=1, shifts=-self.y)).mean(dim=1)
+        return xx
+
+    def g(self, x):
+        """Scalar network output g(phi), expected shape (batch,). g: Real^{volume}->Real."""
+
+        return self.g_net(x)
+
+    def F(self, x, n_colors=None):
+        """First-order CV with cv_lin_inv structure (no second derivatives).
+
+        Implements (site-wise translated scalar field):
+            F(phi) = sum_{i,j} [ d/dphi_{ij} g(T_{-(i,j)}phi)
+                                 + g(T_{-(i,j)}phi) * force_{ij}(phi) ]
+        where force = -dS/dphi in this codebase convention.
+
+        n_colors is accepted for API compatibility and ignored.
+        """
+        Lx, Ly = x.shape[1], x.shape[2]
+        force_x = self.force(x)
+        f = tr.zeros(x.shape[0], device=x.device, dtype=x.dtype)
+
+        for i in range(Lx):
+            for j in range(Ly):
+                # Translation-equivalent local scalar
+                x_shift = tr.roll(x, shifts=(-i, -j), dims=(1, 2))
+
+                g_shift = self.g(x_shift)  # (batch,)
+                #parity of g
+                #g_shift = 0.5 * (self.g(x_shift) + self.g(-x_shift))
+                # Diagonal Jacobian component: d g_shift / d x_{ij}
+                dg = tr.autograd.grad(outputs=g_shift.sum(),inputs=x,create_graph=True,retain_graph=True)[0]
+
+                f += dg[:, i, j] + g_shift * force_x[:, i, j]
+
+        return f
+
+    def Delta(self, x, n_colors=None):
+        """Improved estimator Delta = O - F_g."""
+        return self.computeO(x) - self.F(x, n_colors=n_colors)
+
+    def loss(self, x, n_colors=None):
+        """Loss = Var(Delta - muO)."""
+        return ((self.Delta(x, n_colors=n_colors) - self.muO)**2).mean()
+
+
 def train_control_model(CM,phi,learning_rate=1e-3,epochs=100,super_batch=1,update=lambda phi: tr.randn(phi.shape)):
     c=0
     for tt in CM.parameters():
@@ -649,12 +909,19 @@ def model_factory(class_name, sym_flag=False, **kwargs):
         'Funct3Tinv'  : Funct3Tinv,
         'Funct3T'     : Funct3T,
         'Funct3no'    : Funct3no,
+        'Gfunc1'      : Gfunc1,
+        'gscalar'     : gscalar,
+        'LinScalar'   : gscalar,     # backward-compatible alias
     }
     
     if class_name not in classes:
         raise ValueError(f"Unknown class: {class_name}")
 
     foo=classes[class_name](**kwargs)  # Dynamically pass arguments
+    if class_name == 'Gfunc1' and sym_flag:
+        return Gfunc_sym(foo)
+    if class_name in ('gscalar', 'LinScalar') and sym_flag:
+        return gscalar_sym(foo)
     if(sym_flag):
         return FunctSym(F=foo)
     else:
