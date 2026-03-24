@@ -46,7 +46,7 @@ class hmc:
             
             if(self.verbose):
                 av_ar = tr.mean(AR)
-                print(" HMC: ",k," DH= ",DH.tolist()," A/R= ",Acc_flag.tolist()," Pacc= ",av_ar.item())
+                print(" HMC: ",k," DH= ",DH.tolist()," A/R= ",Acc_flag.tolist()," Pacc= ",av_ar.item(),flush=True)
                     
         return q
 

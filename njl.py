@@ -13,12 +13,12 @@ import numpy as np
 import torch as tr
 
 class field:
-    def __init__(self, V, l, m, Nf, batch_size=1, device="cpu", dtype=tr.float64): 
+    def __init__(self, V, g, m, Nf, batch_size=1, device="cpu", dtype=tr.float64): 
         self.V = tuple(V)
         self.L = V[0]
         self.Vol = np.prod(V)
         self.Nf = Nf
-        self.lam = l
+        self.lam = g
         self.mass = m
         self.Bs = batch_size
         self.device = device
@@ -73,7 +73,7 @@ class field:
     
 
     def build_D_unscaled(self, sigma):
-        # Verifica si entra basura
+        # Check for NaNs in sigma
         if tr.isnan(sigma).any(): raise ValueError("NaN detected in sigma inside build_D")
             
         L = self.L
@@ -127,7 +127,7 @@ class field:
         return self.curr_phi
 
     def solve_robust(self, A, b):
-        """Solver que NUNCA devuelve NaNs (o lo intenta con todas sus fuerzas)"""
+        """Never returns NaNs"""
         # 1. Jitter (Ruido) siempre activo para estabilidad numérica en float64
         jitter_eps = 1e-10
         jitter = jitter_eps * tr.eye(A.shape[-1], device=A.device, dtype=A.dtype)
@@ -185,10 +185,35 @@ class field:
         return F_bos + F_ferm
 
 
+    def apply_momentum_jacobi_smearing(self, source_flat, k_val, kappa=0.5, n_steps=30):
+        """
+        Applies momentum and Jacobi smearing 1D (Bali et al. 2016, Eq. 24).
+        k_val: The fractional momentum injected iteratively in the jumps.
+        """
+        src = source_flat.view(self.Bs, self.L, self.L, 2)
+        norm_factor = 1.0 / (1.0 + 2.0 * kappa)
+        
+        # En el modelo NJL no hay campos de gauge (U=1).
+        # Implementamos el mapeo del paper: U_{x,j} -> 1 * exp(i * k * j)
+        phase_plus  = tr.exp(1j * tr.tensor(k_val, dtype=self.dtype, device=self.device))
+        phase_minus = tr.exp(-1j * tr.tensor(k_val, dtype=self.dtype, device=self.device))
+        
+        for _ in range(n_steps):
+            # shift=-1 trae la información de x+1 hacia x (dirección +j)
+            src_right = tr.roll(src, shifts=-1, dims=2) * phase_plus
+            
+            # shift=1 trae la información de x-1 hacia x (dirección -j)
+            src_left  = tr.roll(src, shifts=1, dims=2) * phase_minus
+            
+            # Iteración de Jacobi con la fase inyectada en el operador de difusión
+            src = norm_factor * (src + kappa * (src_right + src_left))
+            
+        return src.view(self.Bs, self.L * self.L * 2)
+
     def measure_correlators(self, sigma):
         """
-        Calcula los correladores de Pión y Sigma proyectados a momento cero.
-        Retorna: (C_pi_t, C_sigma_t) con shape (Batch, L)
+        Calculates the pion and sigma correlators projected to zero momentum.
+        Returns: (C_pi_t, C_sigma_t) with shape (Batch, L)
         """
         L = self.L
         Vol = self.Vol
@@ -252,15 +277,15 @@ class field:
         
         return C_pi_t, C_sigma_t
 
-
-
-    def measure_momentum_correlators(self, sigma, k_list=[0, 1]):
+    def measure_momentum_correlators(self, sigma, k_list=[0, 1], smearing="point", n_steps=10):
         """
         Calculates Pion and Sigma correlators for specific momentum modes.
         
         Args:
             sigma: The auxiliary field configuration.
             k_list: List of integer momentum modes (p = 2*pi*k / L).
+            smearing: Type of smearing to apply to the source and sink.
+                      Options: 'point', 'jacobi', 'wuppertal?'.
             
         Returns:
             results: A dictionary containing 'pion' and 'sigma' dictionaries,
@@ -271,85 +296,56 @@ class field:
         Vol = self.Vol
         Bs = self.Bs
         
-        # 1. Construct Dirac Operator for the current configuration
-        # D shape: (Batch, 2*Vol, 2*Vol)
         D = self.build_D_unscaled(sigma)
-        
-        # 2. Calculate Propagator S(x, 0) using a Point Source at the origin
-        # We solve D * psi = source for each source spin component.
-        propagators = []
-        
-        for s in range(2): # Loop over source spins (up/down)
-            # Create source vector: zero everywhere, 1.0 at origin (0,0)
-            rhs = tr.zeros((Bs, Vol*2), dtype=self.cdtype, device=self.device)
-            rhs[:, s] = 1.0 
-            
-            # Solve linear system: S = D^-1 * source
-            # Using solve_robust to handle potential singular matrices
-            psi = self.solve_robust(D, rhs)
-            propagators.append(psi)
-
-        # 3. Reconstruct Propagator Tensor
-        # Stack solutions. Shape becomes: (Batch, Vol*2, 2_source_spins)
-        S_flat = tr.stack(propagators, dim=-1)
-        
-        # Reshape to separate spatial/temporal indices from spin indices
-        # Final S shape: (Batch, Time, Space, Spin_sink, Spin_source)
-        # Assuming L[0] is Time, L[1] is Space (or vice versa, L=L)
-        S = S_flat.view(Bs, L, L, 2, 2)
-        
-        # 4. Perform Meson Contractions (Wick's Theorem)
-        
-        # --- PION CHANNEL (Pseudo-scalar) ---
-        # Operator: P = psibar * gamma5 * psi
-        # Correlation: tr(S * S_dagger)
-        # We sum over spin indices (dims 3 and 4)
-        Pion_xy = tr.sum(tr.abs(S)**2, dim=(3, 4)) 
-        
-        # --- SIGMA CHANNEL (Scalar) ---
-        # Operator: S = psibar * I * psi
-        # Correlation: tr(S * gamma5 * S_dagger * gamma5)
-        
-        # Define gamma5 = diag(1, -1) in chiral basis
-        g5 = tr.tensor([[1, 0], [0, -1]], dtype=self.cdtype, device=self.device)
-        
-        # Conjugate transpose of S (swapping spin dims 3 and 4)
-        S_dag = tr.conj(S.permute(0, 1, 2, 4, 3))
-        
-        # S_back = g5 * S_dag * g5
-        # Using einsum for 2x2 matrix multiplication on spin indices
-        S_back = tr.einsum('ij, bxyjk, kl -> bxyil', g5, S_dag, g5)
-        
-        # Final Trace: Tr(S * S_back)
-        Sigma_xy = tr.einsum('bxyij, bxyji -> bxy', S, S_back).real
-
-        # 5. Momentum Projection (Fourier Transform)
-        # We project the spatial dimension onto momentum modes.
-        # C(t, p) = Sum_x C(t, x) * exp(-i * p * x)
-        
         results = {'pion': {}, 'sigma': {}}
-        
-        # Create spatial coordinate vector [0, 1, ..., L-1]
         x_coords = tr.arange(L, device=self.device, dtype=self.dtype)
         
         for k in k_list:
-            # Define momentum value: p = 2*pi*k / L
             p_val = 2.0 * np.pi * k / L
             
-            # Calculate phase factor: exp(-i * p * x)
-            # Casting to complex is important here
-            phase = tr.exp(-1j * p_val * x_coords)
+            def get_propagator(k_smear):
+                propagators = []
+                for s in range(2): 
+                    rhs = tr.zeros((Bs, Vol*2), dtype=self.cdtype, device=self.device)
+                    rhs[:, s] = 1.0 
+                    
+                    if smearing == "jacobi":
+                        # Traditional smearing: k=0
+                        rhs = self.apply_momentum_jacobi_smearing(rhs, k_val=0.0, kappa=0.5, n_steps=n_steps)
+                    elif smearing == "momentum":
+                        # Momentum Smearing iterative (Bali et al.)
+                        rhs = self.apply_momentum_jacobi_smearing(rhs, k_val=k_smear, kappa=0.5, n_steps=n_steps)
+                        
+                    psi = self.solve_robust(D, rhs)
+                    propagators.append(psi)
+                    
+                S_flat = tr.stack(propagators, dim=-1)
+                return S_flat.view(Bs, L, L, 2, 2)
+
+            # --- (k = p/2) ? ---
+            if smearing == "momentum":
+                k_quark = p_val / 2.0  # El momento óptimo para la función de onda
+                S_u = get_propagator(k_smear = k_quark)   # Quark u con +p/2
+                S_d = get_propagator(k_smear = -k_quark)  # Antiquark d con -p/2
+            else:
+                S_d = get_propagator(k_smear = 0.0)
+                S_u = S_d 
+
+            # 4. Wick Contractions
+            Pion_xy = tr.sum(S_u * tr.conj(S_d), dim=(3, 4)) 
             
-            # Perform projection summing over spatial dimension (dim=2)
-            # Broadcasting: 'phase' applies to the spatial axis for all batches/times
+            g5 = tr.tensor([[1, 0], [0, -1]], dtype=self.cdtype, device=self.device)
+            S_d_dag = tr.conj(S_d.permute(0, 1, 2, 4, 3))
+            S_back = tr.einsum('ij, bxyjk, kl -> bxyil', g5, S_d_dag, g5)
+            Sigma_xy = tr.einsum('bxyij, bxyji -> bxy', S_u, S_back)
+
+            # 5. Proyección de Fourier 
+            phase_sink = tr.exp(-1j * p_val * x_coords)
             
-            # For Pion
-            C_pi_p = tr.sum(Pion_xy.to(self.cdtype) * phase, dim=2)
-            results['pion'][k] = C_pi_p.real # Store real part
+            C_pi_p = tr.sum(Pion_xy.to(self.cdtype) * phase_sink, dim=2)
+            results['pion'][k] = C_pi_p.real 
             
-            # For Sigma
-            C_sig_p = tr.sum(Sigma_xy.to(self.cdtype) * phase, dim=2)
-            results['sigma'][k] = C_sig_p.real # Store real part
+            C_sig_p = tr.sum(Sigma_xy.to(self.cdtype) * phase_sink, dim=2)
+            results['sigma'][k] = C_sig_p.real
             
         return results
-

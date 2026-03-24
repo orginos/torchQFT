@@ -3,6 +3,7 @@ import torch as tr
 import numpy as np
 import time
 from scipy.stats import chi2 as chi2dist
+from tqdm import tqdm
 
 """
 Created on Wed Nov 2 03:30:00 2025
@@ -28,7 +29,7 @@ def get_observables_hist(sg, hmc, phi, Nwarm, Nmeas, Nskip, pp="no"):
     av_phi = []
     phase = tr.tensor(np.exp(1j*np.indices(tuple(lat))[0]*2*np.pi/lat[0]), dtype=sg.dtype, device=sg.device)
     
-    for k in range(Nmeas):
+    for k in tqdm(range(Nmeas)):
         ttE = sg.action(phi)/Vol
         E.append(ttE)
         av_sigma = tr.mean(phi.view(sg.Bs, Vol), axis=1)
@@ -55,20 +56,7 @@ def compute_gradient_autograd(f, mean_a):
     f_value.backward()
     return mean_a.grad.detach()
 
-def split_first_dim_to_list(tensor: tr.Tensor) -> list:
-    """
-    Given a tensor of shape [N, T, D], returns a list of N tensors of shape [T, D].
-
-    Args:
-        tensor (torch.Tensor): A 3D tensor with shape [N, T, D].
-
-    Returns:
-        list of torch.Tensor: List of N tensors each with shape [T, D].
-    """
-    return [tensor[i] for i in range(tensor.shape[0])]
-
-
-def autocorrelation_proj_with_replicas(data_replicas, grad_f, max_lag):
+def autocorrelation_proj_with_replicas1(data_replicas, grad_f, max_lag):
     """
     Eq. (31): Implementation of the Gamma-method autocorrelation for multiple replicas. [cite: 159]
     Estimates the projected autocorrelation function within each replica to avoid boundary noise. [cite: 162, 163]
@@ -189,6 +177,18 @@ def find_optimal_window(rho, N, S, maxW):
             return W, tau_int, err_tau, tau_hist, dtau_hist, W_hist
             
     return W_hist[-1], tau_hist[-1], dtau_hist[-1], tau_hist, dtau_hist, W_hist
+
+def split_first_dim_to_list(tensor: tr.Tensor) -> list:
+    """
+    Given a tensor of shape [N, T, D], returns a list of N tensors of shape [T, D].
+
+    Args:
+        tensor (torch.Tensor): A 3D tensor with shape [N, T, D].
+
+    Returns:
+        list of torch.Tensor: List of N tensors each with shape [T, D].
+    """
+    return [tensor[i] for i in range(tensor.shape[0])]
 
 def gamma_method_with_replicas(data_replicas, f, S=1.5, max_lag=200):
     """
