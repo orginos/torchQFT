@@ -2,3 +2,4 @@ __pycache__/
 trained_models_phi4/
 trained_models_phi4_cuda/
 trained_models_test/
+*.pdf
