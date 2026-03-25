@@ -4,6 +4,7 @@ import numpy as np
 import time
 from scipy.stats import chi2 as chi2dist
 from tqdm import tqdm
+import sys
 
 """
 Created on Wed Nov 2 03:30:00 2025
@@ -29,7 +30,7 @@ def get_observables_hist(sg, hmc, phi, Nwarm, Nmeas, Nskip, pp="no"):
     av_phi = []
     phase = tr.tensor(np.exp(1j*np.indices(tuple(lat))[0]*2*np.pi/lat[0]), dtype=sg.dtype, device=sg.device)
     
-    for k in tqdm(range(Nmeas)):
+    for k in tqdm(range(Nmeas), miniters=Nmeas//100, desc="Sampling", file=sys.stdout, maxinterval=float("inf")):
         ttE = sg.action(phi)/Vol
         E.append(ttE)
         av_sigma = tr.mean(phi.view(sg.Bs, Vol), axis=1)

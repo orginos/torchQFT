@@ -91,7 +91,7 @@ def get_observables_MCMG(sg,mgf, hmc_f, sgc, mn2c, hmc_c, phi, Nwarm, Nmeas,pp="
     # Run sampling in no_grad mode to save memory. 
     # Force calculation in HMC will still work because it uses local requires_grad_().
     with tr.no_grad():
-        for k in tqdm(range(Nmeas)):
+        for k in tqdm(range(Nmeas),miniters=Nmeas//100,desc="Sampling",file=sys.stdout, maxinterval=float("inf")):
             ttE = sg.action(phi)/Vol
             E.append(ttE)
             av_sigma = tr.mean(phi.view(sg.Bs,Vol),axis=1)
@@ -100,7 +100,7 @@ def get_observables_MCMG(sg,mgf, hmc_f, sgc, mn2c, hmc_c, phi, Nwarm, Nmeas,pp="
             p1_av_sig = tr.mean(phi.view(sg.Bs,Vol)*phase.view(1,Vol),axis=1)
             C2p = tr.real(tr.conj(p1_av_sig)*p1_av_sig)*Vol
             if(k%10==0) and pp=="print":
-                print("k= ",k,"(av_phi,chi_m, c2p, E) ", av_sigma.mean().detach().numpy(),chi_m.mean().detach().numpy(),C2p.mean().detach().numpy(),ttE.mean().detach().numpy())
+                print("k= ",k,"(av_phi,chi_m, c2p, E) ", av_sigma.mean().detach().numpy(), chi_m.mean().detach().numpy(), C2p.mean().detach().numpy(),ttE.mean().detach().numpy())
             lC2p.append(C2p)
             lchi_m.append(chi_m)
             ## HMC update but also V cycle
@@ -109,6 +109,13 @@ def get_observables_MCMG(sg,mgf, hmc_f, sgc, mn2c, hmc_c, phi, Nwarm, Nmeas,pp="
             #print("step:",k,flush=True)
 
     return lC2p, lchi_m, E, av_phi, phi
+
+def xi_deltaxi(xi,dxi,Cp,dCp,p):
+    m=p/((xi/Cp)-1)**(1/2)
+    dm=p*dxi/(2*Cp*((xi/Cp)-1)**(3/2))+p*dCp*xi/(2*(xi/Cp-1)**(3/2)*(Cp**2))
+    lenght=1/m
+    dlenght=dm/m
+    return lenght,dlenght
 
 
 def epsilon_test_coarse(sg,mgf,sgc,phi):
@@ -327,6 +334,19 @@ def FlowBijector_DeepSet(Nlayers=3,width=256,ttp=tr.float64,device="cpu"):
     prior= distributions.Independent(normal, 1)
     return RealNVP_1(nets, nett, masks, prior, data_dims=(1,2))
 
+def FlowBijectorParity_DeepSet(Nlayers=3,width=256,ttp=tr.float64,device="cpu"):
+    mm = np.array([1,0,0,1])
+    tV = mm.size
+    nets = lambda: ZeroNet().to(device).to(ttp)
+    def nett():
+        seq = m.ParityNet(nn.Sequential(nn.Linear(tV,width), nn.Linear(width,tV),nn.Tanh(), Rescale(scale=0.1, trainable=False)) ,Parity=-1)
+        seq.apply(init_xavier)
+        return seq.to(device).to(ttp)
+    masks = tr.from_numpy(np.array([mm, 1-mm] * Nlayers)).to(device).to(ttp)
+    normal = distributions.Normal(tr.zeros(tV,dtype=ttp,device=device),tr.ones(tV,dtype=ttp,device=device))
+    prior= distributions.Independent(normal, 1)
+    return RealNVP_1(nets, nett, masks, prior, data_dims=(1,2))
+
 def FlowBijector_rnvp(Nlayers=3,width=256,ttp=tr.float64,device="cpu"):
     mm = np.array([1,0,0,1])
     tV = mm.size
@@ -336,7 +356,24 @@ def FlowBijector_rnvp(Nlayers=3,width=256,ttp=tr.float64,device="cpu"):
         seq.apply(init_xavier)
         return seq.to(device).to(ttp)
     def nett():
-        seq = nn.Sequential(nn.Linear(tV,width),nn.Linear(width,tV),nn.Tanh(),Rescale(scale=0.1,trainable=False))
+        seq = nn.Sequential(nn.Linear(tV,width),nn.Linear(width,tV),nn.Tanh(), Rescale(scale=0.1, trainable=False))
+        seq.apply(init_xavier)
+        return seq.to(device).to(ttp)
+    masks = tr.from_numpy(np.array([mm, 1-mm] * Nlayers)).to(device).to(ttp)
+    normal = distributions.Normal(tr.zeros(tV,dtype=ttp,device=device),tr.ones(tV,dtype=ttp,device=device))
+    prior= distributions.Independent(normal, 1)
+    return RealNVP_1(nets, nett, masks, prior, data_dims=(1,2))
+
+def FlowBijectorParity_rnvp(Nlayers=3,width=256,ttp=tr.float64,device="cpu"):
+    mm = np.array([1,0,0,1])
+    tV = mm.size
+    #nets = lambda: ZeroNet().to(device).to(ttp)
+    def nets():
+        seq =m.ParityNet(nn.Sequential(nn.Linear(tV,width),nn.Linear(width,tV),Cos_nn(),Rescale(scale=0.1,trainable=False)), Parity=+1)
+        seq.apply(init_xavier)
+        return seq.to(device).to(ttp)
+    def nett():
+        seq = m.ParityNet(nn.Sequential(nn.Linear(tV,width), nn.Linear(width,tV),nn.Tanh(), Rescale(scale=0.1, trainable=False)) ,Parity=-1)
         seq.apply(init_xavier)
         return seq.to(device).to(ttp)
     masks = tr.from_numpy(np.array([mm, 1-mm] * Nlayers)).to(device).to(ttp)
@@ -684,7 +721,7 @@ class ConvFlowLayer(nn.Module):
 
 class ConvFlowLayer_1(nn.Module):
     def __init__(self,size,bijector,Nsteps=1):
-        super(ConvFlowLayer_2, self).__init__()
+        super(ConvFlowLayer_1, self).__init__()
         self.Nsteps=Nsteps
         self.bj = tr.nn.ModuleList([bijector() for _ in range(2*Nsteps)])
         # for now the kernel is kept 2x2 and stride is 2 so it only works on lattices with

@@ -60,7 +60,7 @@ parser.add_argument('-Nskip' , type=int,   default=1 , help="number of skipped t
 parser.add_argument('-lam'     , type=float, default=2.4 , help="Coupling constant")
 parser.add_argument('-batch', type=int,   default=10  , help="HMC batch size")
 parser.add_argument('-L'     , type=int,   default=8, help="Lattice size")
-parser.add_argument('-dev'   , type=int,   default=-1 , help="Device number, -1 for CPU, 0,1,... for GPU")
+parser.add_argument('-dev'   , type=str,   default="cuda" , help="Device number, -1 for CPU, 0,1,... for GPU")
 parser.add_argument("-warm",   type=int,   default=1000 , help="Number of warmup HMC steps")
 parser.add_argument("-meas",   type=int,   default=10000 , help="Number of measurement HMC steps")
 parser.add_argument('-m'     , type=float, default=-0.5, help="Mass parameter")
@@ -70,6 +70,7 @@ parser.add_argument('-Nlayers', type=int, default=4, help="Number of layers in t
 parser.add_argument('-width', type=int, default=4, help="Width of the RNVP or deepsets")
 parser.add_argument('-Nlevels', type=int, default=2, help="define number of levels that are going to be used in the mcmg")
 parser.add_argument('-snet', type=str, default="yes", help="use 'yes' or 'no' as arguments to define rnvp or deepsets respectively")
+parser.add_argument('-block', type=str, default="average", help="average or select, type of blocking in the RG layer")
 
 args = parser.parse_args()
 
@@ -94,18 +95,12 @@ Nlevels = args.Nlevels
 Nlayers = args.Nlayers
 width = args.width
 snet = args.snet
-
+block = args.block
 
 
 dtype = tr.float64
 
-
-
-#device = args.dev
-if args.dev == -1:
-    device = "cuda"
-else:
-    device = "cpu"
+device = args.dev
 
 #### new set up
 normal = distributions.Normal(tr.zeros(V,dtype=dtype,device=device),tr.ones(V,dtype=dtype,device=device))
@@ -128,9 +123,9 @@ if args.mcmg == "mgmc" or args.mcmg == "hmc":
 else:
     typeof_mgf = "rnvp"
 if args.snet == "yes":
-    FLOW=lambda: mgmc.FlowBijector_rnvp(Nlayers=Nlayers,width=width,device=device,ttp=dtype)
+    FLOW=lambda: mgmc.FlowBijectorParity_rnvp(Nlayers=Nlayers,width=width,device=device,ttp=dtype)
 else:
-    FLOW=lambda: mgmc.FlowBijector_deepsets(Nlayers=Nlayers,width=width,device=device,ttp=dtype)
+    FLOW=lambda: mgmc.FlowBijectorParity_DeepSet(Nlayers=Nlayers,width=width,device=device,ttp=dtype)
 
 
 mn2 = integ.minnorm2(sg.force,sg.evolveQ,20,1.0)
@@ -140,7 +135,7 @@ hmc_f = u.hmc(T=sg,I=mn2,verbose=False)
 #FLOW=lambda: mgmc.FlowBijector_rnvp(Nlayers=Nlayers,width=width,device=device,ttp=dtype)
 
 
-mgf=mgmc.MGflow1([L,L],FLOW,mgmc.RGlayer1("average",batch_size=batch_size,dtype=dtype,device=device),prior_c,depth=Nlevels,mode=typeof_mgf)#.double()
+mgf=mgmc.MGflow1([L,L],FLOW,mgmc.RGlayer1(block,batch_size=batch_size,dtype=dtype,device=device),prior_c,depth=Nlevels,mode=typeof_mgf)#.double()
 
 sgc = mgmc.phi4_c1(sg,mgf,device=sg.device,dtype=sg.dtype,mode="rnvp")
 mn2c = integ.minnorm2(sgc.force,sgc.evolveQ,20,1.0)
@@ -196,31 +191,50 @@ os.makedirs(output_dir, exist_ok=True)
 #map traces to cpu and do the analysis there
 results_av = gm.gamma_method_with_replicas(gm.split_first_dim_to_list(tr.stack(av_phi).T.unsqueeze(2).to("cpu")), lambda A: A[0], max_lag=1300)
 results_lchi = gm.gamma_method_with_replicas(gm.split_first_dim_to_list(tr.stack(lchi_m).T.unsqueeze(2).to("cpu")), lambda A: A[0], max_lag=1300)   
+results_Cp2 = gm.gamma_method_with_replicas(gm.split_first_dim_to_list(tr.stack(lC2p).T.unsqueeze(2).to("cpu")), lambda A: A[0], max_lag=2000)
 
 print("Gamma results for average phi:")
 print(f"F = {results_av['value']:.6f} ± {results_av['dvalue']:.6f} (±{results_av['ddvalue']:.6f})")
 print(f"tau_int = {results_av['tau_int']:.3f} ± {results_av['dtau_int']:.3f}")
 print(f"W_opt = {results_av['W_opt']}, Q = {results_av['Q']}")
+
 print("Gamma results for susceptibility:")
 print(f"F = {results_lchi['value']:.6f} ± {results_lchi['dvalue']:.6f} (±{results_lchi['ddvalue']:.6f})")
 print(f"tau_int = {results_lchi['tau_int']:.3f} ± {results_lchi['dtau_int']:.3f}")
 print(f"W_opt = {results_lchi['W_opt']}, Q = {results_lchi['Q']}")
+
+print("Gamma results for Cp2:")
+print(f"F = {results_Cp2['value']:.6f} ± {results_Cp2['dvalue']:.6f} (±{results_Cp2['ddvalue']:.6f})")
+print(f"tau_int = {results_Cp2['tau_int']:.3f} ± {results_Cp2['dtau_int']:.3f}")
+print(f"W_opt = {results_Cp2['W_opt']}, Q = {results_Cp2['Q']}")
 
 
 tau_phi1=results_av['tau_int']
 tau_suscept1=results_lchi['tau_int']
 dtau_phi1=results_av['dtau_int']
 dtau_suscept1=results_lchi['dtau_int']
+#propagator
+tau_Cp2=results_Cp2['tau_int']
+dtau_Cp2=results_Cp2['dtau_int']
+
 phi_av_mean=results_av['value']
 phi_av_std=results_av['dvalue']
 sucept_mean=results_lchi['value']
 sucept_std=results_lchi['dvalue']
+#correlator with minimum momentum p=2pi/L
+Cp2_mean=results_Cp2['value']
+Cp2_std=results_Cp2['dvalue']
+
+xi,deltaxi= mgmc.xi_deltaxi(results_lchi['value'],results_lchi['dvalue'],results_Cp2['value'],results_Cp2['dvalue'],2*np.pi/L)
+
+print("xi:",xi,"dxi",deltaxi,"L/xi:",L/xi,"m_phys:",1/xi,"dm_phys:",deltaxi/xi,"m_bare",mass,flush=True)
+
 
 # save results to a text file with out removing previous data, but specify if is hmc or mgmc or rnvp with jacobian or not
-output_filename = os.path.join(output_dir, f"MCMG_results_L{L}_lam{lam}.txt")
+output_filename = os.path.join(output_dir, f"data.txt")
 
 with open(output_filename, "a") as f:
     #names of columns
     if os.path.getsize(output_filename) == 0:    
-        f.write("#mass Nwarm Nmeas Nskip batch_size phi_av_mean phi_av_std tau_phi1 dtau_phi1 sucept_mean sucept_std tau_suscept1 dtau_suscept1\n")
-    f.write(f"{mass} {Nwarm} {Nmeas} {Nskip} {batch_size} {phi_av_mean} {phi_av_std} {tau_phi1} {dtau_phi1} {sucept_mean} {sucept_std} {tau_suscept1} {dtau_suscept1}\n")
+        f.write("#bare_mass Nwarm Nmeas L batch_size phi_av_mean phi_av_std tau_phi1 dtau_phi1 sucept_mean sucept_std tau_suscept1 dtau_suscept1 mass_phys xi d_xi L/xi \n")
+    f.write(f"{mass} {Nwarm} {Nmeas} {L} {batch_size} {phi_av_mean} {phi_av_std} {tau_phi1} {dtau_phi1} {sucept_mean} {sucept_std} {tau_suscept1} {dtau_suscept1} {1/xi} {xi} {deltaxi} {L/xi} \n")
