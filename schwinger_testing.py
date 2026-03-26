@@ -117,14 +117,15 @@ def pure_gauge_Savg():
 def plaquette_average():
     #Gauge theory plaquette average
     #Average over a batch of configurations
-    L=32
+    L=48
     L2=16
-    batch_size=10 
+    batch_size=100 
     lam =np.sqrt(1.0/10)
     mass= 0.1*lam
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     u = sch.hotStart()
+    #u = sch.coldStart()
 
     pl_avg = []
     pl_err = []
@@ -139,7 +140,7 @@ def plaquette_average():
     #Skip some for equilibration:
     q = sim.evolve_f(q, 500)
 
-    for n in np.arange(0, 5000):
+    for n in np.arange(0, 101):
         
         #Evolve, one HMC step
         q = sim.evolve_f(q, 1)
@@ -157,7 +158,10 @@ def plaquette_average():
 
     final_avg = sum(pl_avg) / len(pl_avg)
     
-    print("Final average of " + str(n) + " configs: " + str(final_avg))
+    print("Final average of " + str(n*batch_size) + " configs: " + str(final_avg))
+    beta = (1/lam)**2
+
+    print("Analytic solution: " +str(sp.special.i1(beta)/sp.special.i0(beta)))
 
     fig, ax1 = plt.subplots(1,1)
 

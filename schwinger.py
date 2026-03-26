@@ -543,7 +543,7 @@ class schwinger():
             t_vec = transverse.sum(dim=0)
             #Save as final vector
             #projs[b, k, :] = t_vec
-            projs[b, k, :] = t_vec/tr.norm(t_vec)
+            #projs[b, k, :] = t_vec/tr.norm(t_vec)
 
             #Try Graham Schmidt orthogonalization for transverse space instead
             # ones vector for transverse space to keep deterministic
@@ -564,7 +564,7 @@ class schwinger():
             norm = tr.norm(transverse)
             transverse = transverse / norm
 
-            projs[b, k, :] = transverse
+            #projs[b, k, :] = transverse
 
             #Now try a very coarse transverse space in the empty center
             # B = 2 * ov * self.V[1]
@@ -584,115 +584,71 @@ class schwinger():
     #eigenvectors sought after
     #Output: Most significant k distillation
     def boundary_Distillation_Eigenvectors(self, q, xcut_1, k, ov = 1):
+
+        #Second try
         u = q[0]
-
-
-        
-        #Includes Dirac Space in Laplacian
-
-        #Construct the full laplacian then slice it
-        u = q[0]
-
-        laplacian = tr.zeros((self.Bs, 2*self.V[0]*self.V[1], 2*self.V[0]*self.V[1]), dtype=tr.complex64)
-
-        #enumeration of lattice sites-flat
-        p_f = tr.tensor(np.arange(self.V[0]*self.V[1]))
-        #Reshape to match lattice geometry
-        p =tr.reshape(p_f, (self.V[0], self.V[1]))
 
         bc = tr.zeros([self.Bs, 2, self.V[0], self.V[1]], dtype=tr.complex64)
         bc[:, 0, self.V[0]-1, :] = -2.0*u[:, 0, self.V[0] - 1, :]
         u_bc = u + bc
 
-        for mu in [1]:
-            #Forward shifted indices
-            p_s =  tr.roll(p, shifts = -1, dims=mu)
-            #Flatten the 2D reps of lattice/field to one dimension
-            p_sf = tr.reshape(p_s, (-1,))
-            u_f = tr.reshape(u_bc[:, mu, :, :], (self.Bs, self.V[0]*self.V[1]))
-            d_dir = tr.zeros([self.Bs, self.V[0]*self.V[1], self.V[0]*self.V[1]], dtype=tr.complex64)
-            d_dir[:, p_f, p_sf] = u_f
-            laplacian = laplacian + tr.kron(d_dir, tr.eye(2))
+        #Compute laplacian on the boundary timeslices
 
-            #Backwards shifted indices
-            p_s =  tr.roll(p, shifts = +1, dims=mu)
-            #Flatten the 2D reps of lattice/field to one dimension
-            p_sf = tr.reshape(p_s, (-1,))
-            u_f = tr.reshape(tr.conj(tr.roll(u_bc[:, mu, :, :], shifts=1, dims=mu+1)), (self.Bs, self.V[0]*self.V[1]))
-            d_dir = tr.zeros([self.Bs, self.V[0]*self.V[1], self.V[0]*self.V[1]], dtype=tr.complex64)
-            d_dir[:, p_f, p_sf] = u_f
-            laplacian = laplacian + tr.kron(d_dir, tr.eye(2))
+        laplacian = tr.zeros([self.Bs, 2*self.V[1], 2*self.V[1]], dtype=tr.complex64)
 
-        #Diagonal
-        d_dir = tr.zeros([self.Bs, self.V[0]*self.V[1], self.V[0]*self.V[1]], dtype=tr.complex64)
-        d_dir[:, p_f, p_f] = -2.0
-        laplacian = laplacian+ tr.kron(d_dir, tr.eye(2))
 
-        #Reduce to the complement domain
-        laplacian_roll = tr.roll(laplacian, ((ov-1)*2*self.V[1], (ov-1)*2*self.V[1]), dims=(1,2))
+        p = tr.arange(self.V[1])
+        p_rolled = tr.roll(p, shifts=-1)
 
-        r_l = laplacian_roll[:, 0:(xcut_1+2*(ov-1))*2*self.V[1], 0:(xcut_1+2*(ov-1))*2*self.V[1]]
-        
+        ux = u_bc[:,1,0,:]
+        laplacian[:, p, p_rolled] = ux
 
-        #Or try just the boundaries
-        boundary_only = False
-        if boundary_only:
-            bound_laplacian = tr.zeros((self.Bs, 2*2*ov*self.V[1], 2*2*ov*self.V[1]), dtype=tr.complex64)
+        ux = u_bc[:,1,xcut_1-1,:]
+        laplacian[:, p+self.V[1], p_rolled+ self.V[1]] = ux
 
-            bound_laplacian[:, :2*ov*self.V[1], :2*ov*self.V[1]] = r_l[:, :2*ov*self.V[1], :2*ov*self.V[1]]
-            bound_laplacian[:, 2*ov*self.V[1]:, 2*ov*self.V[1]:] = r_l[:, -2*ov*self.V[1]:, -2*ov*self.V[1]:]
+        p_rolled = tr.roll(p, shifts=1)
 
-            L, V = tr.linalg.eigh(-1.0*bound_laplacian)
-        else:
-            L, V = tr.linalg.eigh(-1.0*r_l)
+        ux = tr.roll(tr.conj(u_bc[:,1,0,:]), shifts=1, dims=1)
+        laplacian[:, p, p_rolled] = ux
+
+        ux = tr.roll(tr.conj(u_bc[:,1,xcut_1-1,:]), shifts=1, dims=1)
+        laplacian[:, p+self.V[1], p_rolled+self.V[1]] = ux
+
+
+  
+
+        #diagonal
+        p = tr.arange(self.V[1]*2)
+        laplacian[:, p, p] = -2.0
+
+        #Eigenvalues
+        L, V = tr.linalg.eigh(-1.0*laplacian)
+
         sorted_L, sorted_ind = tr.sort(tr.real(L), descending=False)
-        #print(sorted_L[0, :])
+
+
+        #Check if the full projectors form the identity
+        # Should give identity [Bs, 2*V[1], 2*V[1]]
+        #outer = tr.einsum('bxi,bxj->bij', V[:,:,:k], V[:,:,:k].conj())
+        outer = tr.einsum('bix,bjx->bij', V[:,:,:k], V[:,:,:k].conj())
+        #assert tr.allclose(tr.real(outer), tr.eye(2*self.V[1]).unsqueeze(0), atol=1e-5)  # only if k == 2*V[1]
 
         projs = tr.zeros((self.Bs, k+1, 2*self.V[0]*self.V[1]), dtype=tr.complex64)
 
+        dirac_space = tr.tensor([1/np.sqrt(2.0), 1/np.sqrt(2.0)])
+
+
+
         for b in np.arange(self.Bs):
-
             for x in np.arange(k):
-                if boundary_only:
-                    temp = tr.zeros_like(projs[b,x,:], dtype=tr.complex64)
-                    temp[:2*ov*self.V[1]] = V[b, :2*ov*self.V[1], sorted_ind[b,x]]
-                    temp[-2*ov*self.V[1]:] = V[b, -2*ov*self.V[1]:, sorted_ind[b,x]]
-                else:
-                    temp = tr.zeros_like(projs[b,x,:], dtype=tr.complex64)
-                    temp[:(xcut_1+2*(ov-1))*2*self.V[1]] = V[b, :, sorted_ind[b, x]]
-                
-                projs[b, x, :] = tr.roll(temp, -(ov-1)*2*self.V[1], 0)
+                vec = (V[b,:,x].unsqueeze(-1) * dirac_space).reshape(-1)
+                if b==0 and x ==0:
+                    print(vec.size())
+                projs[b,x, 0:self.V[1]*2] = vec[0:self.V[1]*2]
+                projs[b,x, (xcut_1-1)*self.V[1]*2:xcut_1*self.V[1]*2] = vec[self.V[1]*2:]
 
-             #Try Graham Schmidt orthogonalization for transverse space instead
-            # vector of ones for transverse space
-            transverse = tr.ones(2*self.V[0]*self.V[1], dtype=tr.complex64)
+        return projs
 
-            # orthogonalization
-            for x in range(k):
-                v = projs[b, x, :]
-                transverse = transverse - tr.dot(tr.conj(v), transverse) * v
-
-            # re-orthogonalization pass 
-            for x in range(k):
-                v = projs[b, x, :]
-                transverse = transverse - tr.dot(tr.conj(v), transverse) * v
-
-            # Normalize
-            norm = tr.norm(transverse)
-            transverse = transverse / norm
-
-            projs[b, k, :] = transverse
-
-
-        projs_orthonormal, r = tr.linalg.qr(tr.transpose(projs, 1,2), mode='reduced')
-
-        
-        #print(projs[0, k, :])
-
-
-        
-
-        return tr.transpose(projs_orthonormal, 1, 2)
 
 # Block banded Dirac operator/Schur complement based observables
 
@@ -904,213 +860,115 @@ class schwinger():
 
 
 
-    
-    #Input lattice configuration, frozen timeslices beginnings, boundary width, projection vectors, overlap T/F
-    #Output:  batch x intermediate ensemble of factorized propogator contributions to all points on the lattice, one for each subdomain. Contains only first order contributions
-    #New version of function based on projectors
-    def factorized_Propogator_Proj(self, q, xcut_1, xcut_2, projs, ov=1):
 
-        if ov != 1:
-            #First seperate sections of the Dirac operator
-            d = self.diracOperator(q[0]).to_dense()
+    ####Factorized Propagator pieces
 
-            d_rolled = d.roll(((ov-1)*self.V[1]*2, (ov-1)*self.V[1]*2),
-                                dims=(1,2))
-            
-            #Contains all dirac matrix points within the first subdomain
-            s1 = d_rolled[:, :(2*(ov-1) + xcut_1)*self.V[1]*2, 
-                          :(2*(ov-1) + xcut_1)*self.V[1]*2]
-            
-            #Contains second subdomain and both frozen boundaries
-            bulk = d[:,xcut_1*self.V[1]*2:, xcut_1*self.V[1]*2:]
-
-            s1_inv = tr.inverse(s1)
-            bulk_inv = tr.inverse(bulk)
-
-            #Boundary interface
-            d_rolled = d.roll((ov-1)*self.V[1]*2, 2)
-            d10 = d_rolled[:, xcut_1*self.V[1]*2:, :(2*(ov-1) + xcut_1)*self.V[1]*2]
-
-            #Product for left factorization piece
-            bulk_prod = tr.einsum('bxy, byz->bxz', bulk_inv, d10)
-
-            subdomain_index_ct = tr.numel(s1[0,0,:])
-            bulk_index_ct = tr.numel(bulk[0,0,:])
-
-            if projs.ndim==2:
-                num_proj = tr.numel(projs[:,0])
-            else:
-                num_proj = tr.numel(projs[0,:,0])
-
-            ensembleL = tr.zeros([self.Bs, num_proj, bulk_index_ct], dtype=tr.complex64)
-            ensembleR = tr.zeros([self.Bs, num_proj, subdomain_index_ct], dtype=tr.complex64)
-            summed = tr.zeros([self.Bs, bulk_index_ct, subdomain_index_ct])
-
-            for xi in tr.arange(num_proj):
-                #Need to update to allow for batch of projectors
-                if projs.ndim == 2:
-                    p = projs[xi, :]
-                    p = p.repeat(self.Bs, 1)
-                else:
-                    p = projs[:, xi, :]
-
-                #roll projector for right piece
-                p_r = p.roll((ov-1)*self.V[1]*2, 1)
-
-                #Slice projector relevant to complement subdomain size
-                projector = p_r[:, :(xcut_1+2*(ov-1))*self.V[1]*2]
-
-                ensembleR[:, xi, :] = tr.einsum('bx, bxy->by', tr.conj(projector), s1_inv)
-
-                ensembleL[:, xi, :] = tr.einsum('bxy, by-> bx', bulk_prod, projector)
-                
-
-                summed = summed + tr.einsum('bx, by-> bxy', ensembleL[:, xi, :], 
-                                            ensembleR[:, xi, :])
-
-            #Remove overlap spaces from the right complement domain and right componenet of the summed measurement
-            ensembleR =ensembleR[:, :, (ov-1)*2*self.V[1]:(self.V[0]+1 -ov)*2*self.V[1]]
-            summed = summed[:, :, (ov-1)*2*self.V[1]:(self.V[0]+1 -ov)*2*self.V[1]]
-
-            
-            return ensembleL, ensembleR, summed
-        
-        #Original function assuming minimum overlap below
-
+    def factorized_Propagator(self, q, xcut_1, xcut_2, projs, ov=1):
         #First seperate sections of the Dirac operator
         d = self.diracOperator(q[0]).to_dense()
 
+        d_rolled_both = d.roll(((ov-1)*self.V[1]*2, (ov-1)*self.V[1]*2),
+                            dims=(1,2))
+        
         #Contains all dirac matrix points within the first subdomain
-        s1 = d[:, :xcut_1*self.V[1]*2, :xcut_1*self.V[1]*2]
-
+        s1 = d_rolled_both[:, :(2*(ov-1) + xcut_1)*self.V[1]*2, 
+                        :(2*(ov-1) + xcut_1)*self.V[1]*2]
+        
         #Contains second subdomain and both frozen boundaries
         bulk = d[:,xcut_1*self.V[1]*2:, xcut_1*self.V[1]*2:]
+
+        
+
+
+
+        #Boundary interface
+        d_rolled = d.roll((ov-1)*self.V[1]*2, 2)
+        d10 = d_rolled[:, xcut_1*self.V[1]*2:, :(2*(ov-1) + xcut_1)*self.V[1]*2]
+
+
+        d10_interface = tr.zeros_like(d10)
+
+
+        d_rolled = d.roll((ov-1)*self.V[1]*2, 1)
+        d01 = d_rolled[:, :(2*(ov-1) + xcut_1)*self.V[1]*2, xcut_1*self.V[1]*2:]
+
+        d01_interface = tr.zeros_like(d01)
+
+        d10_interface = tr.zeros_like(d10)
+        # Main interface: first timeslice of bulk hops to last timeslice of s1
+        d10_interface[:, :self.V[1]*2, 
+                    (xcut_1+ov-2)*self.V[1]*2:(xcut_1+ov-1)*self.V[1]*2] = \
+            d10[:, :self.V[1]*2, 
+                (xcut_1+ov-2)*self.V[1]*2:(xcut_1+ov-1)*self.V[1]*2]
+        # Periodic wrap: last timeslice of bulk hops to first timeslice of s1
+        d10_interface[:, -self.V[1]*2:, 
+                    (ov-1)*self.V[1]*2:ov*self.V[1]*2] = \
+            d10[:, -self.V[1]*2:, 
+                (ov-1)*self.V[1]*2:ov*self.V[1]*2]
+
+        d01_interface = tr.zeros_like(d01)
+        # Main interface: last timeslice of s1 hops to first timeslice of bulk
+        d01_interface[:, (xcut_1+ov-2)*self.V[1]*2:(xcut_1+ov-1)*self.V[1]*2, 
+                    :self.V[1]*2] = \
+            d01[:, (xcut_1+ov-2)*self.V[1]*2:(xcut_1+ov-1)*self.V[1]*2, 
+                :self.V[1]*2]
+        # Periodic wrap: first timeslice of s1 hops to last timeslice of bulk
+        d01_interface[:, (ov-1)*self.V[1]*2:ov*self.V[1]*2, 
+                    -self.V[1]*2:] = \
+            d01[:, (ov-1)*self.V[1]*2:ov*self.V[1]*2, 
+                -self.V[1]*2:]
+        
 
         s1_inv = tr.inverse(s1)
         bulk_inv = tr.inverse(bulk)
 
-        #Boundary interface
-        d10 = d[:, xcut_1*self.V[1]*2:, 0:xcut_1*2*self.V[1]]
+        #Slice projector relevant to complement subdomain size
+        projectors = projs.roll((ov-1)*self.V[1]*2, 2)
+        #projectors = projectors[:, :, :(xcut_1)*self.V[1]*2]
+        projectors = projectors[:,:, :(2*(ov-1)+xcut_1)*self.V[1]*2]
+        #projectors = projs[:, :, (ov-1)*self.V[1]*2 : (xcut_1 + ov - 1)*self.V[1]*2]
+
 
         #Product for left factorization piece
-        bulk_prod = tr.einsum('bxy, byz->bxz', bulk_inv, d10)
+        bulk_prod = tr.einsum('bxy, byz->bxz', bulk_inv, d10_interface)
 
-        # plt.spy(bulk_prod[0,:,:])
-
-        # plt.show()
-
-        #Will be same for each of the equal sized overlapping subdomains
-        #Dirac indices remain layered into spatial indices here
         subdomain_index_ct = tr.numel(s1[0,0,:])
         bulk_index_ct = tr.numel(bulk[0,0,:])
 
-        if projs.ndim==2:
-            num_proj = tr.numel(projs[:,0])
-        else:
-            num_proj = tr.numel(projs[0,:,0])
+        idx = tr.numel(s1_inv[0,0,:]) // 2
+        expanded_g5 = tr.block_diag(*([g5]* idx))
+        s_inv_g5 = tr.einsum('bxy, yz->bxz', s1_inv, expanded_g5)
 
-        ensembleL = tr.zeros([self.Bs, num_proj, bulk_index_ct], dtype=tr.complex64)
-        ensembleR = tr.zeros([self.Bs, num_proj, subdomain_index_ct], dtype=tr.complex64)
-        summed = tr.zeros([self.Bs, bulk_index_ct, subdomain_index_ct])
+        #Nested einsum for the right side tensor
+        tensor_r = tr.einsum('bix, bjx -> bijx', tr.einsum('bix, bxy-> biy', tr.conj(projectors), s_inv_g5), 
+                    tr.einsum('bxy, biy-> bix', s_inv_g5, projectors))
 
-        for xi in tr.arange(num_proj):
-            #Need to update to allow for batch of projectors
-            if projs.ndim == 2:
-                p = projs[xi, :]
-                p = p.repeat(self.Bs, 1)
-            else:
-                p = projs[:, xi, :]
-
-
-            #Slice projector relevant to complement subdomain size
-            projector = p[:, :(xcut_1)*self.V[1]*2]
-
-            ensembleR[:, xi, :] = tr.einsum('bx, bxy->by', tr.conj(projector), s1_inv)
-
-            ensembleL[:, xi, :] = tr.einsum('bxy, by-> bx', bulk_prod, projector)
-
-            summed = summed + tr.einsum('bx, by-> bxy', ensembleL[:, xi, :], 
-                                        ensembleR[:, xi, :])
         
-        return ensembleL, ensembleR, summed
+        #multiplication of g5 matrices for left piece - not vectorized since left piece isn't square
+        left_prod = tr.einsum('bxy, byz->bxz', d01_interface, bulk_inv)
+
+        idx = tr.numel(left_prod[0,0,:]) // 2
+
+        expanded_g5 = tr.block_diag(*([g5]* idx))
+
+        bulk_g5 = tr.einsum('bxy, yz-> bxz', left_prod, expanded_g5)
+
+        idx = tr.numel(left_prod[0,:,0]) // 2
+
+        expanded_g5 = tr.block_diag(*([g5]* idx))
+
+        g5_bulk_g5 = tr.einsum('xy, byz-> bxz', expanded_g5, bulk_g5)
+
+        tensor_l = tr.einsum('bix, bjx -> bijx', tr.einsum('bix, bxy->biy', tr.conj(projectors), g5_bulk_g5),
+                              tr.einsum('bxy, biy->bix', bulk_prod, projectors))
+        
 
 
+        #Chop off overlap space in right piece when returned
+        return tensor_l, tensor_r[:, :, :, (ov-1)*2*self.V[1]:(self.V[0]+1 -ov)*2*self.V[1]]
 
-    
-    
-    #Input: lattice configuration, frozen timeslices, boundary width, intermediate indices, overlap T/F
-    #of the Dirac operator, intermediate points
-    #Output:  batch x intermediate ensemble of factorized propogator contributions to all points on the lattice, one for each subdomain. Contains only first order contributions
-    #NOTE: This approach has a bug and will produce incorrect results. Kept as reference
-    #for now but may be removed later
-    def factorized_Propogator(self, q, xcut_1, xcut_2, bw, inter, overlap):
-
-
-        #Attempt 2 - based on Giuisti factorization scheme
-        #We're gonna take a full inverse of the subdomain and return a list
-        #of the hadron correlator from each boundary point
-
-        #First seperate sections of the Dirac operator
-        d = self.diracOperator(q[0]).to_dense()
-
-
-        #Contains all dirac matrix points within the first subdomain
-        #roll the entire end boundary if working with a thick overlap,
-        #Only the edge of the boundary for no overlap
-        if overlap == True:
-            rolled_d = d.roll(shifts=(bw*self.V[1]*2, bw*self.V[1]*2), dims=(1,2))
-            s1 = rolled_d[:, :(xcut_1+2*bw)*self.V[1]*2, :(xcut_1+2*bw)*self.V[1]*2]
-        else:
-            rolled_d = d.roll(shifts=(self.V[1]*2, self.V[1]*2), dims=(1,2))        
-            s1 = d[:, :(xcut_1+2)*self.V[1]*2, :(xcut_1+2)*self.V[1]*2]
-        #Contains second subdomain and both frozen boundaries
-
-        bulk = d[:,xcut_1*self.V[1]*2:, xcut_1*self.V[1]*2:]
-
-
-        s1_inv = tr.inverse(s1)
-        bulk_inv = tr.inverse(bulk)
-
-        #Will be same for each of the equal sized overlapping subdomains
-        subdomain_index_ct = int(tr.numel(s1[0,0,:])/2)
-        bulk_index_ct = int(tr.numel(bulk[0,0,:])/2)
-
-        ensembleL = tr.zeros([self.Bs, tr.numel(inter), bulk_index_ct,2], dtype=tr.complex64)
-        ensembleR = tr.zeros([self.Bs, tr.numel(inter), subdomain_index_ct, 2], dtype=tr.complex64)
-        summed = tr.zeros([self.Bs, bulk_index_ct, subdomain_index_ct, 2, 2])
-        for xi in tr.arange(tr.numel(inter)):
-
-            if overlap == True:
-                if inter[xi] > 2*xcut_2*self.V[1]:
-                    adj_inter = inter[xi] - 2*(self.V[0] - bw)*self.V[1]
-                else:
-                    adj_inter = inter[xi] + 2*bw*self.V[1]
-            else:
-                if inter[xi] > 2*xcut_2*self.V[1]:
-                    adj_inter = inter[xi] - 2*(self.V[0]-1)*self.V[1]
-                else:
-                    adj_inter = inter[xi] +2*self.V[1]
-
-            ensembleR[:,xi, :, :] = s1_inv[:, adj_inter, :].view((self.Bs, subdomain_index_ct, 2))
-
-            #Isolate intermediate Dirac entry for boundary crossing
-            d_int=d[:, inter[xi], inter[xi]]
-
-            #Compute offset for bulk matrix
-            offset = 2*(xcut_1)*self.V[1]
-            
-            ensembleL[:, xi, :, :] = tr.einsum('bxi, b->bxi', bulk_inv[:, :, inter[xi]-offset].view(
-                (self.Bs, bulk_index_ct, 2)),
-                                  d_int)
-            
-            summed = summed + tr.einsum('bxa, byc-> bxyac', ensembleL[:, xi, :, :],
-                                        ensembleR[:, xi, :, :])
-            
-        return ensembleL, ensembleR, summed
-    
-    #Input:Batch of factorized propogators
-    #Output: Measurements of two point correlator binned by timeslice separation'
-    #TODO:Testing adding a momentum
+        
+    #Takes contracted left and right factorized pieces to measure cross subdomain 2pt correlator
     def measure_Factorized_Two_Point_Correlator(self, q, f_propogator, xcut_1, xcut_2, bw, p = 0.0, ov=1):
         
         d_inv = tr.inverse(self.diracOperator(q[0]).to_dense())
@@ -1135,7 +993,7 @@ class schwinger():
                 source_x = mid_x + 2*self.V[1]*source_ts
                 sink_x = mid_x + 2*self.V[1]*sink_ts + sink_adj
                 factorized_prop = f_propogator[:, sink_x:sink_x+2, source_x:source_x+2]
-                factorized_corr = -1.0*tr.sum(tr.einsum('bij, bkj-> bik', factorized_prop, factorized_prop.conj()), dim=(1,2))*np.exp(-1.0j*p*mid_x*0.5)
+                factorized_corr = -tr.sum(factorized_prop, dim=(1,2))
 
                 #Take an unfactorized measurement as well
                 sink_x = sink_x - sink_adj
@@ -1165,17 +1023,14 @@ class schwinger():
 
 
         return factorized_corr_magnitude, corr_magnitude
-    
-    #Returns factorized measurements based on localized subdomains
+   
+
+     #Takes contracted left and right subdomain pieces and measures factorized pion correlator
     def measure_Factorized_Pion_Correlator(self, q, f_propogator, xcut_1, xcut_2, bw, p = 0.0, ov=1, factorized_only=False):
-
-        max_length = int((self.V[0])/2)
-
+        
         if factorized_only == False:
             d_inv = tr.inverse(self.diracOperator(q[0]).to_dense())
-        corr = [None] * (max_length)
-
-        factorized_corr = [None]* (max_length)
+        max_length = int((self.V[0])/2)
         
         #1/2 for middle, then x2 for dirac space
         mid_x = self.V[1]
@@ -1183,191 +1038,58 @@ class schwinger():
         #Accounts for shifting of the lattice indices in the factorizing process
         sink_adj = -2*(xcut_1)*self.V[1]
         
-        sink_t = xcut_1+ bw
+        sink_ts = xcut_1+bw
 
-        while sink_t < self.V[0] - bw:
-            source_t = 0
-            while source_t < xcut_1:
+        factorized_corr_magnitude = [None]* (max_length)
+        corr_magnitude = [None] * (max_length)
+
+        source_max = xcut_1 + (ov-1)
+
+        while sink_ts < self.V[0]-bw:
+            source_ts = 0
+            while source_ts < xcut_1:
                 f_c = tr.zeros(self.Bs)
                 c = tr.zeros(self.Bs)
                 for sink_x in tr.arange(self.V[1]):
-                    #TODO: Why does using more than one source spatial index break this?
-                    #Probably has to do with distance between points: encode a source-sink difference?
-                    for source_x in (0,):
-                        source_ind = 2*self.V[1]*source_t + 2*source_x
-                        sink_ind = 2*self.V[1]*sink_t + 2*sink_x + sink_adj
-                        factorized_prop = f_propogator[:, sink_ind:sink_ind+2, source_ind:source_ind+2]
-                        f_c = f_c -  tr.sum(tr.einsum('bij, bkj-> bik', factorized_prop, factorized_prop.conj()), dim=(1,2)) \
-                            *np.exp(-1.0j*p*sink_x)
+                    source_x = mid_x + 2*self.V[1]*source_ts
+                    sink_x = mid_x + 2*self.V[1]*sink_ts + sink_adj
+                    factorized_prop = f_propogator[:, sink_x:sink_x+2, source_x:source_x+2]
+                    factorized_corr = -tr.sum(factorized_prop, dim=(1,2))
+                    f_c = f_c - factorized_corr
 
-                        #Take an unfactorized measurement as well if needed
-                        if factorized_only == False:
-                            sink_ind = sink_ind - sink_adj
-                            prop = d_inv[:, sink_ind:sink_ind+2, source_ind:source_ind+2]
-                            c = c - tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2)) \
-                                *np.exp(-1.0j*p*sink_x)
+                    #Take an unfactorized measurement as well
+                    if factorized_only == False:
+                        sink_x = sink_x - sink_adj
+                        prop = d_inv[:, sink_x:sink_x+2, source_x:source_x+2]
+                        corr = -1.0*tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2))*np.exp(-1.0j*p*mid_x*0.5)
+                        c = c - corr
 
-                dist = min(sink_t - source_t, source_t + self.V[0] - sink_t)
-
-                #Multiply by fourier transform factor 
-                c = (1.0/np.sqrt(1.0*self.V[1]))  * c
-                f_c = (1.0/np.sqrt(1.0*self.V[1])) * f_c
-
-                if corr[dist-1] == None:
-                    factorized_corr[dist -1] = f_c.unsqueeze(0)
-                    corr[dist - 1] = c.unsqueeze(0)
+                #Save correlator measurements to matrix
+                #First record distance between timeslices
+                dist = min(sink_ts - source_ts, source_ts + self.V[0] - sink_ts)
+                if corr_magnitude[dist-1] == None:
+                    factorized_corr_magnitude[dist-1] = factorized_corr.unsqueeze(0)
+                    corr_magnitude[dist- 1] = corr.unsqueeze(0)
                 else:
-                    temp = tr.cat((factorized_corr[dist -1], f_c.unsqueeze(0)), 0)
-                    factorized_corr[dist -1] = temp
+                    # temp = tr.cat((factorized_corr_magnitude[dist- bw -1], factorized_corr), 0)
+                    temp = tr.cat((factorized_corr_magnitude[dist-1], factorized_corr.unsqueeze(0)), 0)
+                    factorized_corr_magnitude[dist-1] = temp
                     #factorized_corr_magnitude[dist - 1, :] = tr.cat((factorized_corr_magnitude[dist - 1, :],
                     #                                                      factorized_corr), dim=0)
-                    temp = tr.cat((corr[dist -1], c.unsqueeze(0)), 0)
-                    corr[dist-1] = temp
+                    temp = tr.cat((corr_magnitude[dist-1], corr.unsqueeze(0)), 0)
+                    corr_magnitude[dist-1] = temp
+                    #corr_magnitude[dist - 1, :] = tr.cat((corr_magnitude[dist - 1, :],
+                    #                                                      corr), dim=0)
+                source_ts += 1
+            print("sink position: ", sink_ts)
+            sink_ts += 1
 
-                source_t += 1
-            #print('sink position: ', sink_t)
-            sink_t += 1
+
         if factorized_only == False:
-            return factorized_corr, corr
+            return factorized_corr_magnitude, corr_magnitude
         else:
             return factorized_corr
-    
-    def measure_Factorized_Subdomain_Inverses(self, q, xcut_1, ov = 1):
 
-        if ov != 1:
-            #First seperate sections of the Dirac operator
-            d = self.diracOperator(q[0]).to_dense()
-
-            d_rolled = d.roll(((ov-1)*self.V[1]*2, (ov-1)*self.V[1]*2),
-                                dims=(1,2))
-            
-            #Contains all dirac matrix points within the first subdomain
-            s1 = d_rolled[:, :(2*(ov-1) + xcut_1)*self.V[1]*2, 
-                          :(2*(ov-1) + xcut_1)*self.V[1]*2]
-            
-            #Contains second subdomain and both frozen boundaries
-            bulk = d[:,xcut_1*self.V[1]*2:, xcut_1*self.V[1]*2:]
-
-            s1_inv = tr.inverse(s1)
-            bulk_inv = tr.inverse(bulk)
-
-            #Boundary interface
-            d_rolled = d.roll((ov-1)*self.V[1]*2, 2)
-            d10 = d_rolled[:, xcut_1*self.V[1]*2:, :(2*(ov-1) + xcut_1)*self.V[1]*2]
-
-            #Product for left factorization piece
-            bulk_prod = tr.einsum('bxy, byz->bxz', bulk_inv, d10)
-
-
-        else:
-            #First seperate sections of the Dirac operator
-            d = self.diracOperator(q[0]).to_dense()
-
-            #Contains all dirac matrix points within the first subdomain
-            s1 = d[:, :xcut_1*self.V[1]*2, :xcut_1*self.V[1]*2]
-
-            #Contains second subdomain and both frozen boundaries
-            bulk = d[:,xcut_1*self.V[1]*2:, xcut_1*self.V[1]*2:]
-
-            s1_inv = tr.inverse(s1)
-            bulk_inv = tr.inverse(bulk)
-
-            #Boundary interface
-            d10 = d[:, xcut_1*self.V[1]*2:, 0:xcut_1*2*self.V[1]]
-
-            #Product for left factorization piece
-            bulk_prod = tr.einsum('bxy, byz->bxz', bulk_inv, d10)
-        
-        return bulk_prod, s1_inv
-    
-    def measure_Two_Lvl_Factorized_Pion_Correlator(self, bulk_prod, s1_inv, xcut_1, projs, bw, ov=1, p=0.0):
-        
-        subdomain_index_ct = tr.numel(s1_inv[0,0,:])
-        bulk_index_ct = tr.numel(bulk_prod[0,:,0])
-
-        if projs.ndim==2:
-            num_proj = tr.numel(projs[:,0])
-        else:
-            num_proj = tr.numel(projs[0,:,0])
-
-        ensembleL = tr.zeros([self.Bs, num_proj, bulk_index_ct], dtype=tr.complex64)
-        ensembleR = tr.zeros([self.Bs, num_proj, subdomain_index_ct], dtype=tr.complex64)
-        summed = tr.zeros([self.Bs, bulk_index_ct, subdomain_index_ct])
-
-        for xi in tr.arange(num_proj):
-            #Need to update to allow for batch of projectors
-            if projs.ndim == 2:
-                proj = projs[xi, :]
-                proj = proj.repeat(self.Bs, 1)
-            else:
-                proj = projs[:, xi, :]
-
-            #roll projector for right piece
-            p_r = proj.roll((ov-1)*self.V[1]*2, 1)
-
-            #Slice projector relevant to complement subdomain size
-            projector = p_r[:, :(xcut_1+2*(ov-1))*self.V[1]*2]
-
-            ensembleR[:, xi, :] = tr.einsum('bx, bxy->by', tr.conj(projector), s1_inv)
-
-            ensembleL[:, xi, :] = tr.einsum('bxy, by-> bx', bulk_prod, projector)
-            
-
-            summed = summed + tr.einsum('bx, by-> bxy', ensembleL[:, xi, :], 
-                                        ensembleR[:, xi, :])
-
-        #Remove overlap spaces from the right complement domain and right component of the summed measurement
-        f_propogator = summed[:, :, (ov-1)*2*self.V[1]:(self.V[0]+1 -ov)*2*self.V[1]]
-
-        #Now do scanning-like measurement as before
-        max_length = int((self.V[0])/2)
-
-        factorized_corr = [None]* (max_length)
-        
-
-        #Accounts for shifting of the lattice indices in the factorizing process
-        sink_adj = -2*(xcut_1)*self.V[1]
-        
-        sink_t = xcut_1+ bw
-
-        while sink_t < self.V[0] - bw:
-            source_t = 0
-            while source_t < xcut_1:
-                f_c = tr.zeros(self.Bs)
-                for sink_x in tr.arange(self.V[1]):
-                    #TODO: Why does using more than one source spatial index break this?
-                    #Probably has to do with distance between points: encode a source-sink difference?
-                    for source_x in (0,):
-                        source_ind = 2*self.V[1]*source_t + 2*source_x
-                        sink_ind = 2*self.V[1]*sink_t + 2*sink_x + sink_adj
-                        factorized_prop = f_propogator[:, sink_ind:sink_ind+2, source_ind:source_ind+2]
-                        f_c = f_c -  tr.sum(tr.einsum('bij, bkj-> bik', factorized_prop, factorized_prop.conj()), dim=(1,2)) \
-                            *np.exp(-1.0j*p*sink_x)
-
-                dist = min(sink_t - source_t, source_t + self.V[0] - sink_t)
-
-                #Multiply by fourier transform factor 
-                f_c = (1.0/np.sqrt(1.0*self.V[1])) * f_c
-
-                if factorized_corr[dist-1] == None:
-                    factorized_corr[dist -1] = f_c.unsqueeze(0)
-                else:
-                    temp = tr.cat((factorized_corr[dist -1], f_c.unsqueeze(0)), 0)
-                    factorized_corr[dist -1] = temp
-
-                source_t += 1
-            #print('sink position: ', sink_t)
-            sink_t += 1
-        
-        return factorized_corr
-
-
-
-
-
-
-
-    
 
     #TODO: Compute systematic error between approx and full propogator approach
     #Input: field configuration, frozen boundary timeslices and width, inverse of Dirac matrix in boundaries,
