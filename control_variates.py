@@ -50,6 +50,29 @@ def symmetry_checker(x,model):
     print("Flip(2): ",(tr.norm(out-f2out)/tr.norm(out)).item())
 
 
+def control_model_F_symmetry_checker(x, control_model, shift=(2, 3)):
+    """Check discrete symmetries of the control variate F produced by a control model.
+
+    This is meant for first-order control variates where the base network g0 is not
+    itself symmetric, but the constructed F should inherit translation invariance.
+    """
+    out     = control_model.F(x).detach()
+    sout    = control_model.F(tr.roll(x, shifts=shift, dims=(1, 2))).detach()
+    r90out  = control_model.F(tr.rot90(x, k=1, dims=(1, 2))).detach()
+    r180out = control_model.F(tr.rot90(x, k=2, dims=(1, 2))).detach()
+    f1out   = control_model.F(tr.flip(x, dims=[1])).detach()
+    f2out   = control_model.F(tr.flip(x, dims=[2])).detach()
+    pout    = control_model.F(-x).detach()
+
+    denom = tr.norm(out).clamp_min(1.0e-12)
+    print("F-Parity: ", (tr.norm(out - pout) / denom).item())
+    print("F-Translation: ", (tr.norm(out - sout) / denom).item())
+    print("F-Rotation(90): ", (tr.norm(out - r90out) / denom).item())
+    print("F-Rotation(180): ", (tr.norm(out - r180out) / denom).item())
+    print("F-Flip(1): ", (tr.norm(out - f1out) / denom).item())
+    print("F-Flip(2): ", (tr.norm(out - f2out) / denom).item())
+
+
 #WARNING: FieldTrans and Funct do not seem to work... they do not pass the derivative test
 # I do not care to debug because the rest work beautifully
 class FieldTrans(nn.Module):
@@ -805,8 +828,8 @@ class ControlModel_g(nn.Module):
 
         return self.g_net(x)
 
-    def F(self, x, n_colors=None):
-        """First-order CV with cv_lin_inv structure (no second derivatives).
+    def F_no(self, x, n_colors=None):
+        """Unsymmetrized first-order CV with cv_lin_inv structure.
 
         Implements (site-wise translated scalar field):
             F(phi) = sum_{i,j} [ d/dphi_{ij} g(T_{-(i,j)}phi)
@@ -833,6 +856,32 @@ class ControlModel_g(nn.Module):
                 f += dg[:, i, j] + g_shift * force_x[:, i, j]
 
         return f
+
+    def F(self, x, n_colors=None):
+        """Symmetrized first-order CV without translation averaging.
+
+        Builds a scalar control variate from F_no by averaging over the
+        square-lattice point-group symmetries and parity:
+            phi -> -phi
+            phi -> R^k phi, k = 0,1,2,3
+            phi -> flip(R^k phi), k = 0,1,2,3
+
+        This enforces the same symmetries checked by
+        control_model_F_symmetry_checker, except translations.
+        """
+        transforms = []
+        for sign in (1.0, -1.0):
+            sx = sign * x
+            for k in range(4):
+                rx = tr.rot90(sx, k=k, dims=(1, 2))
+                transforms.append(rx)
+                transforms.append(tr.flip(rx, dims=(1,)))
+
+        total = tr.zeros(x.shape[0], device=x.device, dtype=x.dtype)
+        for tx in transforms:
+            total = total + self.F_no(tx, n_colors=n_colors)
+
+        return total / len(transforms)
 
     def Delta(self, x, n_colors=None):
         """Improved estimator Delta = O - F_g."""

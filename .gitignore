@@ -3,3 +3,5 @@ trained_models_phi4/
 trained_models_phi4_cuda/
 trained_models_test/
 *.pdf
+CV_Funct3T/
+CV_test_new/

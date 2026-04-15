@@ -27,7 +27,7 @@ from pathlib import Path
 
 # Import project modules
 from control_variates import (
-    C2pt, symmetry_checker, ControlModel, ControlModel_g,
+    C2pt, symmetry_checker, control_model_F_symmetry_checker, ControlModel, ControlModel_g,
     model_factory as original_model_factory, activation_factory
 )
 from fast_functionals_v2 import fast_model_factory_v2 as fast_model_factory, ALL_MODELS_V2 as ALL_MODELS
@@ -422,7 +422,10 @@ def train_single_tau(tau, args, logger, device):
     logger.log(f"\n--- Symmetry Check ---")
     x = phi.clone()
     x.requires_grad = True
-    symmetry_checker(x, funct)
+    if args.model in ('Gfunc1', 'Gfunc_sym', 'gscalar', 'gscalar_sym', 'LinScalar'):
+        control_model_F_symmetry_checker(x, CM)
+    else:
+        symmetry_checker(x, funct)
 
     # =========================================================================
     # Save outputs
