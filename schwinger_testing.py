@@ -119,7 +119,7 @@ def plaquette_average():
     #Average over a batch of configurations
     L=48
     L2=16
-    batch_size=100 
+    batch_size=10 
     lam =np.sqrt(1.0/10)
     mass= 0.1*lam
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
@@ -140,7 +140,7 @@ def plaquette_average():
     #Skip some for equilibration:
     q = sim.evolve_f(q, 500)
 
-    for n in np.arange(0, 101):
+    for n in np.arange(0, 1001):
         
         #Evolve, one HMC step
         q = sim.evolve_f(q, 1)
@@ -916,14 +916,14 @@ def autograd_pi_plus_mass():
 #Fit function for pion triplet
 #TODO: N_T is hardcoded- way to pass in fitting process?
 def f_pi_triplet(x, m, A):
-    N_T = 32
+    N_T = 48 
     return A* (np.exp(-m *x) + np.exp(-(N_T - x)*m))
 
 #Fit for analytical pion mass as a function of quark mass and coupling to fit critical mas
 def f_analytical_pi_triplet(x, mc):
     #Coupling
-    lam = 1.0/np.sqrt(10.0)
-    return 2.066*np.power(((x-mc)/lam)**2, 1.0/3.0) * lam
+    lam = 1.0/np.sqrt(4.0)
+    return 2.066 * lam * np.power(np.abs((x - mc*lam)/lam), 2.0/3.0)
 
 
 #Fit function for finite volume effects
@@ -932,16 +932,17 @@ def f_FV_Mass(L, m_inf, A):
 
 
 #Effective mass curve looks OK to eye test- run a fit on the curve to estimate mass
+#TODO: Needs updating in statistics
 def quenched_Pion_Triplet_Fit():
     #Measurement process -given function for correlator of pi plus
     batch_size=100
     #lam =np.sqrt(1.0/0.970)
-    lam = np.sqrt(1.0/10.0)
+    lam = np.sqrt(1.0/4.0)
     #Below is bare mass... Need critical mass offset for analytical comparison
-    mass= 0.1*lam
-    L = 32
+    mass= 0.0*lam
+    L = 48
     L2 = 16
-    pn = 1.0
+    pn = 0.0
     p = 2*np.pi*pn/L2
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
@@ -953,11 +954,11 @@ def quenched_Pion_Triplet_Fit():
     q =(u,)
 
     #Tune integrator to desired step size
-    im2 = i.minnorm2(sch.force,sch.evolveQ,25, 1.0)
-    sim = h.hmc(sch, im2, False)
+    im2 = i.minnorm2(sch.force,sch.evolveQ,10, 2.0)
+    sim = h.hmc(sch, im2, True)
     
     #Equilibration
-    q = sim.evolve_f(q, 100)
+    q = sim.evolve_f(q, 500)
 
 
 
@@ -989,7 +990,9 @@ def quenched_Pion_Triplet_Fit():
     df.to_csv("output.csv", index = False)
 
     #Fit the effective mass curve
-    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(10, 21), tr.abs(c_avg[10:21]), sigma = tr.abs(c_err[10:21]))
+    left_end = int(L/2) - 4
+    right_end = int(L/2) + 4
+    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(left_end, right_end), tr.abs(c_avg[left_end:right_end]), sigma = tr.abs(c_err[left_end:right_end]))
     print(popt)
     print(pcov)
 
@@ -1011,17 +1014,80 @@ def quenched_Pion_Triplet_Fit():
 
     plt.show()
 
+#For checking how many steps are needed for a stable pion mass
+def quenched_Pion_Mass_Stability_Check():
+    #Quenched fit of the pion mass over set of HMC steps
+    #Average over a batch of configurations
+    L=48
+    L2=16
+    batch_size=10 
+    lam =np.sqrt(1.0/4.0)
+    mass= 0.0*lam
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
+    u = sch.hotStart()
+    #u = sch.coldStart()
+
+    pion_mass = []
+    pion_mass_err = []
+
+    #Gauge theory- tuple contains one element, the gauge field
+    q = (u,)
+
+    #Tune integrator to desired step size
+    im2 = i.minnorm2(sch.force,sch.evolveQ,10, 2.0)
+    sim = h.hmc(sch, im2, False)
+
+    #Skip some for equilibration:
+    q = sim.evolve_f(q, 500)
+
+    for n in np.arange(0, 50):
+        #Evolve
+        q=sim.evolve_f(q,50)
+
+        #Measure
+        u = q[0]
+
+        d = sch.diracOperator(q[0])
+        d_inv = tr.linalg.inv(d.to_dense())
+
+
+        #Vector of time slice correlations
+        cl = sch.exact_Pion_Correlator(d_inv, (0,), 0)
+        if n ==0:
+            c = cl
+        else:
+            c= tr.cat((c, cl), 0)    
+        
+        print(c.size())
+
+
+        #Average 
+        c_avg = tr.mean(c, dim=0)
+        c_err = (tr.std(c, dim=0)/np.sqrt(tr.numel(c[:,0]) - 1))
+
+        #Fit
+        left_end = int(L/2) - int(L/4)
+        right_end = int(L/2) + int(L/4)
+        popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(left_end, right_end), tr.abs(c_avg[left_end:right_end]), sigma = tr.abs(c_err[left_end:right_end]))
+
+
+        print("Step " + str(300+(n+1)*50) + ": " + str(popt))
+        print(pcov)
+
+
+
+#TODO: Needs updating in statistics
 def compute_Quenched_Critical_Mass():
     #Measurement process -given function for correlator of pi plus
-    batch_size=100
+    batch_size=50
     #lam =np.sqrt(1.0/0.970)
-    lam = np.sqrt(1.0/10.0)
+    lam = np.sqrt(1.0/4.0)
     #Below is bare mass... Need critical mass offset for analytical comparison
-    L = 32
+    L = 48
     L2 = 16
 
-    mq_list = tr.linspace(-0.10*lam, 0.0, 20, dtype=tr.complex64)
+    mq_list = tr.linspace(-0.1*lam, 0.1*lam, 10, dtype=tr.complex64)
     m_pi_list = tr.zeros_like(mq_list, dtype=tr.float32)
     m_pi_err_list = tr.zeros_like(mq_list, dtype=tr.float32)
     x=0
@@ -1037,16 +1103,16 @@ def compute_Quenched_Critical_Mass():
         q =(u,)
 
         #Tune integrator to desired step size
-        im2 = i.minnorm2(sch.force,sch.evolveQ,25, 1.0)
+        im2 = i.minnorm2(sch.force,sch.evolveQ,10, 2.0)
         sim = h.hmc(sch, im2, False)
         
         #Equilibration
-        q = sim.evolve_f(q, 100)
+        q = sim.evolve_f(q, 500)
 
 
 
         #Measurement process- nm measurements on batches
-        nm = 10
+        nm = 20
         for n in np.arange(nm):
             #Discard some in between
             q= sim.evolve_f(q, 50)
@@ -1067,10 +1133,13 @@ def compute_Quenched_Critical_Mass():
         c_err = (tr.std(c, dim=0)/np.sqrt(tr.numel(c[:,0]) - 1))
 
         #Fit the effective mass curve
-        popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(0, L), tr.abs(c_avg), sigma = tr.abs(c_err))
+        left_end = int(L/2) - int(L/4)
+        right_end = int(L/2) + int(L/4)
+        popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(left_end, right_end), tr.abs(c_avg[left_end:right_end]), sigma = tr.abs(c_err[left_end:right_end]))
         m_pi_list[x] = float(popt[0].item())
         m_pi_err_list[x] = float(np.sqrt(pcov[0,0]).item())
         #print(m_pi_list[x], m_pi_err_list[x])
+        print(m_pi_list[x])
         print(x)
         x += 1
 
@@ -1153,7 +1222,7 @@ def pion_triplet_fit():
     df.to_csv("output.csv", index = False)
 
     #Fit the effective mass curve
-    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(0, L), tr.abs(c_avg), sigma = tr.abs(c_err))
+    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(12, 20), tr.abs(c_avg[12:20]), sigma = tr.abs(c_err[12:20]))
     print(popt)
     print(pcov)
 
@@ -1185,7 +1254,7 @@ def import_fit():
 
     #Fit the effective mass curve
     #Select only the time slices near the center of the lattice
-    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(3,7), np.abs(a[0, 3:7]), sigma = np.abs(a[1, 3:7]))
+    popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(12,20), np.abs(a[0, 12:20]), sigma = np.abs(a[1, 12:20]))
     print(popt)
     print(pcov)
 
@@ -1393,7 +1462,7 @@ def main():
     #fermion_action()
     #fermion_force()
     #pure_gauge_Savg()
-    plaquette_average()
+    #plaquette_average()
     #trivial_D_inspect()
     #dynamical_action()
     #dynamical_dH_vs_eps2()
@@ -1404,7 +1473,8 @@ def main():
     #pi_plus_comparison()
     #autograd_pi_plus_mass()
     #quenched_Pion_Triplet_Fit()
-    #compute_Quenched_Critical_Mass()
+    compute_Quenched_Critical_Mass()
+    #quenched_Pion_Mass_Stability_Check()
     #pion_triplet_fit()
     #import_fit()
     #fit_critical_mass()

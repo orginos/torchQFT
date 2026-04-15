@@ -633,19 +633,25 @@ class schwinger():
         outer = tr.einsum('bix,bjx->bij', V[:,:,:k], V[:,:,:k].conj())
         #assert tr.allclose(tr.real(outer), tr.eye(2*self.V[1]).unsqueeze(0), atol=1e-5)  # only if k == 2*V[1]
 
-        projs = tr.zeros((self.Bs, k+1, 2*self.V[0]*self.V[1]), dtype=tr.complex64)
+        projs = tr.zeros((self.Bs, 2*k, 2*self.V[0]*self.V[1]), dtype=tr.complex64)
 
         dirac_space = tr.tensor([1/np.sqrt(2.0), 1/np.sqrt(2.0)])
+        d_space_1 = tr.tensor([1.0, 0.0])
+        d_space_2 = tr.tensor([0.0,1.0])
 
 
 
         for b in np.arange(self.Bs):
             for x in np.arange(k):
-                vec = (V[b,:,x].unsqueeze(-1) * dirac_space).reshape(-1)
-                if b==0 and x ==0:
-                    print(vec.size())
-                projs[b,x, 0:self.V[1]*2] = vec[0:self.V[1]*2]
-                projs[b,x, (xcut_1-1)*self.V[1]*2:xcut_1*self.V[1]*2] = vec[self.V[1]*2:]
+                # vec = (V[b,:,x].unsqueeze(-1) * dirac_space).reshape(-1)
+                #Spin dilution of the laplacian eigenvectors
+                vec = (V[b,:,x].unsqueeze(-1) * d_space_1).reshape(-1)
+                projs[b,2*x, 0:self.V[1]*2] = vec[0:self.V[1]*2]
+                projs[b,2*x, (xcut_1-1)*self.V[1]*2:xcut_1*self.V[1]*2] = vec[self.V[1]*2:]
+
+                vec = (V[b,:,x].unsqueeze(-1) * d_space_2).reshape(-1)
+                projs[b,2*x + 1, 0:self.V[1]*2] = vec[0:self.V[1]*2]
+                projs[b,2*x + 1, (xcut_1-1)*self.V[1]*2:xcut_1*self.V[1]*2] = vec[self.V[1]*2:]
 
         return projs
 
@@ -1017,7 +1023,7 @@ class schwinger():
                     #corr_magnitude[dist - 1, :] = tr.cat((corr_magnitude[dist - 1, :],
                     #                                                      corr), dim=0)
                 source_ts += 1
-            print("sink position: ", sink_ts)
+            #print("sink position: ", sink_ts)
             sink_ts += 1
 
 
@@ -1050,45 +1056,47 @@ class schwinger():
             while source_ts < xcut_1:
                 f_c = tr.zeros(self.Bs)
                 c = tr.zeros(self.Bs)
-                for sink_x in tr.arange(self.V[1]):
-                    source_x = mid_x + 2*self.V[1]*source_ts
-                    sink_x = mid_x + 2*self.V[1]*sink_ts + sink_adj
-                    factorized_prop = f_propogator[:, sink_x:sink_x+2, source_x:source_x+2]
-                    factorized_corr = -tr.sum(factorized_prop, dim=(1,2))
-                    f_c = f_c - factorized_corr
+                for sink_x in np.arange(self.V[1]):
+                    # source_x = mid_x + 2*self.V[1]*source_ts
+                    # sink_x = mid_x + 2*self.V[1]*sink_ts + sink_adj
+                    source_ind = 2*self.V[1]*source_ts
+                    sink_ind = 2*sink_x + 2*self.V[1]*sink_ts + sink_adj
+                    factorized_prop = f_propogator[:, sink_ind:sink_ind+2, source_ind:source_ind+2]
+                    factorized_corr = tr.sum(factorized_prop, dim=(1,2))
+                    f_c = f_c - np.exp(-1.0j*p*sink_x)*factorized_corr
 
                     #Take an unfactorized measurement as well
                     if factorized_only == False:
-                        sink_x = sink_x - sink_adj
-                        prop = d_inv[:, sink_x:sink_x+2, source_x:source_x+2]
-                        corr = -1.0*tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2))*np.exp(-1.0j*p*mid_x*0.5)
-                        c = c - corr
+                        sink_ind = sink_ind - sink_adj
+                        prop = d_inv[:, sink_ind:sink_ind+2, source_ind:source_ind+2]
+                        corr = tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2))
+                        c = c - np.exp(-1.0j*p*sink_x)*corr
 
                 #Save correlator measurements to matrix
                 #First record distance between timeslices
                 dist = min(sink_ts - source_ts, source_ts + self.V[0] - sink_ts)
                 if corr_magnitude[dist-1] == None:
-                    factorized_corr_magnitude[dist-1] = factorized_corr.unsqueeze(0)
-                    corr_magnitude[dist- 1] = corr.unsqueeze(0)
+                    factorized_corr_magnitude[dist-1] = f_c.unsqueeze(0)
+                    corr_magnitude[dist- 1] = c.unsqueeze(0)
                 else:
                     # temp = tr.cat((factorized_corr_magnitude[dist- bw -1], factorized_corr), 0)
-                    temp = tr.cat((factorized_corr_magnitude[dist-1], factorized_corr.unsqueeze(0)), 0)
+                    temp = tr.cat((factorized_corr_magnitude[dist-1], f_c.unsqueeze(0)), 0)
                     factorized_corr_magnitude[dist-1] = temp
                     #factorized_corr_magnitude[dist - 1, :] = tr.cat((factorized_corr_magnitude[dist - 1, :],
                     #                                                      factorized_corr), dim=0)
-                    temp = tr.cat((corr_magnitude[dist-1], corr.unsqueeze(0)), 0)
+                    temp = tr.cat((corr_magnitude[dist-1], c.unsqueeze(0)), 0)
                     corr_magnitude[dist-1] = temp
                     #corr_magnitude[dist - 1, :] = tr.cat((corr_magnitude[dist - 1, :],
                     #                                                      corr), dim=0)
                 source_ts += 1
-            print("sink position: ", sink_ts)
+            #print("sink position: ", sink_ts)
             sink_ts += 1
 
 
         if factorized_only == False:
             return factorized_corr_magnitude, corr_magnitude
         else:
-            return factorized_corr
+            return factorized_corr_magnitude
 
 
     #TODO: Compute systematic error between approx and full propogator approach
@@ -1301,9 +1309,9 @@ class schwinger():
     #Output: conjugate momentum with boundary timeslice momentum frozen   
     def dd_Freeze_P(self, p, xcut_1, xcut_2, bw):
         p[:,:,xcut_1:xcut_1+bw -1, :] = 0.0
-        p[:,1,xcut_1+bw-1,:] = 0.0
+        p[:,1,xcut_1-1,:] = 0.0
         p[:,:,xcut_2:xcut_2+bw-1, :] = 0.0
-        p[:,1,xcut_2+bw-1,:] = 0.0
+        p[:,1,0,:] = 0.0
         return p
     
 
@@ -1356,9 +1364,9 @@ class schwinger():
         # fg[:,0,xcut_1-1, :] = 0.0
         # fg[:,0,xcut_2-1,:] = 0.0
         fg[:,:,xcut_1:xcut_1+bw -1, :] = 0.0
-        fg[:,1,xcut_1+bw-1,:] = 0.0
+        fg[:,1,xcut_1-1,:] = 0.0
         fg[:,:,xcut_2:xcut_2+bw-1, :] = 0.0
-        fg[:,1,xcut_2+bw-1,:] = 0.0
+        fg[:,1,0,:] = 0.0
 
         #If fermions aren't present, simply return force of gauge field
         if len(q) == 1:
@@ -1494,9 +1502,9 @@ class schwinger():
 
         #Zero out the force on the frozen links
         ff[:,:,xcut_1:xcut_1+bw -1, :] = 0.0
-        ff[:,1,xcut_1+bw-1,:] = 0.0
+        ff[:,1,xcut_1-1,:] = 0.0
         ff[:,:,xcut_2:xcut_2+bw-1, :] = 0.0
-        ff[:,1,xcut_2+bw-1,:] = 0.0
+        ff[:,1,0,:] = 0.0
 
         #TODO: Check on the complex components of ff
         return ((-1.0)*tr.real(fg+ ff).type(self.dtype))

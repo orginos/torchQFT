@@ -1361,7 +1361,7 @@ def test_Pion_Factorized_Measurement():
     mass= 0.10*lam
     L = 48
     L2 = 16
-    p_n = 0.0
+    p_n = 1.0
     p = p_n*2*np.pi/L2
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
@@ -1467,8 +1467,9 @@ def test_Pion_Factorized_Measurement():
         title2 = 'Laplacian Pion signal to noise: '+ 'n='+ str(batch_size) +', '+ \
                 r'$m_\pi L = 5$'
         mult=1.0
-        N_vec = 4
-        projs = sch.boundary_Distillation_Eigenvectors(q, xcut_1, N_vec, ov=ov)
+        n_eigen = 8
+        #Note - there will be 2 x N_eigen projectors due to spin dilution
+        projs = sch.boundary_Distillation_Eigenvectors(q, xcut_1, n_eigen, ov=ov)
 
 
 
@@ -1590,26 +1591,26 @@ def test_Pion_Factorized_Measurement():
 
     
 
-#Needs updating for corrected factorized measurement
-def two_Level_Stream_Pion_Bias():
-    batch_size= 10
+
+def two_Level_Pion_Bias_Correction():
+    batch_size= 20
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
     mass= 0.10*lam
-    L = 32
+    L = 48
     L2 = 16
-    p_n = 0.0
+    p_n = 1.0
     p = p_n*2*np.pi/L2
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
-
     #Boundary cut timeslices
-    xcut_1 = 13
-    xcut_2 = 29
-    bw=3
+    bw=8
+    xcut_1 = int(L/2) - bw
+    xcut_2 = L-bw
+    ov=bw
 
     #Number of level 1 configurations per level 0 config
-    n1=20
+    n1=40
 
     u = sch.hotStart()
 
@@ -1623,43 +1624,91 @@ def two_Level_Stream_Pion_Bias():
     #Typical equilibration
     q = sim.evolve_f(q, 200)
 
-    #Try a simple even-odd projection
-    #Probing half the boundary
-    #Need to include a multiplier for using fewer intermediates
+    #Generate projectors
+    #TODO: Needs work below
+    #Lets try some different bases
+    
     if False:
-        dynamic_projectors = False
-        mult = 2.0
-        ov=1
-        projs = tr.zeros(L2, 2*L*L2, dtype=tr.complex64)
+        title1 = 'Full boundary probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title2 = 'Full boundary pion signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
+                r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
+
+        projs = tr.zeros(batch_size, 4*L2, 2*L*L2, dtype=tr.complex64)
         ct=0
-        #Only need second spin index on the first boundary
-        for x in tr.arange(1, (1)*L2*2, 4):
-                projs[ct, x] = 1.0
+
+        for x in tr.arange(0, (1)*L2*2, 1):
+                projs[:,ct, x] = 1.0
                 ct += 1
-        #Only need first spin index on the second boundary
+
+
+        for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 1):
+                projs[:,ct, x] = 1.0
+                ct += 1
+
+    elif False:
+        #Probing half the boundary
+        #Need to include a multiplier for using fewer intermediates
+        title1 = 'Half boundary probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title2 = 'Half boundary 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
+                r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
+        projs = tr.zeros(batch_size, 2*L2, 2*L*L2, dtype=tr.complex64)
+        ct=0
+
+        for x in tr.arange(0, (1)*L2*2, 4):
+                projs[:,ct, x] = 1.0
+                ct += 1
+                projs[:, ct, x+1] = 1.0
+                ct += 1
+
+
         for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 4):
-                projs[ct, x] = 1.0
+                projs[:,ct, x] = 1.0
+                ct += 1
+                projs[:, ct, x+1] = 1.0
                 ct += 1
 
-        N_vec= ct
+    elif False:
+        #Probing one quarter of the boundary
+        #Need to include a multiplier for using fewer intermediates
+        title1 = 'Quarter boundary probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title2 = 'Quarter boundary 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ \
+                r'$m_\pi L = 5$'
+        projs = tr.zeros(batch_size, L2, 2*L*L2, dtype=tr.complex64)
+        ct=0
 
-        title1 = '2-level even-odd pion, n='+ str(batch_size) +', ' r'$m_\pi L = 5$ '+ 'p='+ str(p_n)+ \
-                r'$*2\pi/L$, '
-        title2 = '2 level even-odd 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
-                r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
-    if True:
-        dynamic_projectors = True
+        for x in tr.arange(0, (1)*L2*2, 8):
+                projs[:,ct, x] = 1.0
+                ct += 1
+                projs[:, ct, x+1] = 1.0
+                ct += 1
+
+
+        for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 8):
+                projs[:,ct, x] = 1.0
+                ct += 1
+                projs[:, ct, x+1] = 1.0
+                ct += 1
+
+    elif False:
         #Deflation technique
-        #TODO- needs to update each complement config
         #Seek eigenmodes of the complement Dirac operator
-        title1 = 'Deflation probe, n0='+ str(batch_size) +', ' +'n1=' + str(n1) +', '  r'$m_\pi L = 5$ '+ ' p='+ str(p_n)+ \
-                r'$*2\pi/L$, '
-        title2 = 'Deflation probe 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
-                r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
-        mult=1.0
-        ov=3
+        title1 = 'Deflation 2-pt probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title2 = 'Deflation probe 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+\
+                r'$m_\pi L = 5$'
         N_vec = 16
         projs = sch.complement_Deflation_Eigenvectors(q, xcut_1, N_vec, ov=ov)
+    
+    elif True:
+        #Distillation technique
+        #Seek distillation eigenvectors for a given batch of configurations
+        title1 = 'Laplacian probe,' + r'$m_\pi L = 5$, ' + r'p=' + str(p_n) + r'$\times \frac{2\pi}{L}$'
+        title2 = 'Laplacian Pion signal to noise: '+ 'n='+ str(batch_size) +', '+ \
+                r'$m_\pi L = 5$'
+        n_eigen = 8
+        #Note - there will be 2 x N_eigen projectors due to spin dilution
+        projs = sch.boundary_Distillation_Eigenvectors(q, xcut_1, n_eigen, ov=ov)
+
+
 
 
     q1 = tuple(q)
@@ -1668,177 +1717,220 @@ def two_Level_Stream_Pion_Bias():
     print("Measuring first level configs")
 
     #Measure the level-0 config using true and factorized propogator
-    e_l, e_r, f_propogator = sch.factorized_Propogator_Proj(q1, xcut_1, xcut_2,
-                                                                        projs, ov)
-    factorized_corr0, corr0 = sch.measure_Factorized_Pion_Correlator(q1, f_propogator, xcut_1, xcut_2, 
-                                                                    bw, p=p)
+    tensor_l, tensor_r = sch.factorized_Propagator(q, xcut_1, xcut_2, projs, ov=ov)
+
+    
+    contraction  = tr.einsum('bijy, bjix -> byx', tensor_l, tensor_r)
+    
+
+    factorized_corr0, corr0 = sch.measure_Factorized_Pion_Correlator(q, contraction, xcut_1, xcut_2, 
+                                                                        bw, p=p, ov=ov)
 
 
     #Measure the correlator and its error
 
     max_length = int((L)/2)
 
-    #Take statistics on each configuration in the batch individually
-    c_avg0 = tr.zeros(batch_size, len(corr0))
-    c_err0 = tr.zeros(batch_size, len(corr0))
+    #Take statistics on each configuration in the batch individually and as a whole
+    c_config_avg0 = tr.zeros(batch_size, len(corr0))
+
+    c_avg0 = tr.zeros(len(corr0))
+    c_err0 = tr.zeros(len(corr0))
+
+    fc_config_avg0 = tr.zeros(batch_size, len(factorized_corr0))
+
+    fc_avg0 = tr.zeros(len(corr0))
+    fc_err0 = tr.zeros(len(corr0))
+
+    bias = tr.zeros(len(corr0))
+    bias_err = tr.zeros(len(corr0))
+
 
 
     for x in np.arange(bw, max_length):
-        c_avg0[:, x] = tr.real(tr.mean(corr0[x], dim=0))
-        c_err0[:, x] = tr.std(tr.real(corr0[x]), dim=0)/np.sqrt(tr.numel(corr0[x][:,0])-1)
+        #average by config
+        c_config_avg0[:, x] = tr.real(tr.mean(corr0[x], dim=0))
+        fc_config_avg0[:, x] = tr.real(tr.mean(factorized_corr0[x], dim=0))
+
+        #And take global averages
+        c_avg0[x] = tr.mean(c_config_avg0[:,x])
+        c_err0[x] = tr.std(c_config_avg0[:,x]) / np.sqrt(batch_size -1)
+        fc_avg0[x] = tr.mean(fc_config_avg0[:,x])
+        fc_err0[x] = tr.std(fc_config_avg0[:,x]) / np.sqrt(batch_size-1)
+
+        bias[x] = c_avg0[x] - fc_avg0[x]
+        bias_err[x] = tr.std(c_config_avg0[:,x] - fc_config_avg0[:,x]) / np.sqrt(batch_size -1)
+
+
+
 
 
     #Take a true correlator measurement on the unstitched two level configs
+    #TODO- May use this later...
     c_avg1 = tr.zeros(batch_size, n1, len(corr0))
 
 
     print("Beginning 2-level integration")
+
+    #Create collection of local measures
+    tensor_l_ensemble = tr.zeros(batch_size, n1, *tensor_l.shape[1:], dtype=tr.complex64)
+    tensor_r_ensemble = tr.zeros(batch_size, n1, *tensor_r.shape[1:], dtype=tr.complex64)
+
     for m in np.arange(n1):
         #2nd level integration
         q = lvl2_sim.second_Level_Evolve(q, 50, xcut_1, xcut_2, bw)
 
+        tensor_l_ensemble[:,m,:,:,:], tensor_r_ensemble[:,m,:,:,:] = sch.factorized_Propagator(
+             q,xcut_1,xcut_2, projs, ov) 
+        
+        contraction  = tr.einsum('bijy, bjix -> byx', tensor_l_ensemble[:,m,:,:,:],
+                                  tensor_r_ensemble[:,m,:,:,:])
+
         #Take true correlator measurement
-        factorized_corr1, c1 = sch.measure_Factorized_Pion_Correlator(q, f_propogator, xcut_1, xcut_2, 
+        factorized_corr1, c1 = sch.measure_Factorized_Pion_Correlator(q, contraction, xcut_1, xcut_2, 
                                                                     bw, p=p)
 
         for x in np.arange(bw, max_length):
             c_avg1[:,m, x] = tr.real(tr.mean(c1[x], dim=0))
-
-        #Construct projectors here if not fixed
-        if dynamic_projectors == True:
-            projs = sch.complement_Deflation_Eigenvectors(q, xcut_1, N_vec, ov=ov)
-            if m == 0:
-                projs_ensemble = tr.zeros((batch_size, n1, N_vec+1, tr.numel(projs[0,0,:])), dtype=tr.complex64)
-                projs_ensemble[:,m,:,:] = projs.clone()
-            else:
-                projs_ensemble[:,m,:,:] = projs.clone()
                 
-
-        if m == 0:
-            bulk_product, s1_inv = sch.measure_Factorized_Subdomain_Inverses(q, xcut_1, ov)
-            
-            bulk_ensemble = tr.zeros((batch_size, n1, tr.numel(bulk_product[0,:,0]), tr.numel(bulk_product[0,0,:])), dtype=tr.complex64)
-            s1_ensemble = tr.zeros((batch_size, n1, tr.numel(s1_inv[0,:,0]), tr.numel(s1_inv[0,0,:])), dtype=tr.complex64)
-
-            bulk_ensemble[:, m, :,:] = bulk_product.clone()
-            s1_ensemble[:,m,:,:] = s1_inv.clone()
-            
-        else:
-            bulk_ensemble[:,m,:,:], s1_ensemble[:,m,:,:] = sch.measure_Factorized_Subdomain_Inverses(q, xcut_1, ov)
         print(m)
 
-    #Empty list which will contain tensors of variable size based on time separation
-    factorized_corr = [None]* (max_length)
     
-    print("Measuring Ensembles")    
-    #Combine for n1^2 measurements
-    for m1 in np.arange(n1):
+    print("Averaging Ensemble")
+
+    #Average over the local measurements
+    two_lvl_tensor_l = tr.mean(tensor_l_ensemble, dim=1)
+    two_lvl_tensor_r = tr.mean(tensor_r_ensemble, dim=1)
+
+    #Consolidate
+    contraction =  tr.einsum('bijy, bjix -> byx', two_lvl_tensor_l, two_lvl_tensor_r)
+
+    factorized_corr, corr = sch.measure_Factorized_Pion_Correlator(q, contraction, xcut_1, xcut_2, 
+                                                                        bw, p=p, ov=ov)
+
+    #Average over batch and measurements
+    fc_avg1 = tr.zeros(len(factorized_corr))
+    fc_err1 = tr.zeros(len(factorized_corr))
+
+    for x in tr.arange(bw, len(factorized_corr)):
+        fc_corr_avg = tr.real(tr.mean(factorized_corr[x], dim=0))
+        fc_avg1[x] = tr.real(tr.mean(fc_corr_avg))
+        fc_err1[x] = tr.std(tr.real(fc_corr_avg))/np.sqrt(tr.numel(fc_corr_avg)-1)
 
 
-        for m2 in np.arange(n1):
-            #Make measurement
-            if dynamic_projectors == True:
-                ens_fc = sch.measure_Two_Lvl_Factorized_Pion_Correlator(bulk_ensemble[:,m1, :,:], s1_ensemble[:,m2,:,:], 
-                                                                        xcut_1, projs_ensemble[:,m2,:,:], bw, ov, p)
-            else:
-                ens_fc = sch.measure_Two_Lvl_Factorized_Pion_Correlator(bulk_ensemble[:,m1, :,:], s1_ensemble[:,m2,:,:], 
-                                                                        xcut_1, projs, bw, ov, p)
+    #Bias correction
+    corrected_fc_avg1 = fc_avg1 + bias
+    corrected_fc_err1 = tr.sqrt(tr.square(fc_err1) + tr.square(bias_err))
+
+    #Outdated, keeping as reference for now
+    # #Combine for n1^2 measurements
+    # for m1 in np.arange(n1):
+
+
+    #     for m2 in np.arange(n1):
+    #         #Make measurement
+    #         if dynamic_projectors == True:
+    #             ens_fc = sch.measure_Two_Lvl_Factorized_Pion_Correlator(bulk_ensemble[:,m1, :,:], s1_ensemble[:,m2,:,:], 
+    #                                                                     xcut_1, projs_ensemble[:,m2,:,:], bw, ov, p)
+    #         else:
+    #             ens_fc = sch.measure_Two_Lvl_Factorized_Pion_Correlator(bulk_ensemble[:,m1, :,:], s1_ensemble[:,m2,:,:], 
+    #                                                                     xcut_1, projs, bw, ov, p)
             
-            #store measurement
-            if m1 == 0 and m2 == 0:
-                for t in np.arange(bw, max_length):
-                    factorized_corr[t] = tr.zeros((batch_size, n1,n1, tr.numel(ens_fc[t][:,0])), dtype=tr.complex64)
-                    factorized_corr[t][:,m1,m2,:] = tr.transpose(ens_fc[t],0,1)  
-            else:
-                for t in np.arange(bw, max_length):
-                    factorized_corr[t][:,m1,m2, :] = tr.transpose(ens_fc[t],0,1)
-        print(m1)
+    #         #store measurement
+    #         if m1 == 0 and m2 == 0:
+    #             for t in np.arange(bw, max_length):
+    #                 factorized_corr[t] = tr.zeros((batch_size, n1,n1, tr.numel(ens_fc[t][:,0])), dtype=tr.complex64)
+    #                 factorized_corr[t][:,m1,m2,:] = tr.transpose(ens_fc[t],0,1)  
+    #         else:
+    #             for t in np.arange(bw, max_length):
+    #                 factorized_corr[t][:,m1,m2, :] = tr.transpose(ens_fc[t],0,1)
+    #     print(m1)
 
 
 
 
-    fc_avg = tr.zeros(batch_size, len(factorized_corr))
-    fc_err = tr.zeros(batch_size, len(factorized_corr))
-    fc_splicing_bias = tr.zeros(batch_size, n1, len(factorized_corr))
+    # fc_avg = tr.zeros(batch_size, len(factorized_corr))
+    # fc_err = tr.zeros(batch_size, len(factorized_corr))
+    # fc_splicing_bias = tr.zeros(batch_size, n1, len(factorized_corr))
 
-    fc_splicing_bias_avg = tr.zeros(len(factorized_corr))
-    fc_splicing_bias_err = tr.zeros(len(factorized_corr))
+    # fc_splicing_bias_avg = tr.zeros(len(factorized_corr))
+    # fc_splicing_bias_err = tr.zeros(len(factorized_corr))
 
-    instream_bias = tr.zeros(len(factorized_corr))
-    instream_bias_err = tr.zeros(len(factorized_corr))
+    # instream_bias = tr.zeros(len(factorized_corr))
+    # instream_bias_err = tr.zeros(len(factorized_corr))
 
-    #Take global measurements of each
-    global_c_avg0 = tr.zeros(len(factorized_corr))
-    global_c_err0 = tr.zeros(len(factorized_corr))
-    global_fc_avg = tr.zeros(len(factorized_corr))
-    global_fc_err = tr.zeros(len(factorized_corr))
+    # #Take global measurements of each
+    # global_c_avg0 = tr.zeros(len(factorized_corr))
+    # global_c_err0 = tr.zeros(len(factorized_corr))
+    # global_fc_avg = tr.zeros(len(factorized_corr))
+    # global_fc_err = tr.zeros(len(factorized_corr))
 
-    for x in np.arange(bw, len(factorized_corr)):
-        fc_config_avg = tr.real(tr.mean(factorized_corr[x], dim=(1,2,3)))
-        global_fc_avg[x] = tr.mean(fc_config_avg)
-        global_fc_err[x] = tr.std(fc_config_avg) / np.sqrt(tr.numel(fc_config_avg) - 1)
-
-
-    print("Measuring Bias") 
-    for x in np.arange(bw, len(factorized_corr)):
-        factorized_corr[x] = mult *factorized_corr[x]
-
-        fc_avg[:,x] = tr.real(tr.mean(factorized_corr[x], dim=(1,2,3)))
-        fc_err[:,x] = tr.std(tr.real(factorized_corr[x]), dim=(1,2,3))/np.sqrt(tr.numel(factorized_corr[x][0,:,:,:])-1)
+    # for x in np.arange(bw, len(factorized_corr)):
+    #     fc_config_avg = tr.real(tr.mean(factorized_corr[x], dim=(1,2,3)))
+    #     global_fc_avg[x] = tr.mean(fc_config_avg)
+    #     global_fc_err[x] = tr.std(fc_config_avg) / np.sqrt(tr.numel(fc_config_avg) - 1)
 
 
-        #Measure splicing bias
-        for m1 in np.arange(n1):
-            #unspliced_avg = tr.real(tr.mean(factorized_corr[x][:, m1,m1,:], dim=1))
-            #unspliced_err = tr.std(tr.real(factorized_corr[x][:, m1,m1,:]), dim=1)/np.sqrt(tr.numel(factorized_corr[x][0,0,0,:])-1)
-            if m1 ==0:
-                spliced_measurements = tr.cat((tr.flatten(factorized_corr[x][:,m1,m1+1:,:],start_dim=1),
-                                          tr.flatten(factorized_corr[x][:,m1+1:,m1,:],start_dim=1)), dim=1)
-            elif m1 == n1-1:
-                spliced_measurements = tr.cat((tr.flatten(factorized_corr[x][:,m1,0:m1,:],start_dim=1),
-                                          tr.flatten(factorized_corr[x][:,0:m1,m1,:],start_dim=1)), dim=1)
-            else:
-                spliced_measurements = tr.cat((tr.flatten(factorized_corr[x][:,m1,0:m1,:],start_dim=1),
-                                          tr.flatten(factorized_corr[x][:,m1,m1+1:,:],start_dim=1),
-                                          tr.flatten(factorized_corr[x][:,0:m1,m1,:],start_dim=1),
-                                          tr.flatten(factorized_corr[x][:,m1+1:,m1,:],start_dim=1)),dim=1)
+    # print("Measuring Bias") 
+    # for x in np.arange(bw, len(factorized_corr)):
+    #     factorized_corr[x] = mult *factorized_corr[x]
+
+    #     fc_avg[:,x] = tr.real(tr.mean(factorized_corr[x], dim=(1,2,3)))
+    #     fc_err[:,x] = tr.std(tr.real(factorized_corr[x]), dim=(1,2,3))/np.sqrt(tr.numel(factorized_corr[x][0,:,:,:])-1)
+
+
+    #     #Measure splicing bias
+    #     for m1 in np.arange(n1):
+    #         #unspliced_avg = tr.real(tr.mean(factorized_corr[x][:, m1,m1,:], dim=1))
+    #         #unspliced_err = tr.std(tr.real(factorized_corr[x][:, m1,m1,:]), dim=1)/np.sqrt(tr.numel(factorized_corr[x][0,0,0,:])-1)
+    #         if m1 ==0:
+    #             spliced_measurements = tr.cat((tr.flatten(factorized_corr[x][:,m1,m1+1:,:],start_dim=1),
+    #                                       tr.flatten(factorized_corr[x][:,m1+1:,m1,:],start_dim=1)), dim=1)
+    #         elif m1 == n1-1:
+    #             spliced_measurements = tr.cat((tr.flatten(factorized_corr[x][:,m1,0:m1,:],start_dim=1),
+    #                                       tr.flatten(factorized_corr[x][:,0:m1,m1,:],start_dim=1)), dim=1)
+    #         else:
+    #             spliced_measurements = tr.cat((tr.flatten(factorized_corr[x][:,m1,0:m1,:],start_dim=1),
+    #                                       tr.flatten(factorized_corr[x][:,m1,m1+1:,:],start_dim=1),
+    #                                       tr.flatten(factorized_corr[x][:,0:m1,m1,:],start_dim=1),
+    #                                       tr.flatten(factorized_corr[x][:,m1+1:,m1,:],start_dim=1)),dim=1)
  
-            spliced_avg = tr.real(tr.mean(spliced_measurements, dim=1))
+    #         spliced_avg = tr.real(tr.mean(spliced_measurements, dim=1))
 
-            #corr_level_bias = corr1[x][:, m1, :] - spliced_avg.unsqueeze(1).repeat(1, tr.numel(corr1[x][:, m1, :]))
+    #         #corr_level_bias = corr1[x][:, m1, :] - spliced_avg.unsqueeze(1).repeat(1, tr.numel(corr1[x][:, m1, :]))
 
-            fc_splicing_bias[:, m1, x] = c_avg1[:,m1, x] - spliced_avg
+    #         fc_splicing_bias[:, m1, x] = c_avg1[:,m1, x] - spliced_avg
 
         
-        #Average the spliced bias measurement
-        fc_splicing_bias_avg[x] = tr.real(tr.mean(fc_splicing_bias[:,:,x]))
-        fc_splicing_bias_err[x] = tr.std(tr.real(fc_splicing_bias[:,:,x]))/np.sqrt(tr.numel(fc_splicing_bias[:,:,x])-1)
+    #     #Average the spliced bias measurement
+    #     fc_splicing_bias_avg[x] = tr.real(tr.mean(fc_splicing_bias[:,:,x]))
+    #     fc_splicing_bias_err[x] = tr.std(tr.real(fc_splicing_bias[:,:,x]))/np.sqrt(tr.numel(fc_splicing_bias[:,:,x])-1)
 
-        #Now measure the stream bias
-        #Need to repeat the 2-level expectation value to subtract from first level measurements
+    #     #Now measure the stream bias
+    #     #Need to repeat the 2-level expectation value to subtract from first level measurements
 
-        corr_level_bias = corr0[x] - fc_avg[:,x]
-        instream_bias[x] = tr.mean(tr.real(corr_level_bias))
-        instream_bias_err[x] = tr.std(tr.real(corr_level_bias))/np.sqrt(batch_size-1)
+    #     corr_level_bias = corr0[x] - fc_avg[:,x]
+    #     instream_bias[x] = tr.mean(tr.real(corr_level_bias))
+    #     instream_bias_err[x] = tr.std(tr.real(corr_level_bias))/np.sqrt(batch_size-1)
 
-        #Take global measurements
-        config_avg = tr.real(tr.mean(corr0[x], dim=0))
-        global_c_avg0[x] = tr.mean(config_avg)
-        global_c_err0[x] = tr.std(config_avg)/np.sqrt(tr.numel(config_avg)-1)
-        fc_config_avg = tr.real(tr.mean(factorized_corr[x], dim=(1,2,3)))
-        global_fc_avg[x] = tr.mean(fc_config_avg)
-        global_fc_err[x] = tr.std(fc_config_avg) / np.sqrt(tr.numel(fc_config_avg) - 1)
-        # global_c_avg0[x] = tr.real(tr.mean(corr0[x], dim=(0,1)))
-        # global_c_err0[x] = tr.std(tr.real(corr0[x]), dim=(0,1))/np.sqrt(tr.numel(corr0[x])-1)
-        # global_fc_avg[x] = tr.real(tr.mean(factorized_corr[x], dim=(0,1,2,3)))
-        # global_fc_err[x] = tr.std(tr.real(factorized_corr[x]), dim=(0,1,2,3))/np.sqrt(tr.numel(factorized_corr[x])-1)
+    #     #Take global measurements
+    #     config_avg = tr.real(tr.mean(corr0[x], dim=0))
+    #     global_c_avg0[x] = tr.mean(config_avg)
+    #     global_c_err0[x] = tr.std(config_avg)/np.sqrt(tr.numel(config_avg)-1)
+    #     fc_config_avg = tr.real(tr.mean(factorized_corr[x], dim=(1,2,3)))
+    #     global_fc_avg[x] = tr.mean(fc_config_avg)
+    #     global_fc_err[x] = tr.std(fc_config_avg) / np.sqrt(tr.numel(fc_config_avg) - 1)
+    #     # global_c_avg0[x] = tr.real(tr.mean(corr0[x], dim=(0,1)))
+    #     # global_c_err0[x] = tr.std(tr.real(corr0[x]), dim=(0,1))/np.sqrt(tr.numel(corr0[x])-1)
+    #     # global_fc_avg[x] = tr.real(tr.mean(factorized_corr[x], dim=(0,1,2,3)))
+    #     # global_fc_err[x] = tr.std(tr.real(factorized_corr[x]), dim=(0,1,2,3))/np.sqrt(tr.numel(factorized_corr[x])-1)
 
-        print(x)
+    #     print(x)
 
 
     #Save data
-    data_write = tr.stack((tr.arange(1, int(L/2)+1), global_c_avg0, global_c_err0,
-                            global_fc_avg, global_fc_err, instream_bias, instream_bias_err, fc_splicing_bias_avg, fc_splicing_bias_err), dim=0).numpy()
+    data_write = tr.stack((tr.arange(1, int(L/2)+1), c_avg0, c_err0,
+                            fc_avg0, fc_err0, fc_avg1, fc_err1, bias, bias_err, corrected_fc_avg1, corrected_fc_err1), dim=0).numpy()
     np.savetxt('2_level_factorized_data.csv', data_write, delimiter=',')
     
     #Plot Data
@@ -1849,25 +1941,37 @@ def two_Level_Stream_Pion_Bias():
     ax2.set_yscale('log', nonpositive='clip')
 
 
-    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(global_c_avg0[bw:]), global_c_err0[bw:], label="First level measurement",
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(c_avg0[bw:]), c_err0[bw:], label="True Measurement",
                 fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
-    ax1.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(global_fc_avg[bw:]), global_fc_err[bw:], label="Two level Measurement",
-                 fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
-    #ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(instream_bias[bw:]), instream_bias_err[bw:], label="Stream Bias")
-    ax.errorbar(tr.arange(bw+1, int(L/2) + 1), tr.abs(fc_splicing_bias_avg[bw:]), fc_splicing_bias_err[bw:], label="Cross-stitch Bias",
-                fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
-    ax1.errorbar(tr.arange(bw+1, int(L/2) + 1), tr.abs(fc_splicing_bias_avg[bw:]), fc_splicing_bias_err[bw:], label="Cross-stitch Bias",
-                 fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
-    #ax.plot(tr.arange(bw+1, int(L/2)+1), instream_bias_err[bw:], label="Stream Bias Err")
-    ax.plot(tr.arange(bw+1, int(L/2) + 1), global_c_err0[bw:], label="First level Error")
-    ax1.plot(tr.arange(bw+1, int(L/2) + 1), global_fc_err[bw:], label="2nd level Error")
-    ax.plot(tr.arange(bw+1, int(L/2) + 1), fc_splicing_bias_err[bw:], label="Cross-stitch Bias Err")
-    ax1.plot(tr.arange(bw+1, int(L/2) + 1), fc_splicing_bias_err[bw:], label="Cross-stitch Bias Err")
+    ax.plot(tr.arange(bw+1, int(L/2) + 1), c_err0[bw:], label="True Error")
 
-    ax2.plot(tr.arange(bw+1, int(L/2)+1), tr.abs(global_c_avg0[bw:])/global_c_err0[bw:], label="1-level")
-    ax2.plot(tr.arange(bw+1, int(L/2)+1), tr.abs(global_fc_avg[bw:])/global_fc_err[bw:], label="2-level")
+
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(fc_avg0[bw:]), fc_err0[bw:], label="Factorized Measurement",
+                 fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
+    ax.plot(tr.arange(bw+1, int(L/2) + 1), fc_err0[bw:], label="Factorized Error")
+
+    ax.errorbar(tr.arange(bw+1, int(L/2) + 1), tr.abs(bias[bw:]), bias_err[bw:], label="Measurement Bias",
+                fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
+    ax.plot(tr.arange(bw+1, int(L/2) + 1), bias_err[bw:], label="Bias Error")
+
+    ax1.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(fc_avg1[bw:]), fc_err1[bw:], label="Factorized Measurement",
+                 fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
+    ax1.plot(tr.arange(bw+1, int(L/2) + 1), bias_err[bw:], label="Factorized Error")
+    
+    ax1.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(corrected_fc_avg1[bw:]), corrected_fc_err1[bw:], label="Corrected Measurement",
+                 fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
+    ax1.plot(tr.arange(bw+1, int(L/2) + 1), corrected_fc_err1[bw:], label="Corrected Measurement Error")
+
+    ax1.errorbar(tr.arange(bw+1, int(L/2) + 1), tr.abs(bias[bw:]), bias_err[bw:], label="Measurement Bias",
+                 fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
+    ax1.plot(tr.arange(bw+1, int(L/2) + 1), bias_err[bw:], label="Bias Error")
+    
+
+    
+    ax2.plot(tr.arange(bw+1, int(L/2)+1), tr.abs(c_avg0[bw:])/c_err0[bw:], label="1-level")
+    ax2.plot(tr.arange(bw+1, int(L/2)+1), tr.abs(fc_avg1[bw:])/fc_err1[bw:], label="2-level w/o Correction")
     #ax2.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(instream_bias[bw:-bw])/instream_bias_err[bw:-bw] , label="Stream Bias")
-    ax2.plot(tr.arange(bw+1, int(L/2)+1), tr.abs(fc_splicing_bias_avg[bw:])/fc_splicing_bias_err[bw:] , label="Cross-stitch Bias")
+    ax2.plot(tr.arange(bw+1, int(L/2)+1), tr.abs(bias[bw:])/bias_err[bw:] , label="Bias")
 
     # handles, labels = ax.gca().get_legend_handles_labels()
 
@@ -1883,7 +1987,9 @@ def two_Level_Stream_Pion_Bias():
     ax2.legend(
     loc="upper left",bbox_to_anchor=(1.02, 1),borderaxespad=0)
 
-    ax.set_title(title1)
+    plt.suptitle(title1)
+    ax.set_title(r"Level One Measurements $n_0=$" + str(batch_size))
+    ax1.set_title(r"Level Two Measurements $n_1=$" + str(n1) )
     ax.set_ylabel('Magnitude')
     ax1.set_ylabel('Magnitude')
     #ax.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
@@ -1907,7 +2013,7 @@ def two_Level_Stream_Pion_Bias():
 #Fit function for pion triplet
 def f_pi_decay(x, m, A):
     #Note hardcoded parameter for fit
-    T = 32
+    T = 48
     return A* (np.exp(-m *x) + np.exp(-m*(T-x)))
 
 #Needs correcting for corrected factorized measurement
@@ -1916,17 +2022,18 @@ def two_Level_Quenched_Pion_Mass():
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
     mass= 0.10*lam
-    L = 32
+    L = 48
     L2 = 16
-    p_n = 0.0
+    p_n = 1.0
     p = p_n*2*np.pi/L2
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
 
     #Boundary cut timeslices
-    xcut_1 = 13
-    xcut_2 = 29
-    bw=3
+    bw=4
+    xcut_1 = int(L/2) - bw
+    xcut_2 = L-bw
+    ov=bw
 
     #Maximum possible length of cross-subdomain correlator
     max_length = int((L)/2)
@@ -1946,241 +2053,331 @@ def two_Level_Quenched_Pion_Mass():
     #Typical equilibration
     q = sim.evolve_f(q, 400)
 
-    #Try a simple even-odd projection
-    #Probing half the boundary
-    #Need to include a multiplier for using fewer intermediates
+    #Generate projectors
+    #TODO: Needs work below
+    #Lets try some different bases
+    
     if False:
-        dynamic_projectors = False
-        mult = 2.0
-        ov=1
-        projs = tr.zeros(L2, 2*L*L2, dtype=tr.complex64)
+        title1 = 'Full boundary probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title2 = 'Full boundary pion signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
+                r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
+
+        projs = tr.zeros(batch_size, 4*L2, 2*L*L2, dtype=tr.complex64)
         ct=0
-        #Only need second spin index on the first boundary
-        for x in tr.arange(1, (1)*L2*2, 4):
-                projs[ct, x] = 1.0
+
+        for x in tr.arange(0, (1)*L2*2, 1):
+                projs[:,ct, x] = 1.0
                 ct += 1
-        #Only need first spin index on the second boundary
+
+
+        for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 1):
+                projs[:,ct, x] = 1.0
+                ct += 1
+
+    elif False:
+        #Probing half the boundary
+        #Need to include a multiplier for using fewer intermediates
+        title1 = 'Half boundary probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title2 = 'Half boundary 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
+                r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
+        projs = tr.zeros(batch_size, 2*L2, 2*L*L2, dtype=tr.complex64)
+        ct=0
+
+        for x in tr.arange(0, (1)*L2*2, 4):
+                projs[:,ct, x] = 1.0
+                ct += 1
+                projs[:, ct, x+1] = 1.0
+                ct += 1
+
+
         for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 4):
-                projs[ct, x] = 1.0
+                projs[:,ct, x] = 1.0
+                ct += 1
+                projs[:, ct, x+1] = 1.0
                 ct += 1
 
-        N_vec= ct
+    elif False:
+        #Probing one quarter of the boundary
+        #Need to include a multiplier for using fewer intermediates
+        title1 = 'Quarter boundary probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title2 = 'Quarter boundary 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ \
+                r'$m_\pi L = 5$'
+        projs = tr.zeros(batch_size, L2, 2*L*L2, dtype=tr.complex64)
+        ct=0
 
-        title1 = '2-level even-odd pion, n='+ str(batch_size) +', ' r'$m_\pi L = 5$ '+ 'p='+ str(p_n)+ \
-                r'$*2\pi/L$, '
-        title2 = '2 level even-odd 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
-                r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
-    if True:
-        dynamic_projectors = True
+        for x in tr.arange(0, (1)*L2*2, 8):
+                projs[:,ct, x] = 1.0
+                ct += 1
+                projs[:, ct, x+1] = 1.0
+                ct += 1
+
+
+        for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 8):
+                projs[:,ct, x] = 1.0
+                ct += 1
+                projs[:, ct, x+1] = 1.0
+                ct += 1
+
+    elif False:
         #Deflation technique
-        #TODO- needs to update each complement config
         #Seek eigenmodes of the complement Dirac operator
-        title1 = 'Deflation probe, n1='+ str(batch_size) +', n2=' + str(n1)+  r'$m_\pi L = 5$ '+ 'p='+ str(p_n)+ \
-                r'$*2\pi/L$, '
-        title2 = 'Deflation probe 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
-                r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
-        mult=1.0
-        ov=bw
+        title1 = 'Deflation 2-pt probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title2 = 'Deflation probe 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+\
+                r'$m_\pi L = 5$'
         N_vec = 16
         projs = sch.complement_Deflation_Eigenvectors(q, xcut_1, N_vec, ov=ov)
-
+    
+    elif True:
+        #Distillation technique
+        #Seek distillation eigenvectors for a given batch of configurations
+        title1 = 'Laplacian probe,' + r'$m_\pi L = 5$, ' + r'p=' + str(p_n) + r'$\times \frac{2\pi}{L}$'
+        title2 = 'Laplacian Pion signal to noise: '+ 'n='+ str(batch_size) +', '+ \
+                r'$m_\pi L = 5$'
+        n_eigen = 4
+        #Note - there will be 2 x N_eigen projectors due to spin dilution
+        projs = sch.boundary_Distillation_Eigenvectors(q, xcut_1, n_eigen, ov=ov)
 
     q1 = tuple(q)
 
     #Measure Bias and correlation in the level-0 config
     print("Measuring first level configs")
 
-    # corr0 = [None] * max_length
-
-    # for n in np.arange(n1):
-    #     #Discard some in between
-    #     q1= sim.evolve_f(q1, 50)
-
-    #     e_l, e_r, f_propogator = sch.factorized_Propogator_Proj(q1, xcut_1, xcut_2,
-    #                                                                     projs, ov)
-    #     factorized_corr0, c = sch.measure_Factorized_Pion_Correlator(q1, f_propogator, xcut_1, xcut_2, 
-    #                                                                 bw, p=p)
-        
-    #     if n == 0:
-    #         for t in np.arange(bw, max_length):
-    #             corr0[t] = tr.zeros((batch_size, n1, tr.numel(c[t][:,0])), dtype=tr.complex64)
-    #             corr0[t][:,n,:] = tr.transpose(c[t],0,1)  
-    #     else:
-    #         for t in np.arange(bw, max_length):
-    #             corr0[t][:,n,:] = tr.transpose(c[t],0,1)
-
-
-
-    # #Average over all batches and configurations measured
-    # c_avg0 = tr.zeros(max_length)
-    # c_err0 = tr.zeros(max_length)
-    # for x in np.arange(bw, len(corr0)):
-    #     c_avg0[x] = tr.real(tr.mean(corr0[x]))
-    #     c_err0[x] = tr.std(tr.real(corr0[x]))/np.sqrt(tr.numel(corr0[x])-1)
-    
-
     #Measure the level-0 config using true and factorized propogator
-    e_l, e_r, f_propogator = sch.factorized_Propogator_Proj(q1, xcut_1, xcut_2,
-                                                                        projs, ov)
-    factorized_corr0, corr0 = sch.measure_Factorized_Pion_Correlator(q1, f_propogator, xcut_1, xcut_2, 
-                                                                    bw, p=p)
+    tensor_l, tensor_r = sch.factorized_Propagator(q, xcut_1, xcut_2, projs, ov=ov)
+
     
+    contraction  = tr.einsum('bijy, bjix -> byx', tensor_l, tensor_r)
+    
+
+    factorized_corr0, corr0 = sch.measure_Factorized_Pion_Correlator(q, contraction, xcut_1, xcut_2, 
+                                                                        bw, p=p, ov=ov)
+
 
     #Measure the correlator and its error
 
     max_length = int((L)/2)
 
-    #Take statistics on each configuration in the batch individually
+    #Take statistics on each configuration in the batch individually and as a whole
+    c_config_avg0 = tr.zeros(batch_size, len(corr0))
+
     c_avg0 = tr.zeros(len(corr0))
     c_err0 = tr.zeros(len(corr0))
 
+    fc_config_avg0 = tr.zeros(batch_size, len(factorized_corr0))
+
+    fc_avg0 = tr.zeros(len(corr0))
+    fc_err0 = tr.zeros(len(corr0))
+
+    bias = tr.zeros(len(corr0))
+    bias_err = tr.zeros(len(corr0))
+
+
 
     for x in np.arange(bw, max_length):
-        config_avg = tr.real(tr.mean(corr0[x], dim=0))
-        c_avg0[x] = tr.mean(config_avg)
-        c_err0[x] = tr.std(config_avg)/np.sqrt(tr.numel(config_avg)-1)
-        # c_avg0[x] = tr.real(tr.mean(corr0[x], dim=(0,1)))
-        # c_err0[x] = tr.std(tr.real(corr0[x]), dim=(0,1))/np.sqrt(tr.numel(corr0[x])-1)
+        #average by config
+        c_config_avg0[:, x] = tr.real(tr.mean(corr0[x], dim=0))
+        fc_config_avg0[:, x] = tr.real(tr.mean(factorized_corr0[x], dim=0))
+
+        #And take global averages
+        c_avg0[x] = tr.mean(c_config_avg0[:,x])
+        c_err0[x] = tr.std(c_config_avg0[:,x]) / np.sqrt(batch_size -1)
+        fc_avg0[x] = tr.mean(fc_config_avg0[:,x])
+        fc_err0[x] = tr.std(fc_config_avg0[:,x]) / np.sqrt(batch_size-1)
+
+        bias[x] = c_avg0[x] - fc_avg0[x]
+        bias_err[x] = tr.std(c_config_avg0[:,x] - fc_config_avg0[:,x]) / np.sqrt(batch_size -1)
 
 
     #Measure the correlator and its error
 
     #Take a true correlator measurement on the unstitched two level configs
+    #TODO: May use this later
     c_avg1 = tr.zeros(batch_size, n1, len(corr0))
     
 
     print("Beginning 2-level integration")
+
+        #Create collection of local measures
+    tensor_l_ensemble = tr.zeros(batch_size, n1, *tensor_l.shape[1:], dtype=tr.complex64)
+    tensor_r_ensemble = tr.zeros(batch_size, n1, *tensor_r.shape[1:], dtype=tr.complex64)
+
     for m in np.arange(n1):
         #2nd level integration
-        q = lvl2_sim.second_Level_Evolve(q, 100, xcut_1, xcut_2, bw)
+        q = lvl2_sim.second_Level_Evolve(q, 50, xcut_1, xcut_2, bw)
+
+        tensor_l_ensemble[:,m,:,:,:], tensor_r_ensemble[:,m,:,:,:] = sch.factorized_Propagator(
+             q,xcut_1,xcut_2, projs, ov) 
+        
+        contraction  = tr.einsum('bijy, bjix -> byx', tensor_l_ensemble[:,m,:,:,:],
+                                  tensor_r_ensemble[:,m,:,:,:])
 
         #Take true correlator measurement
-        factorized_corr1, c1 = sch.measure_Factorized_Pion_Correlator(q, f_propogator, xcut_1, xcut_2, 
+        factorized_corr1, c1 = sch.measure_Factorized_Pion_Correlator(q, contraction, xcut_1, xcut_2, 
                                                                     bw, p=p)
+
         for x in np.arange(bw, max_length):
             c_avg1[:,m, x] = tr.real(tr.mean(c1[x], dim=0))
-
-        #Construct projectors here if not fixed
-        if dynamic_projectors == True:
-            projs = sch.complement_Deflation_Eigenvectors(q, xcut_1, N_vec, ov=ov)
-            if m == 0:
-                projs_ensemble = tr.zeros((batch_size, n1, N_vec+1, tr.numel(projs[0,0,:])), dtype=tr.complex64)
-                projs_ensemble[:,m,:,:] = projs.clone()
-            else:
-                projs_ensemble[:,m,:,:] = projs.clone()
                 
-
-        if m == 0:
-            bulk_product, s1_inv = sch.measure_Factorized_Subdomain_Inverses(q, xcut_1, ov)
-            
-            bulk_ensemble = tr.zeros((batch_size, n1, tr.numel(bulk_product[0,:,0]), tr.numel(bulk_product[0,0,:])), dtype=tr.complex64)
-            s1_ensemble = tr.zeros((batch_size, n1, tr.numel(s1_inv[0,:,0]), tr.numel(s1_inv[0,0,:])), dtype=tr.complex64)
-
-            bulk_ensemble[:, m, :,:] = bulk_product.clone()
-            s1_ensemble[:,m,:,:] = s1_inv.clone()
-            
-        else:
-            bulk_ensemble[:,m,:,:], s1_ensemble[:,m,:,:] = sch.measure_Factorized_Subdomain_Inverses(q, xcut_1, ov)
         print(m)
 
-    #Empty list which will contain tensors of variable size based on time separation
-    factorized_corr = [None]* (max_length)
+    
+    print("Averaging Ensemble")
+
+    #Average over the local measurements
+    two_lvl_tensor_l = tr.mean(tensor_l_ensemble, dim=1)
+    two_lvl_tensor_r = tr.mean(tensor_r_ensemble, dim=1)
+
+    #Consolidate
+    contraction =  tr.einsum('bijy, bjix -> byx', two_lvl_tensor_l, two_lvl_tensor_r)
+
+    factorized_corr, corr = sch.measure_Factorized_Pion_Correlator(q, contraction, xcut_1, xcut_2, 
+                                                                        bw, p=p, ov=ov)
+
+    #Average over batch and measurements
+    fc_avg1 = tr.zeros(len(factorized_corr))
+    fc_err1 = tr.zeros(len(factorized_corr))
+
+    for x in tr.arange(bw, len(factorized_corr)):
+        fc_corr_avg = tr.real(tr.mean(factorized_corr[x], dim=0))
+        fc_avg1[x] = tr.real(tr.mean(fc_corr_avg))
+        fc_err1[x] = tr.std(tr.real(fc_corr_avg))/np.sqrt(tr.numel(fc_corr_avg)-1)
+
+
+    #Bias correction
+    corrected_fc_avg1 = fc_avg1 + bias
+    corrected_fc_err1 = tr.sqrt(tr.square(fc_err1) + tr.square(bias_err))
+
+    # for m in np.arange(n1):
+    #     #2nd level integration
+    #     q = lvl2_sim.second_Level_Evolve(q, 100, xcut_1, xcut_2, bw)
+
+    #     #Take true correlator measurement
+    #     factorized_corr1, c1 = sch.measure_Factorized_Pion_Correlator(q, f_propogator, xcut_1, xcut_2, 
+    #                                                                 bw, p=p)
+    #     for x in np.arange(bw, max_length):
+    #         c_avg1[:,m, x] = tr.real(tr.mean(c1[x], dim=0))
+
+    #     #Construct projectors here if not fixed
+    #     if dynamic_projectors == True:
+    #         projs = sch.complement_Deflation_Eigenvectors(q, xcut_1, N_vec, ov=ov)
+    #         if m == 0:
+    #             projs_ensemble = tr.zeros((batch_size, n1, N_vec+1, tr.numel(projs[0,0,:])), dtype=tr.complex64)
+    #             projs_ensemble[:,m,:,:] = projs.clone()
+    #         else:
+    #             projs_ensemble[:,m,:,:] = projs.clone()
+                
+
+    #     if m == 0:
+    #         bulk_product, s1_inv = sch.measure_Factorized_Subdomain_Inverses(q, xcut_1, ov)
+            
+    #         bulk_ensemble = tr.zeros((batch_size, n1, tr.numel(bulk_product[0,:,0]), tr.numel(bulk_product[0,0,:])), dtype=tr.complex64)
+    #         s1_ensemble = tr.zeros((batch_size, n1, tr.numel(s1_inv[0,:,0]), tr.numel(s1_inv[0,0,:])), dtype=tr.complex64)
+
+    #         bulk_ensemble[:, m, :,:] = bulk_product.clone()
+    #         s1_ensemble[:,m,:,:] = s1_inv.clone()
+            
+    #     else:
+    #         bulk_ensemble[:,m,:,:], s1_ensemble[:,m,:,:] = sch.measure_Factorized_Subdomain_Inverses(q, xcut_1, ov)
+    #     print(m)
+
+    # #Empty list which will contain tensors of variable size based on time separation
+    # factorized_corr = [None]* (max_length)
 
 
     
-    print("Measuring Ensembles")    
-    #Combine for n1^2 measurements
-    for m1 in np.arange(n1):
+    # print("Measuring Ensembles")    
+    # #Combine for n1^2 measurements
+    # for m1 in np.arange(n1):
 
 
-        for m2 in np.arange(n1):
-            #Make measurement
-            if dynamic_projectors == True:
-                ens_fc = sch.measure_Two_Lvl_Factorized_Pion_Correlator(bulk_ensemble[:,m1, :,:], s1_ensemble[:,m2,:,:], 
-                                                                        xcut_1, projs_ensemble[:,m2,:,:], bw, ov, p)
-            else:
-                ens_fc = sch.measure_Two_Lvl_Factorized_Pion_Correlator(bulk_ensemble[:,m1, :,:], s1_ensemble[:,m2,:,:], 
-                                                                        xcut_1, projs, bw, ov, p)
+    #     for m2 in np.arange(n1):
+    #         #Make measurement
+    #         if dynamic_projectors == True:
+    #             ens_fc = sch.measure_Two_Lvl_Factorized_Pion_Correlator(bulk_ensemble[:,m1, :,:], s1_ensemble[:,m2,:,:], 
+    #                                                                     xcut_1, projs_ensemble[:,m2,:,:], bw, ov, p)
+    #         else:
+    #             ens_fc = sch.measure_Two_Lvl_Factorized_Pion_Correlator(bulk_ensemble[:,m1, :,:], s1_ensemble[:,m2,:,:], 
+    #                                                                     xcut_1, projs, bw, ov, p)
             
-            #store measurement
-            if m1 == 0 and m2 == 0:
-                for t in np.arange(bw, max_length):
-                    factorized_corr[t] = tr.zeros((batch_size, n1,n1, tr.numel(ens_fc[t][:,0])), dtype=tr.complex64)
-                    factorized_corr[t][:,m1,m2,:] = tr.transpose(ens_fc[t],0,1)  
-            else:
-                for t in np.arange(bw, max_length):
-                    factorized_corr[t][:,m1,m2, :] = tr.transpose(ens_fc[t],0,1)
-        print(m1)
+    #         #store measurement
+    #         if m1 == 0 and m2 == 0:
+    #             for t in np.arange(bw, max_length):
+    #                 factorized_corr[t] = tr.zeros((batch_size, n1,n1, tr.numel(ens_fc[t][:,0])), dtype=tr.complex64)
+    #                 factorized_corr[t][:,m1,m2,:] = tr.transpose(ens_fc[t],0,1)  
+    #         else:
+    #             for t in np.arange(bw, max_length):
+    #                 factorized_corr[t][:,m1,m2, :] = tr.transpose(ens_fc[t],0,1)
+    #     print(m1)
 
-    global_fc_avg = tr.zeros(len(factorized_corr))
-    global_fc_err = tr.zeros(len(factorized_corr))
+    # global_fc_avg = tr.zeros(len(factorized_corr))
+    # global_fc_err = tr.zeros(len(factorized_corr))
 
-    for x in np.arange(bw, len(factorized_corr)):
-        fc_config_avg = tr.real(tr.mean(factorized_corr[x], dim=(1,2,3)))
-        global_fc_avg[x] = tr.mean(fc_config_avg)
-        global_fc_err[x] = tr.std(fc_config_avg) / np.sqrt(tr.numel(fc_config_avg) - 1)
-        # global_fc_avg[x] = tr.real(tr.mean(factorized_corr[x], dim=(0,1,2,3)))
-        # global_fc_err[x] = tr.std(tr.real(factorized_corr[x]), dim=(0,1,2,3))/np.sqrt(tr.numel(factorized_corr[x])-1)
-
-
-    #Bias measurement
-
-    fc_avg = tr.zeros(batch_size, len(factorized_corr))
-    fc_err = tr.zeros(batch_size, len(factorized_corr))
-    fc_splicing_bias = tr.zeros(batch_size, n1, len(factorized_corr))
-
-    fc_splicing_bias_avg = tr.zeros(len(factorized_corr))
-    fc_splicing_bias_err = tr.zeros(len(factorized_corr))
-
-    print("Measuring Bias") 
-    for x in np.arange(bw, len(factorized_corr)):
-        factorized_corr[x] = mult *factorized_corr[x]
-
-        fc_avg[:,x] = tr.real(tr.mean(factorized_corr[x], dim=(1,2,3)))
-        fc_err[:,x] = tr.std(tr.real(factorized_corr[x]), dim=(1,2,3))/np.sqrt(tr.numel(factorized_corr[x][0,:,:,:])-1)
+    # for x in np.arange(bw, len(factorized_corr)):
+    #     fc_config_avg = tr.real(tr.mean(factorized_corr[x], dim=(1,2,3)))
+    #     global_fc_avg[x] = tr.mean(fc_config_avg)
+    #     global_fc_err[x] = tr.std(fc_config_avg) / np.sqrt(tr.numel(fc_config_avg) - 1)
+    #     # global_fc_avg[x] = tr.real(tr.mean(factorized_corr[x], dim=(0,1,2,3)))
+    #     # global_fc_err[x] = tr.std(tr.real(factorized_corr[x]), dim=(0,1,2,3))/np.sqrt(tr.numel(factorized_corr[x])-1)
 
 
-        #Measure splicing bias
-        for m1 in np.arange(n1):
-            #unspliced_avg = tr.real(tr.mean(factorized_corr[x][:, m1,m1,:], dim=1))
-            #unspliced_err = tr.std(tr.real(factorized_corr[x][:, m1,m1,:]), dim=1)/np.sqrt(tr.numel(factorized_corr[x][0,0,0,:])-1)
-            if m1 ==0:
-                spliced_measurements = tr.cat((tr.flatten(factorized_corr[x][:,m1,m1+1:,:],start_dim=1),
-                                          tr.flatten(factorized_corr[x][:,m1+1:,m1,:],start_dim=1)), dim=1)
-            elif m1 == n1-1:
-                spliced_measurements = tr.cat((tr.flatten(factorized_corr[x][:,m1,0:m1,:],start_dim=1),
-                                          tr.flatten(factorized_corr[x][:,0:m1,m1,:],start_dim=1)), dim=1)
-            else:
-                spliced_measurements = tr.cat((tr.flatten(factorized_corr[x][:,m1,0:m1,:],start_dim=1),
-                                          tr.flatten(factorized_corr[x][:,m1,m1+1:,:],start_dim=1),
-                                          tr.flatten(factorized_corr[x][:,0:m1,m1,:],start_dim=1),
-                                          tr.flatten(factorized_corr[x][:,m1+1:,m1,:],start_dim=1)),dim=1)
+    # #Bias measurement
+
+    # fc_avg = tr.zeros(batch_size, len(factorized_corr))
+    # fc_err = tr.zeros(batch_size, len(factorized_corr))
+    # fc_splicing_bias = tr.zeros(batch_size, n1, len(factorized_corr))
+
+    # fc_splicing_bias_avg = tr.zeros(len(factorized_corr))
+    # fc_splicing_bias_err = tr.zeros(len(factorized_corr))
+
+    # print("Measuring Bias") 
+    # for x in np.arange(bw, len(factorized_corr)):
+    #     factorized_corr[x] = mult *factorized_corr[x]
+
+    #     fc_avg[:,x] = tr.real(tr.mean(factorized_corr[x], dim=(1,2,3)))
+    #     fc_err[:,x] = tr.std(tr.real(factorized_corr[x]), dim=(1,2,3))/np.sqrt(tr.numel(factorized_corr[x][0,:,:,:])-1)
+
+
+    #     #Measure splicing bias
+    #     for m1 in np.arange(n1):
+    #         #unspliced_avg = tr.real(tr.mean(factorized_corr[x][:, m1,m1,:], dim=1))
+    #         #unspliced_err = tr.std(tr.real(factorized_corr[x][:, m1,m1,:]), dim=1)/np.sqrt(tr.numel(factorized_corr[x][0,0,0,:])-1)
+    #         if m1 ==0:
+    #             spliced_measurements = tr.cat((tr.flatten(factorized_corr[x][:,m1,m1+1:,:],start_dim=1),
+    #                                       tr.flatten(factorized_corr[x][:,m1+1:,m1,:],start_dim=1)), dim=1)
+    #         elif m1 == n1-1:
+    #             spliced_measurements = tr.cat((tr.flatten(factorized_corr[x][:,m1,0:m1,:],start_dim=1),
+    #                                       tr.flatten(factorized_corr[x][:,0:m1,m1,:],start_dim=1)), dim=1)
+    #         else:
+    #             spliced_measurements = tr.cat((tr.flatten(factorized_corr[x][:,m1,0:m1,:],start_dim=1),
+    #                                       tr.flatten(factorized_corr[x][:,m1,m1+1:,:],start_dim=1),
+    #                                       tr.flatten(factorized_corr[x][:,0:m1,m1,:],start_dim=1),
+    #                                       tr.flatten(factorized_corr[x][:,m1+1:,m1,:],start_dim=1)),dim=1)
  
-            spliced_avg = tr.real(tr.mean(spliced_measurements, dim=1))
+    #         spliced_avg = tr.real(tr.mean(spliced_measurements, dim=1))
 
-            #corr_level_bias = corr1[x][:, m1, :] - spliced_avg.unsqueeze(1).repeat(1, tr.numel(corr1[x][:, m1, :]))
+    #         #corr_level_bias = corr1[x][:, m1, :] - spliced_avg.unsqueeze(1).repeat(1, tr.numel(corr1[x][:, m1, :]))
 
-            fc_splicing_bias[:, m1, x] = c_avg1[:,m1, x] - spliced_avg
+    #         fc_splicing_bias[:, m1, x] = c_avg1[:,m1, x] - spliced_avg
 
         
-        #Average the spliced bias measurement
-        fc_splicing_bias_avg[x] = tr.real(tr.mean(fc_splicing_bias[:,:,x]))
-        fc_splicing_bias_err[x] = tr.std(tr.real(fc_splicing_bias[:,:,x]))/np.sqrt(tr.numel(fc_splicing_bias[:,:,x])-1)
+    #     #Average the spliced bias measurement
+    #     fc_splicing_bias_avg[x] = tr.real(tr.mean(fc_splicing_bias[:,:,x]))
+    #     fc_splicing_bias_err[x] = tr.std(tr.real(fc_splicing_bias[:,:,x]))/np.sqrt(tr.numel(fc_splicing_bias[:,:,x])-1)
 
-    #Adjust the global fc measurement by the bias
+    # #Adjust the global fc measurement by the bias
 
-    adj_fc_avg = tr.zeros(len(factorized_corr))
-    adj_fc_err = tr.zeros(len(factorized_corr))
+    # adj_fc_avg = tr.zeros(len(factorized_corr))
+    # adj_fc_err = tr.zeros(len(factorized_corr))
 
-    for x in np.arange(bw, len(factorized_corr)):
-        adj_fc_avg[x] = global_fc_avg[x] + fc_splicing_bias_avg[x]
-        adj_fc_err[x] = np.sqrt(global_fc_err[x]**2 + fc_splicing_bias_err[x]**2)
-        #adj_fc_err[x] = global_fc_err[x]
+    # for x in np.arange(bw, len(factorized_corr)):
+    #     adj_fc_avg[x] = global_fc_avg[x] + fc_splicing_bias_avg[x]
+    #     adj_fc_err[x] = np.sqrt(global_fc_err[x]**2 + fc_splicing_bias_err[x]**2)
+    #     #adj_fc_err[x] = global_fc_err[x]
 
     
     #Save data
-    data_write = tr.stack((tr.arange(1, int(L/2)+1), c_avg0, c_err0, global_fc_avg, global_fc_err, fc_splicing_bias_avg, fc_splicing_bias_err), dim = 0).numpy()
-
+    data_write = tr.stack((tr.arange(1, int(L/2)+1), c_avg0, c_err0,
+                            fc_avg0, fc_err0, fc_avg1, fc_err1, bias, bias_err, corrected_fc_avg1, corrected_fc_err1), dim=0).numpy()
     np.savetxt('2_level_factorized_data.csv', data_write, delimiter=',')
     
     #Plot Data
@@ -2188,10 +2385,7 @@ def two_Level_Quenched_Pion_Mass():
     fig, (ax, ax1, ax2) = plt.subplots(3,1, sharex=True, constrained_layout=True)
     ax.set_yscale('log', nonpositive='clip')
     ax1.set_yscale('log', nonpositive='clip')
-    ax2.set_yscale('log', nonpositive = 'clip')
-    ax.sharey(ax1)
-    ax2.set_ylabel('StN')
-    ax.set_title(title1)
+    ax2.set_yscale('log', nonpositive='clip')
 
  
 
@@ -2202,45 +2396,57 @@ def two_Level_Quenched_Pion_Mass():
     print(popt)
     print(pcov)
 
-    popt2, pcov2 = sp.optimize.curve_fit(f_pi_decay, np.arange(bw+3, len(factorized_corr)-3)+1, tr.abs(adj_fc_avg[bw+3:-3]), sigma = tr.abs(adj_fc_err[bw+3:-3]))
+    popt2, pcov2 = sp.optimize.curve_fit(f_pi_decay, np.arange(bw+3, len(factorized_corr)-3)+1, tr.abs(corrected_fc_avg1[bw+3:-3]), sigma = tr.abs(corrected_fc_err1[bw+3:-3]))
     print("Second level fit")
     print(popt2)
     print(pcov2)    
 
 
-    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(c_avg0[bw:]), c_err0[bw:], ls='', marker='.', label="First level measurement",
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(c_avg0[bw:]), c_err0[bw:], ls='', marker='.', label="True Measurement",
                 fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
-    ax1.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(fc_splicing_bias_avg[bw:]), fc_splicing_bias_err[bw:], ls='', marker='.', label="2-lvl Bias Correction",
+    ax.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(fc_avg0[bw:]), fc_err0[bw:], ls='', marker='.', label="Factorized Measurement",
+                fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
+    
+    ax1.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(bias[bw:]), bias_err[bw:], ls='', marker='.', label="Bias Correction",
                  fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
-    ax1.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(adj_fc_avg[bw:]), adj_fc_err[bw:], ls='', marker='.', label="Second level Measurement",
+    ax1.errorbar(tr.arange(bw+1, int(L/2)+1), tr.abs(corrected_fc_avg1[bw:]), corrected_fc_err1[bw:], ls='', marker='.', label="Two-Level Measurement",
                  fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
 
-    ax.plot(np.linspace(bw+1, len(factorized_corr), 100), f_pi_decay(np.linspace(bw+1, len(factorized_corr), 100), *popt), label="First level fit")
-    ax1.plot(np.linspace(bw+1, len(factorized_corr), 100), f_pi_decay(np.linspace(bw+1, len(factorized_corr), 100), *popt2), label="Second Level fit")
+    ax.plot(np.linspace(bw+1, len(factorized_corr), 100), f_pi_decay(np.linspace(bw+1, len(factorized_corr), 100), *popt), label="True fit")
+    ax1.plot(np.linspace(bw+1, len(factorized_corr), 100), f_pi_decay(np.linspace(bw+1, len(factorized_corr), 100), *popt2), label="Two level fit")
 
-    ax2.plot(tr.arange(bw+1, int(L/2)+1), tr.abs(c_avg0[bw:])/c_err0[bw:], label="First level measurement")
-    ax2.plot(tr.arange(bw+1, int(L/2)+1), tr.abs(fc_splicing_bias_avg[bw:])/fc_splicing_bias_err[bw:] , label="Bias Correction")
-    ax2.plot(tr.arange(bw+1, int(L/2)+1), tr.abs(adj_fc_avg[bw:])/adj_fc_err[bw:], label="Second level measurement")
-    ax.legend(loc="upper left",bbox_to_anchor=(1.02, 1),borderaxespad=0)
-    ax1.legend(loc="upper left",bbox_to_anchor=(1.02, 1),borderaxespad=0)
-    ax2.legend(loc="upper left",bbox_to_anchor=(1.02, 1),borderaxespad=0)
+    ax2.plot(tr.arange(bw+1, int(L/2)+1), tr.abs(c_avg0[bw:])/c_err0[bw:], label="1-level")
+    ax2.plot(tr.arange(bw+1, int(L/2)+1), tr.abs(corrected_fc_avg1[bw:])/corrected_fc_err1[bw:], label="2-level w/ Correction")
+    #ax2.plot(tr.arange(bw+1, int(L/2)+1-bw), tr.abs(instream_bias[bw:-bw])/instream_bias_err[bw:-bw] , label="Stream Bias")
+    ax2.plot(tr.arange(bw+1, int(L/2)+1), tr.abs(bias[bw:])/bias_err[bw:] , label="Bias")
 
+    ax.legend(
+    loc="upper left",bbox_to_anchor=(1.02, 1),borderaxespad=0)       
+    ax1.legend(
+    loc="upper left",bbox_to_anchor=(1.02, 1),borderaxespad=0)
+    ax2.legend(
+    loc="upper left",bbox_to_anchor=(1.02, 1),borderaxespad=0)
+
+    plt.suptitle(title1)
+    ax.set_title(r"Level One Measurements $n_0=$" + str(batch_size))
+    ax1.set_title(r"Level Two Measurements $n_1=$" + str(n1) )
+    ax.set_ylabel('Magnitude')
+    ax1.set_ylabel('Magnitude')
+    #ax.set_xlabel(r'$|x_0 - y_0|$', fontsize=20)
+
+    ax2.set_ylabel('StN')
+    #ax2.grid(True, axis='y', ls='--')
     ax.grid(which='major', linestyle='--', alpha=0.6)
     ax1.grid(which='major', linestyle='--', alpha=0.6)
     ax2.grid(which='major', linestyle='--', alpha=0.6)
-
-    ax.set_ylabel('Magnitude')
-    ax1.set_ylabel('Magnitude')
-    ax2.set_ylabel('StN')
-
-    
+    #ax2.grid(which='minor', linestyle=':', alpha=0.3)
     ax2.set_xlabel(r'$|x_0 - y_0|$')
 
     plt.savefig(
     "figure.pdf",
     bbox_inches="tight"
     )
-
+        
     plt.show()
 
 
@@ -2535,8 +2741,8 @@ def main():
 
     #Factorized measurement
     #test_Factorized_2pt_Measurement()
-    test_Pion_Factorized_Measurement()
-    #two_Level_Stream_Pion_Bias()
+    #test_Pion_Factorized_Measurement()
+    two_Level_Pion_Bias_Correction()
     #two_Level_Quenched_Pion_Mass()
     
 
