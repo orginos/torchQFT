@@ -913,16 +913,117 @@ def autograd_pi_plus_mass():
     plt.show()
     
 
+#Computing autocorrelation time
+#TODO: Needs work
+def autocorr_time():
+
+
+    batch_size= 1
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= 0.1*lam
+    L = 48
+    L2 = 16
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    u = sch.hotStart()
+
+    #Quenched theory
+    q = (u,)
+
+    im2 = i.minnorm2(sch.force,sch.evolveQ,10, 2.0)
+    sim = h.hmc(sch, im2, False)
+
+    #Typical equilibration
+    q = sim.evolve_f(q, 500)
+
+    #Start with one-level integrator
+    nm = 2000
+    measures = np.zeros(nm)
+
+    for n in np.arange(nm):
+        #Take one step and measure
+        q= sim.evolve_f(q, 5)
+
+        u = q[0]
+
+        #Plaquette autocorrelation measurement
+        #Average plaquette
+        # pl = u[:,0,:,:]*tr.roll(u[:,1,:,:], shifts=-1, dims=1) \
+        #     * tr.conj(tr.roll(u[:,0,:,:], shifts=-1, dims=2))*tr.conj(u[:,1,:,:])
+        
+        # measures[n] = tr.mean(tr.real(pl)).numpy()
+
+        #Pion correlator autocorrelation measurement
+        d = sch.diracOperator(q[0])
+        d_inv = tr.linalg.inv(d.to_dense())
+
+        cl = sch.exact_Pion_Correlator(d_inv, (0,), 0)
+
+        measures[n] = tr.mean(tr.sum(cl[:, 4:10], dim=1)).item()
+
+        if (n % 100 == 0):
+            print(n) 
+
+
+    x = np.asarray(measures)
+    N = len(x)
+
+    #Autocorrelation measurement options
+    window = 10
+    max_lag = None
+
+    # subtract mean
+    x = x - np.mean(x)
+
+    # variance
+    var = np.var(x)
+
+
+    # max lag
+    if max_lag is None:
+        max_lag = N // 2
+
+    # autocorrelation function
+    autocorr = np.zeros(max_lag)
+    for t in range(max_lag):
+        autocorr[t] = np.sum(x[:N - t] * x[t:]) / (N - t)
+
+    autocorr /= var  # normalize so rho(0) = 1
+
+    # integrated autocorrelation time with windowing
+    tau_int = 0.5
+    for t in range(1, max_lag):
+        if autocorr[t] <= 0:
+            break
+
+        tau_int += autocorr[t]
+
+        # self-consistent window condition
+        if t > window * tau_int:
+            break
+
+    print("Autocorr time: "+str(tau_int))
+
+    plt.figure()
+    plt.plot(autocorr[:100], marker='o')  # plot first 100 lags
+    plt.xlabel("Lag")
+    plt.ylabel("Autocorrelation ρ(t)")
+    plt.title("Autocorrelation Function")
+    plt.grid()
+    plt.show()
+
+
 #Fit function for pion triplet
 #TODO: N_T is hardcoded- way to pass in fitting process?
 def f_pi_triplet(x, m, A):
-    N_T = 48 
+    N_T = 48
     return A* (np.exp(-m *x) + np.exp(-(N_T - x)*m))
 
 #Fit for analytical pion mass as a function of quark mass and coupling to fit critical mas
 def f_analytical_pi_triplet(x, mc):
     #Coupling
-    lam = 1.0/np.sqrt(4.0)
+    lam = 1.0/np.sqrt(10.0)
     return 2.066 * lam * np.power(np.abs((x - mc*lam)/lam), 2.0/3.0)
 
 
@@ -930,16 +1031,50 @@ def f_analytical_pi_triplet(x, mc):
 def f_FV_Mass(L, m_inf, A):
     return m_inf + A*(np.sqrt(m_inf)/np.sqrt(L))*np.exp(-m_inf*L)
 
+#Takes 2 pt correlator data and returns jacknifed measurement. Specifies the fitting window
+def jackknife_Correlator_Fit(c, left_end, right_end):
+    n_cfg, nt = c.shape
+
+    c_sum = tr.sum(c, dim=0)
+
+    masses = []
+
+    #Compute error of the jackknife measurements
+    c_mean = tr.mean(c, dim=0)
+    d_c = c - c_mean
+
+    #Covariance matrix
+    cov = (d_c.T @ d_c) / (n_cfg - 1)
+
+    err = tr.sqrt(tr.diag(cov))
+
+    for k in range(n_cfg):
+        #One Jackknife sample
+        c_jk = (c_sum - c[k,:]) / (n_cfg - 1)
+
+        popt, pcov = sp.optimize.curve_fit(f_pi_triplet, 
+                    np.arange(left_end,right_end), tr.abs(c_jk[left_end:right_end]), sigma = tr.abs(err[left_end:right_end]), absolute_sigma=True)
+        masses.append(popt[0])
+        #print(popt[1])
+
+    masses = np.array(masses)
+    mass_mean = np.mean(masses)
+    #Jackknife error
+    mass_err = np.sqrt((n_cfg-1)*(1/n_cfg)*np.sum((masses - mass_mean)**2))
+
+    return mass_mean, mass_err
+
+
 
 #Effective mass curve looks OK to eye test- run a fit on the curve to estimate mass
 #TODO: Needs updating in statistics
 def quenched_Pion_Triplet_Fit():
     #Measurement process -given function for correlator of pi plus
-    batch_size=100
+    batch_size=50
     #lam =np.sqrt(1.0/0.970)
     lam = np.sqrt(1.0/4.0)
     #Below is bare mass... Need critical mass offset for analytical comparison
-    mass= 0.0*lam
+    mass= 0.00*lam
     L = 48
     L2 = 16
     pn = 0.0
@@ -955,7 +1090,7 @@ def quenched_Pion_Triplet_Fit():
 
     #Tune integrator to desired step size
     im2 = i.minnorm2(sch.force,sch.evolveQ,10, 2.0)
-    sim = h.hmc(sch, im2, True)
+    sim = h.hmc(sch, im2, False)
     
     #Equilibration
     q = sim.evolve_f(q, 500)
@@ -979,6 +1114,20 @@ def quenched_Pion_Triplet_Fit():
             c= tr.cat((c, cl), 0)
         print(n)
 
+    #Fit the effective mass curve
+    left_end = int(L/2) - 4
+    right_end = int(L/2) + 4
+
+
+    #Jackknife estimation process
+    mpi, mpi_err = jackknife_Correlator_Fit(c, left_end, right_end)
+    print("Mass: "+str(mpi))
+    print("Error: "+str(mpi_err))
+
+
+
+    #TODO: Save measurements differently   
+
     #Average over all batches and configurations measured
     c_avg = tr.mean(c, dim=0)
     c_err = (tr.std(c, dim=0)/np.sqrt(tr.numel(c[:,0]) - 1))
@@ -989,12 +1138,11 @@ def quenched_Pion_Triplet_Fit():
     #TODO: Write more descriptive datafile name
     df.to_csv("output.csv", index = False)
 
-    #Fit the effective mass curve
-    left_end = int(L/2) - 4
-    right_end = int(L/2) + 4
+    #Fit for the outfront constant, not as important
     popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(left_end, right_end), tr.abs(c_avg[left_end:right_end]), sigma = tr.abs(c_err[left_end:right_end]))
-    print(popt)
-    print(pcov)
+    # print(popt)
+    # print(np.sqrt(pcov[0,0]))
+    #print(pcov)
 
     m_eff = np.log(c_avg[:L-1]/c_avg[1:]) 
 
@@ -1006,7 +1154,7 @@ def quenched_Pion_Triplet_Fit():
     ax1.set_yscale('log', nonpositive='clip')
 
     #Plot the fit
-    ax1.plot(np.linspace(0, L, 500), f_pi_triplet(np.linspace(0, L, 500), popt[0], popt[1]))
+    ax1.plot(np.linspace(0, L, 500), f_pi_triplet(np.linspace(0, L, 500), mpi, popt[1]))
 
 
     ax1.errorbar(np.arange(0, L), tr.abs(c_avg), tr.abs(c_err), ls="", marker=".")
@@ -1021,7 +1169,7 @@ def quenched_Pion_Mass_Stability_Check():
     L=48
     L2=16
     batch_size=10 
-    lam =np.sqrt(1.0/4.0)
+    lam =np.sqrt(1.0/10.0)
     mass= 0.0*lam
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
@@ -1082,12 +1230,12 @@ def compute_Quenched_Critical_Mass():
     #Measurement process -given function for correlator of pi plus
     batch_size=50
     #lam =np.sqrt(1.0/0.970)
-    lam = np.sqrt(1.0/4.0)
+    lam = np.sqrt(1.0/10.0)
     #Below is bare mass... Need critical mass offset for analytical comparison
     L = 48
     L2 = 16
 
-    mq_list = tr.linspace(-0.1*lam, 0.1*lam, 10, dtype=tr.complex64)
+    mq_list = tr.linspace(0.2*lam, 0.4*lam, 10, dtype=tr.complex64)
     m_pi_list = tr.zeros_like(mq_list, dtype=tr.float32)
     m_pi_err_list = tr.zeros_like(mq_list, dtype=tr.float32)
     x=0
@@ -1112,7 +1260,7 @@ def compute_Quenched_Critical_Mass():
 
 
         #Measurement process- nm measurements on batches
-        nm = 20
+        nm = 10
         for n in np.arange(nm):
             #Discard some in between
             q= sim.evolve_f(q, 50)
@@ -1133,12 +1281,19 @@ def compute_Quenched_Critical_Mass():
         c_err = (tr.std(c, dim=0)/np.sqrt(tr.numel(c[:,0]) - 1))
 
         #Fit the effective mass curve
-        left_end = int(L/2) - int(L/4)
-        right_end = int(L/2) + int(L/4)
-        popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(left_end, right_end), tr.abs(c_avg[left_end:right_end]), sigma = tr.abs(c_err[left_end:right_end]))
-        m_pi_list[x] = float(popt[0].item())
-        m_pi_err_list[x] = float(np.sqrt(pcov[0,0]).item())
-        #print(m_pi_list[x], m_pi_err_list[x])
+        left_end = int(L/2) - 4
+        right_end = int(L/2) + 4
+
+        #Jackknife estimation process
+        mass, mass_err = jackknife_Correlator_Fit(c, left_end, right_end)
+        m_pi_list[x] = mass
+        m_pi_err_list[x] = mass_err
+
+
+        # popt, pcov = sp.optimize.curve_fit(f_pi_triplet, np.arange(left_end, right_end), tr.abs(c_avg[left_end:right_end]), sigma = tr.abs(c_err[left_end:right_end]))
+        # m_pi_list[x] = float(popt[0].item())
+        # m_pi_err_list[x] = float(np.sqrt(pcov[0,0]).item())
+        # #print(m_pi_list[x], m_pi_err_list[x])
         print(m_pi_list[x])
         print(x)
         x += 1
@@ -1147,13 +1302,17 @@ def compute_Quenched_Critical_Mass():
     print(tr.real(mq_list))
     print(m_pi_list)
     print(m_pi_err_list)
-    popt, pcov = sp.optimize.curve_fit(f_analytical_pi_triplet, tr.real(mq_list).numpy(), m_pi_list.numpy(), sigma= m_pi_err_list.numpy())
-    print(popt)
-    print(pcov)
 
     df = pd.DataFrame([mq_list.detach().numpy(), m_pi_list.detach().numpy(), m_pi_err_list.detach().numpy()])
     #TODO: Write more descriptive datafile name
     df.to_csv("output.csv", index = False)
+
+    popt, pcov = sp.optimize.curve_fit(f_analytical_pi_triplet, tr.real(mq_list).numpy(), m_pi_list.numpy(), sigma= m_pi_err_list.numpy(),
+                                       absolute_sigma=True, p0=(-0.3))
+    print(popt)
+    print(pcov)
+
+    
 
     fig, ax = plt.subplots(1,1)
     ax.set_yscale('log', nonpositive='clip')
@@ -1296,38 +1455,31 @@ def FV_Fitting():
     plt.show()
 
 
+#Simple log fit
+def general_Fit(x, A, x_c):
+    lam = 1.0/np.sqrt(4.0)
+    return A * lam * np.power(np.abs((x - x_c*lam)/lam), 2.0/3.0)
+    #return 2.066 *lam * np.power(np.abs((x - x_c*lam)/lam), A)
+
 #Fitting critical mass of Wilson-Dirac operator for given coupling
 def fit_critical_mass():
-    #Match filename
-    df = pd.read_csv('beta=10_L=10_m0_scan.csv')
-    #Coupling
-    lam = 1.0/np.sqrt(10.0)
 
-    fig, ax1 = plt.subplots(1,1)
-    
-    #Fit to lowest mo values
-    df_fit = df.loc[(df['m/g'] <= 0.3) & (df['m/g']>=0.2)]
-    #df_fit = df
-    popt, pcov = sp.optimize.curve_fit(f_analytical_pi_triplet, df_fit['m0'], df_fit['mpi exp'], sigma = df_fit['std_dev'], p0=(-0.12))
+    data = np.loadtxt('output.csv', delimiter=',', dtype=complex)
+
+
+    popt, pcov = sp.optimize.curve_fit(general_Fit, np.real(data[1]), np.real(data[2]), sigma= np.real(data[3]), absolute_sigma=True, p0= (2.066, -0.3))
+    #popt, pcov = sp.optimize.curve_fit(general_Fit, np.real(data[1]), np.real(data[2]), sigma= np.real(data[3]), absolute_sigma=True, p0= (0.67, -0.3))
+
     print(popt)
     print(pcov)
-    
-
-    #Plot the fit
-    ax1.plot((np.linspace(popt, 0.3, 1000000) -popt)/lam, f_analytical_pi_triplet(np.linspace(popt, 0.3, 1000000), *popt)/lam, linewidth=3.0)
-    ax1.set_xlim(0.1, 0.5)
 
 
+    fig, ax = plt.subplots(1,1)
+    ax.set_yscale('log', nonpositive='clip')
 
-    ax1.errorbar((df['m0']-popt)/lam, df['mpi exp']/lam, df['std_dev']/lam, ls="", marker=".", markersize=10.0, elinewidth=2.0)
+    ax.errorbar(np.real(data[1]), np.real(data[2]), np.real(data[3]))
 
-    ax1.set_ylabel(r'$m_\pi/e$', fontsize=32)
-    ax1.set_xlabel(r'$m_q/e$', fontsize=32)
-
-    ax1.yaxis.set_tick_params(labelsize=28)
-    ax1.xaxis.set_tick_params(labelsize=28)
-
-    ax1.set_title(r'300 Configurations, $\beta =10$', fontsize=32)
+    ax.plot(np.real(data[1]), general_Fit(np.real(data[1]), *popt))
 
     plt.show()
 
@@ -1472,8 +1624,10 @@ def main():
     #autograd_dynamical_action()
     #pi_plus_comparison()
     #autograd_pi_plus_mass()
-    #quenched_Pion_Triplet_Fit()
-    compute_Quenched_Critical_Mass()
+
+    #autocorr_time()
+    quenched_Pion_Triplet_Fit()
+    #compute_Quenched_Critical_Mass()
     #quenched_Pion_Mass_Stability_Check()
     #pion_triplet_fit()
     #import_fit()

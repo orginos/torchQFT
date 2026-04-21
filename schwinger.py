@@ -323,7 +323,15 @@ class schwinger():
             #spacetime lattice index of source
             sx = self.V[1]*ts
 
+            # nx_vals = tr.arange(self.V[1])
+
             for nt in np.arange(ts_max):
+
+                # n = 2*(self.V[1]*nt + nx) #vector of points on the timeslice nt
+
+                # n_idx = n[:, None] + tr.arange(2,)
+
+
                 c = tr.zeros(self.Bs)
                 for nx in np.arange(self.V[1]):
                     #Must be doubled to account for dirac space!
@@ -1623,4 +1631,23 @@ class schwinger():
 
         return tr.where(batch_mask, s_d, tr.zeros_like(s_d)).to_sparse()
 
-            
+
+ # 3 point measurement development #################################################
+
+    def pion_Three_Point(self, q, pi=0.0, pf=0.0):
+        #"Three" momentum - scalar in 1+1D
+        q = pf - pi
+
+        #May want to reduce the number of time sources
+        for t_src in np.arange(self.V[0]):
+
+            for t_snk in np.arange(t_src+1, self.V[0]):
+
+                for t_ins in np.arange(t_src + 1, t_snk):
+                    4
+
+
+
+
+
+
