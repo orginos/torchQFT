@@ -19,6 +19,8 @@ import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend for saving figures
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import time
@@ -27,7 +29,7 @@ from pathlib import Path
 
 # Import project modules
 from control_variates import (
-    C2pt, symmetry_checker, control_model_F_symmetry_checker, ControlModel, ControlModel_g,
+    C2pt, symmetry_checker, vector_equivariance_checker, control_model_F_symmetry_checker, ControlModel, ControlModel_g, ControlModel_g_equiv,
     model_factory as original_model_factory, activation_factory
 )
 from fast_functionals_v2 import fast_model_factory_v2 as fast_model_factory, ALL_MODELS_V2 as ALL_MODELS
@@ -35,6 +37,22 @@ import phi4 as qft
 import integrators as integ
 import update as upd
 import tqdm
+
+
+def parse_torch_dtype(dtype_name):
+    """Map CLI dtype names to torch dtypes."""
+    dtype_map = {
+        'float32': tr.float32,
+        'single': tr.float32,
+        'float': tr.float32,
+        'float64': tr.float64,
+        'double': tr.float64,
+    }
+    try:
+        return dtype_map[dtype_name.lower()]
+    except KeyError as exc:
+        valid = ', '.join(sorted(dtype_map))
+        raise ValueError(f"Unknown dtype '{dtype_name}'. Choose one of: {valid}") from exc
 
 
 class TrainingLogger:
@@ -165,19 +183,21 @@ def evaluate_model(CM, phi, hmc, Nskip, logger, n_colors_eval=None):
     x.requires_grad = True  # Required for grad_and_lapl in CM.F()
 
     # Note: Cannot use no_grad() because CM.Delta calls CM.F which uses autograd
-    var_O = CM.computeO(x).var().cpu().detach().numpy().item()
+    O = CM.computeO(x)
+    F_cv = CM.F(x, n_colors=n_colors_eval)
+    var_O = O.var().cpu().detach().numpy().item()
 
     # Use n_colors_eval for more accurate evaluation if specified
-    delta = CM.Delta(x, n_colors=n_colors_eval)
+    delta = O - F_cv
     var_impO = delta.var().cpu().detach().numpy().item()
     gain = var_O / var_impO if var_impO > 0 else float('inf')
 
     muO = CM.muO.cpu().detach().numpy().item()
-    mean_O = CM.computeO(x).mean().cpu().detach().numpy().item()
+    mean_O = O.mean().cpu().detach().numpy().item()
     mean_impO = delta.mean().cpu().detach().numpy().item()
 
-    tF = CM.F(x, n_colors=n_colors_eval).cpu().detach().numpy()
-    tO = CM.computeO(x).cpu().detach().numpy()
+    tF = F_cv.cpu().detach().numpy()
+    tO = O.cpu().detach().numpy()
     corr = np.corrcoef(tF, tO)[0, 1]
 
     results = {
@@ -290,6 +310,46 @@ def create_training_figure(all_phases, tau, output_path):
     plt.close(fig)
 
 
+def _capture_printed_output(check_fn, *check_args, **check_kwargs):
+    """Capture stdout from legacy symmetry check helpers."""
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        check_fn(*check_args, **check_kwargs)
+    return buffer.getvalue().strip()
+
+
+def _log_captured_block(logger, title, output):
+    """Log a titled block of captured output line by line."""
+    logger.log(title)
+    if not output:
+        logger.log("  No output.")
+        return
+    for line in output.splitlines():
+        logger.log(line)
+
+
+def log_symmetry_check(phi, CM, funct, logger, n_colors_eval=None):
+    """Run and log both base-model and F symmetry checks whenever possible."""
+    x = phi.clone()
+    x.requires_grad = True
+
+    try:
+        if getattr(funct, 'equivariant_vector_g', False):
+            model_output = _capture_printed_output(vector_equivariance_checker, x, funct)
+            _log_captured_block(logger, "Base Model Equivariance:", model_output)
+        else:
+            model_output = _capture_printed_output(symmetry_checker, x, funct)
+            _log_captured_block(logger, "Base Model Symmetries:", model_output)
+    except Exception as exc:
+        logger.log(f"Base Model Symmetries/Equivariance: unavailable ({exc})")
+
+    try:
+        f_output = _capture_printed_output(control_model_F_symmetry_checker, x, CM, n_colors=n_colors_eval)
+        _log_captured_block(logger, "F Symmetries:", f_output)
+    except Exception as exc:
+        logger.log(f"F Symmetries: unavailable ({exc})")
+
+
 def train_single_tau(tau, args, logger, device):
     """
     Train control variate for a single tau value with modern training strategy.
@@ -308,9 +368,10 @@ def train_single_tau(tau, args, logger, device):
     L = args.L
     lat = [L, L]
     batch_size = args.batch_size
+    torch_dtype = parse_torch_dtype(args.dtype)
 
     # Create QFT system (only once)
-    sg = qft.phi4(lat, args.g, args.m, batch_size=batch_size, device=device)
+    sg = qft.phi4(lat, args.g, args.m, batch_size=batch_size, device=device, dtype=torch_dtype)
 
     # Initialize field configuration
     phi = sg.hotStart()
@@ -331,7 +392,7 @@ def train_single_tau(tau, args, logger, device):
     funct = fast_model_factory(args.model, L=L, y=tau,
                                conv_layers=args.conv_l,
                                activation=args.activ,
-                               dtype=tr.float,
+                               dtype=torch_dtype,
                                n_colors=args.n_colors,
                                probing_method=args.probing_method)
     funct.to(device)
@@ -340,7 +401,9 @@ def train_single_tau(tau, args, logger, device):
     muO = C2pt(phi, tau).mean().cpu().numpy().item()
 
     # Create control model
-    if args.model in ('Gfunc1', 'Gfunc_sym', 'gscalar', 'gscalar_sym', 'LinScalar'):
+    if getattr(funct, 'equivariant_vector_g', False):
+        CM = ControlModel_g_equiv(muO=muO, force=sg.force, g_net=funct)
+    elif args.model in ('Gfunc1', 'Gfunc_sym', 'gscalar', 'gscalar_sym', 'LinScalar'):
         CM = ControlModel_g(muO=muO, force=sg.force, g_net=funct)
     else:
         CM = ControlModel(muO=muO, force=sg.force, c2p_net=funct)
@@ -420,12 +483,7 @@ def train_single_tau(tau, args, logger, device):
 
     # Symmetry check
     logger.log(f"\n--- Symmetry Check ---")
-    x = phi.clone()
-    x.requires_grad = True
-    if args.model in ('Gfunc1', 'Gfunc_sym', 'gscalar', 'gscalar_sym', 'LinScalar'):
-        control_model_F_symmetry_checker(x, CM)
-    else:
-        symmetry_checker(x, funct)
+    log_symmetry_check(phi, CM, funct, logger, n_colors_eval=n_colors_eval)
 
     # =========================================================================
     # Save outputs
@@ -499,6 +557,9 @@ def main():
                        help='Number of probes for evaluation (default: L*L for exact)')
     parser.add_argument('-probing_method', default='coloring', choices=['coloring', 'sites'],
                        help='Probing method: coloring (graph coloring) or sites (random site sampling)')
+    parser.add_argument('-dtype', default='float64',
+                       choices=['float32', 'single', 'float', 'float64', 'double'],
+                       help='Floating point precision for phi4, networks, and control models')
 
     # Training parameters
     parser.add_argument('-epochs', type=int, default=1000,
@@ -544,6 +605,8 @@ def main():
     else:
         device = tr.device(args.device)
 
+    torch_dtype = parse_torch_dtype(args.dtype)
+
     # Determine tau range
     if args.tau is not None:
         tau_min = args.tau
@@ -569,6 +632,7 @@ def main():
     logger.log(f"Configuration:")
     logger.log(f"  L={args.L}, g={args.g}, m={args.m}")
     logger.log(f"  Model: {args.model}, Activation: {args.activ}")
+    logger.log(f"  Dtype: {torch_dtype}")
     logger.log(f"  Conv layers: {args.conv_l}")
     logger.log(f"  Base epochs: {args.epochs}, Max LR: {args.lr}")
     logger.log(f"  Base batch size: {args.batch_size}")

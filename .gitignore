@@ -5,3 +5,11 @@ trained_models_test/
 *.pdf
 CV_Funct3T/
 CV_test_new/
+CV_Funct3T_probing/
+CV_Unified_Funct3T/
+CV_Unified_gscalar/
+CV_g_trans_double/
+CV_g_trans_min/
+CV_g_trans_rot/
+CV_normal/
+notas/

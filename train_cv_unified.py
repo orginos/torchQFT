@@ -27,7 +27,7 @@ from pathlib import Path
 
 # Import project modules
 from control_variates import (
-    C2pt, symmetry_checker, ControlModel,
+    C2pt, symmetry_checker, ControlModel, gscalar_Unified,
     model_factory as original_model_factory, activation_factory
 )
 from fast_functionals_v2 import fast_model_factory_v2 as fast_model_factory, ALL_MODELS_V2 as ALL_MODELS, Funct3T_Unified, Funct3TUnified
@@ -35,6 +35,22 @@ import phi4 as qft
 import integrators as integ
 import update as upd
 import tqdm
+
+
+def parse_torch_dtype(dtype_name):
+    """Map CLI dtype names to torch dtypes."""
+    dtype_map = {
+        'float32': tr.float32,
+        'single': tr.float32,
+        'float': tr.float32,
+        'float64': tr.float64,
+        'double': tr.float64,
+    }
+    try:
+        return dtype_map[dtype_name.lower()]
+    except KeyError as exc:
+        valid = ', '.join(sorted(dtype_map))
+        raise ValueError(f"Unknown dtype '{dtype_name}'. Choose one of: {valid}") from exc
 
 
 class UnifiedControlModel(nn.Module):
@@ -65,8 +81,9 @@ class UnifiedControlModel(nn.Module):
         self.tau_max = L // 2 + 1  # tau in [0, L/2]
 
         # Store muO and varO for each tau as buffers
-        muO_tensor = tr.zeros(self.tau_max)
-        varO_tensor = tr.zeros(self.tau_max)
+        dtype = next(c2p_net.parameters()).dtype
+        muO_tensor = tr.zeros(self.tau_max, dtype=dtype)
+        varO_tensor = tr.zeros(self.tau_max, dtype=dtype)
         for tau in range(self.tau_max):
             if tau in muO_dict:
                 muO_tensor[tau] = muO_dict[tau]
@@ -158,6 +175,107 @@ class UnifiedControlModel(nn.Module):
         return total_loss / n_tau
 
 
+class UnifiedControlModel_g(nn.Module):
+    """Unified first-order control variate model based on tau-conditioned g(phi)."""
+
+    def __init__(self, muO_dict, varO_dict, force, g_net, L, symmetry_mode='full'):
+        super().__init__()
+        self.g_net = g_net
+        self.force = force
+        self.L = L
+        self.tau_max = L // 2 + 1
+        self.symmetry_mode = symmetry_mode
+
+        dtype = next(g_net.parameters()).dtype
+        muO_tensor = tr.zeros(self.tau_max, dtype=dtype)
+        varO_tensor = tr.zeros(self.tau_max, dtype=dtype)
+        for tau in range(self.tau_max):
+            if tau in muO_dict:
+                muO_tensor[tau] = muO_dict[tau]
+            if tau in varO_dict:
+                varO_tensor[tau] = varO_dict[tau]
+        self.register_buffer('muO_all', muO_tensor)
+        self.register_buffer('varO_all', varO_tensor)
+
+    def _fold_tau(self, tau):
+        if tau > self.L // 2:
+            return self.L - tau
+        return tau
+
+    def computeO(self, x, tau):
+        return C2pt(x, tau)
+
+    def g(self, x, tau):
+        tau_folded = self._fold_tau(tau)
+        self.g_net.set_tau(tau_folded)
+        return self.g_net(x, tau=tau_folded)
+
+    def F_no(self, x, tau, n_colors=None):
+        tau_folded = self._fold_tau(tau)
+        Lx, Ly = x.shape[1], x.shape[2]
+        force_x = self.force(x)
+        f = tr.zeros(x.shape[0], device=x.device, dtype=x.dtype)
+
+        for i in range(Lx):
+            for j in range(Ly):
+                x_shift = tr.roll(x, shifts=(-i, -j), dims=(1, 2))
+                g_shift = self.g(x_shift, tau_folded)
+                dg = tr.autograd.grad(
+                    outputs=g_shift.sum(),
+                    inputs=x,
+                    create_graph=True,
+                    retain_graph=True
+                )[0]
+                f += dg[:, i, j] + g_shift * force_x[:, i, j]
+
+        return f
+
+    def F(self, x, tau, n_colors=None):
+        tau_folded = self._fold_tau(tau)
+        if self.symmetry_mode == 'parity_translation':
+            transforms = [x, -x]
+        else:
+            transforms = []
+            for sign in (1.0, -1.0):
+                sx = sign * x
+                for k in range(4):
+                    rx = tr.rot90(sx, k=k, dims=(1, 2))
+                    transforms.append(rx)
+                    transforms.append(tr.flip(rx, dims=(1,)))
+
+        total = tr.zeros(x.shape[0], device=x.device, dtype=x.dtype)
+        for tx in transforms:
+            total = total + self.F_no(tx, tau_folded, n_colors=n_colors)
+        return total / len(transforms)
+
+    def Delta(self, x, tau, n_colors=None):
+        return self.computeO(x, tau) - self.F(x, tau, n_colors=n_colors)
+
+    def var_delta(self, x, tau, n_colors=None):
+        tau_folded = self._fold_tau(tau)
+        muO = self.muO_all[tau_folded]
+        delta = self.Delta(x, tau, n_colors=n_colors)
+        return ((delta - muO) ** 2).mean()
+
+    def multi_tau_loss(self, x, tau_list, n_colors=None, loss_type='log'):
+        total_loss = 0.0
+        n_tau = len(tau_list)
+
+        for tau in tau_list:
+            tau_folded = self._fold_tau(tau)
+            var_delta = self.var_delta(x, tau, n_colors=n_colors)
+
+            if loss_type == 'log':
+                total_loss = total_loss + tr.log(var_delta + 1e-10)
+            elif loss_type == 'gain':
+                var_O = self.varO_all[tau_folded]
+                total_loss = total_loss + var_delta / (var_O + 1e-10)
+            else:
+                total_loss = total_loss + var_delta
+
+        return total_loss / n_tau
+
+
 def train_unified(UCM, phi, hmc, optimizer, scheduler, epochs, Nskip, tau_list,
                   accumulation_steps, logger, phase_name, grad_clip=1.0, n_colors=None,
                   loss_type='log'):
@@ -226,36 +344,118 @@ def evaluate_unified(UCM, phi, hmc, Nskip, tau_list, logger, n_colors_eval=None)
     x.requires_grad = True
 
     for tau in tau_list:
-        var_O = UCM.computeO(x, tau).var().cpu().detach().numpy().item()
+        O_tau = UCM.computeO(x, tau)
+        F_tau = UCM.F(x, tau, n_colors=n_colors_eval)
         delta = UCM.Delta(x, tau, n_colors=n_colors_eval)
+
+        var_O = O_tau.var().cpu().detach().numpy().item()
+        var_F = F_tau.var().cpu().detach().numpy().item()
         var_impO = delta.var().cpu().detach().numpy().item()
         gain = var_O / var_impO if var_impO > 0 else float('inf')
 
         muO = UCM.muO_all[tau].cpu().detach().numpy().item()
-        mean_O = UCM.computeO(x, tau).mean().cpu().detach().numpy().item()
+        mean_O = O_tau.mean().cpu().detach().numpy().item()
+        mean_F = F_tau.mean().cpu().detach().numpy().item()
         mean_impO = delta.mean().cpu().detach().numpy().item()
 
-        tF = UCM.F(x, tau, n_colors=n_colors_eval).cpu().detach().numpy()
-        tO = UCM.computeO(x, tau).cpu().detach().numpy()
+        # Error bars estimated from the evaluation batch.
+        batch_size = max(int(O_tau.shape[0]), 1)
+        stderr_denom = np.sqrt(max(batch_size - 1, 1))
+        stderr_O = O_tau.std().cpu().detach().numpy().item() / stderr_denom
+        stderr_F = F_tau.std().cpu().detach().numpy().item() / stderr_denom
+        stderr_impO = delta.std().cpu().detach().numpy().item() / stderr_denom
+
+        tF = F_tau.cpu().detach().numpy()
+        tO = O_tau.cpu().detach().numpy()
         corr = np.corrcoef(tF, tO)[0, 1]
 
         results[tau] = {
             'variance_O': var_O,
+            'variance_F': var_F,
             'variance_impO': var_impO,
             'variance_gain': gain,
             'muO': muO,
             'mean_O': mean_O,
+            'mean_F': mean_F,
             'mean_impO': mean_impO,
+            'stderr_O': stderr_O,
+            'stderr_F': stderr_F,
+            'stderr_impO': stderr_impO,
             'correlation_F_O': corr
         }
 
-        logger.log(f"  tau={tau}: Gain={gain:.2f}x, Corr={corr:.4f}, Var(O)={var_O:.6f}")
+        logger.log(
+            f"  tau={tau}: O={mean_O:.6e} +/- {stderr_O:.2e}, "
+            f"F={mean_F:.6e} +/- {stderr_F:.2e}, "
+            f"Imp={mean_impO:.6e} +/- {stderr_impO:.2e}"
+        )
+        logger.log(
+            f"           Var(O)={var_O:.6e}, Var(F)={var_F:.6e}, "
+            f"Var(Imp)={var_impO:.6e}, Gain={gain:.2f}x, Corr={corr:.4f}"
+        )
 
     # Average gain across all tau
     avg_gain = np.mean([r['variance_gain'] for r in results.values()])
     logger.log(f"  Average gain across all tau: {avg_gain:.2f}x")
 
     return results, phi
+
+
+def create_c2pt_evaluation_figure(eval_results, output_path):
+    """Save C2pt/CV summary plots versus tau."""
+    taus = sorted(eval_results.keys())
+    mean_O = [eval_results[tau]['mean_O'] for tau in taus]
+    err_O = [eval_results[tau]['stderr_O'] for tau in taus]
+    mean_impO = [eval_results[tau]['mean_impO'] for tau in taus]
+    err_impO = [eval_results[tau]['stderr_impO'] for tau in taus]
+    var_O = [eval_results[tau]['variance_O'] for tau in taus]
+    var_impO = [eval_results[tau]['variance_impO'] for tau in taus]
+    snr_O = [
+        abs(eval_results[tau]['mean_O']) / eval_results[tau]['stderr_O']
+        if eval_results[tau]['stderr_O'] > 0 else np.nan
+        for tau in taus
+    ]
+    snr_impO = [
+        abs(eval_results[tau]['mean_impO']) / eval_results[tau]['stderr_impO']
+        if eval_results[tau]['stderr_impO'] > 0 else np.nan
+        for tau in taus
+    ]
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.8))
+
+    ax1 = axes[0]
+    ax1.errorbar(taus, mean_O, yerr=err_O, fmt='o', linestyle='none', label='C2pt original')
+    ax1.errorbar(taus, mean_impO, yerr=err_impO, fmt='s', linestyle='none', label='C2pt improved')
+    ax1.set_xlabel('tau')
+    ax1.set_ylabel('Mean +/- stderr')
+    ax1.set_title('Observable')
+    ax1.set_xticks(taus)
+    ax1.grid(True, alpha=0.3)
+    ax1.legend()
+
+    ax2 = axes[1]
+    ax2.plot(taus, snr_O, 'o', linestyle='none', label='SNR original')
+    ax2.plot(taus, snr_impO, 's', linestyle='none', label='SNR improved')
+    ax2.set_xlabel('tau')
+    ax2.set_ylabel('Signal-to-noise ratio')
+    ax2.set_title('Signal to Noise')
+    ax2.set_xticks(taus)
+    ax2.grid(True, alpha=0.3)
+    ax2.legend()
+
+    ax3 = axes[2]
+    ax3.plot(taus, var_O, 'o', linestyle='none', label='Var(O)')
+    ax3.plot(taus, var_impO, '^', linestyle='none', label='Var(Imp)')
+    ax3.set_xlabel('tau')
+    ax3.set_ylabel('Variance')
+    ax3.set_title('Variances')
+    ax3.set_xticks(taus)
+    ax3.grid(True, alpha=0.3)
+    ax3.legend()
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
 
 
 def create_unified_training_figure(all_phases, tau_list, eval_results, output_path, loss_type='log'):
@@ -387,8 +587,8 @@ def main():
 
     # Model parameters
     parser.add_argument('-model', default='Funct3T_Unified',
-                       choices=['Funct3T_Unified', 'Funct3TUnified'],
-                       help='Model: Funct3T_Unified (FiLM) or Funct3TUnified (concat)')
+                       choices=['Funct3T_Unified', 'Funct3TUnified', 'gscalar_Unified', 'gscalar_PT_Unified'],
+                       help='Model: Funct3T_Unified (FiLM), Funct3TUnified (concat), gscalar_Unified (full sym), or gscalar_PT_Unified (translation+parity)')
     parser.add_argument('-activ', default='gelu', help='Activation function')
     parser.add_argument('-conv_l', type=int, nargs='+', default=[4, 4, 4, 4],
                        help='Convolutional layer widths')
@@ -398,6 +598,9 @@ def main():
                        help='Number of probes for evaluation (default: L*L for exact)')
     parser.add_argument('-probing_method', default='coloring', choices=['coloring', 'sites'],
                        help='Probing method: coloring (graph coloring) or sites (random site sampling)')
+    parser.add_argument('-dtype', default='float64',
+                       choices=['float32', 'single', 'float', 'float64', 'double'],
+                       help='Floating point precision for phi4, networks, and control models')
 
     # Training parameters
     parser.add_argument('-epochs', type=int, default=1000,
@@ -436,6 +639,7 @@ def main():
             device = tr.device('cpu')
     else:
         device = tr.device(args.device)
+    torch_dtype = parse_torch_dtype(args.dtype)
 
     L = args.L
     tau_list = list(range(L // 2 + 1))  # All tau from 0 to L/2
@@ -457,6 +661,7 @@ def main():
     logger.log(f"Configuration:")
     logger.log(f"  L={L}, g={args.g}, m={args.m}")
     logger.log(f"  Model: {args.model}, Activation: {args.activ}")
+    logger.log(f"  Dtype: {torch_dtype}")
     logger.log(f"  Conv layers: {args.conv_l}")
     logger.log(f"  Epochs per phase: {args.epochs}, Max LR: {args.lr}")
     logger.log(f"  Batch size: {args.batch_size}")
@@ -473,7 +678,7 @@ def main():
     # Create QFT system
     lat = [L, L]
     batch_size = args.batch_size
-    sg = qft.phi4(lat, args.g, args.m, batch_size=batch_size, device=device)
+    sg = qft.phi4(lat, args.g, args.m, batch_size=batch_size, device=device, dtype=torch_dtype)
 
     # Initialize field
     phi = sg.hotStart()
@@ -506,12 +711,15 @@ def main():
     activ = activation_factory(args.activ)
     if args.model == 'Funct3T_Unified':
         funct = Funct3T_Unified(L=L, conv_layers=args.conv_l, n_colors=args.n_colors,
-                                dtype=tr.float32, activation=activ,
+                                dtype=torch_dtype, activation=activ,
                                 probing_method=args.probing_method)
-    else:  # Funct3TUnified
+    elif args.model == 'Funct3TUnified':
         funct = Funct3TUnified(L=L, conv_layers=args.conv_l, n_colors=args.n_colors,
-                               dtype=tr.float32, activation=activ,
+                               dtype=torch_dtype, activation=activ,
                                probing_method=args.probing_method)
+    else:  # gscalar_Unified variants
+        funct = gscalar_Unified(L=L, hidden_dim=args.conv_l, dtype=torch_dtype,
+                                activation=activ)
     funct.to(device)
 
     # Count parameters
@@ -519,8 +727,13 @@ def main():
     logger.log(f"Model parameter count: {param_count}")
 
     # Create unified control model
-    UCM = UnifiedControlModel(muO_dict=muO_dict, varO_dict=varO_dict,
-                              force=sg.force, c2p_net=funct, L=L)
+    if args.model in ('gscalar_Unified', 'gscalar_PT_Unified'):
+        UCM = UnifiedControlModel_g(muO_dict=muO_dict, varO_dict=varO_dict,
+                                    force=sg.force, g_net=funct, L=L,
+                                    symmetry_mode='parity_translation' if args.model == 'gscalar_PT_Unified' else 'full')
+    else:
+        UCM = UnifiedControlModel(muO_dict=muO_dict, varO_dict=varO_dict,
+                                  force=sg.force, c2p_net=funct, L=L)
     UCM.to(device)
 
     all_phases = []
@@ -630,6 +843,10 @@ def main():
     fig_path = output_dir / f"{run_name}_training.png"
     create_unified_training_figure(all_phases, tau_list, eval_results, fig_path, loss_type=args.loss_type)
     logger.log(f"Training figure saved: {fig_path}")
+
+    eval_fig_path = output_dir / f"{run_name}_c2pt_eval.png"
+    create_c2pt_evaluation_figure(eval_results, eval_fig_path)
+    logger.log(f"C2pt evaluation figure saved: {eval_fig_path}")
 
     # Save history
     logger.history['results'] = eval_results

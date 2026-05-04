@@ -2578,6 +2578,14 @@ def fast_model_factory_v2(class_name, L, y, conv_layers=[4,4,4,4], activation='g
                                       hidden_dim=conv_layers,
                                       activation=activ, dtype=dtype)
 
+    elif class_name in ('g_trans', 'g_trans_rot', 'g_escnn_c4', 'g_escnn_d4', 'g_scalar_translational'):
+        # First-order local vector-field CNN g_x(phi). g_trans_rot uses explicit
+        # C4 averaging; g_escnn_* uses steerable convolutions from escnn.
+        factory_name = 'g_trans' if class_name == 'g_scalar_translational' else class_name
+        return original_model_factory(factory_name, L=L, y=y,
+                                      conv_layers=conv_layers,
+                                      activation=activ, dtype=dtype)
+
     elif class_name == 'gscalar_sym':
         # Symmetrized first-order scalar MLP g(phi).
         return original_model_factory('gscalar', sym_flag=True, L=L, y=y,
@@ -2609,6 +2617,11 @@ ALL_MODELS_V2 = [
     'Funct3T_Unified',      # Single model for ALL tau (FiLM conditioning)
     'Funct3TUnified',       # Single model for ALL tau (simpler: tau concatenation)
     'gscalar',              # First-order scalar MLP g(phi)
+    'g_trans',              # First-order local CNN vector field g_x(phi)
+    'g_trans_rot',          # First-order local CNN vector field with C4 rotations
+    'g_escnn_c4',           # First-order local vector field with escnn C4 convolutions
+    'g_escnn_d4',           # First-order local vector field with escnn D4 rotations+flips
+    'g_scalar_translational',  # Backward-compatible alias for g_trans
     'gscalar_sym',          # Symmetrized first-order scalar MLP g(phi)
     'LinScalar',            # Backward-compatible alias for gscalar
 ]

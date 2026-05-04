@@ -10,15 +10,18 @@ import update as upd
 
 import matplotlib.pyplot as plt
 
+import os
 import time
 
 print("Torch Version: ",tr.__version__)
 print("Numpy Version: ",np.__version__)
 
-if tr.backends.mps.is_available():
+if tr.cuda.is_available():
+    device = tr.device("cuda")
+elif tr.backends.mps.is_available():
     device = tr.device("mps")
 else:
-    print ("MPS device not found.")
+    print ("CUDA/MPS device not found.")
     device = "cpu"
     
 print("Using divice: ",device)
@@ -50,21 +53,60 @@ def symmetry_checker(x,model):
     print("Flip(2): ",(tr.norm(out-f2out)/tr.norm(out)).item())
 
 
-def control_model_F_symmetry_checker(x, control_model, shift=(2, 3)):
+def vector_equivariance_checker(x, model):
+    """Check equivariance of local vector-field models g(phi)."""
+    out = model(x).detach()
+    denom = tr.norm(out).clamp_min(1.0e-12)
+
+    sx = tr.roll(x, shifts=(2, 3), dims=(1, 2))
+    sout_expected = tr.roll(out, shifts=(2, 3), dims=(1, 2))
+    sout = model(sx).detach()
+
+    r90x = tr.rot90(x, k=1, dims=(1, 2))
+    r90_expected = tr.rot90(out, k=1, dims=(1, 2))
+    r90out = model(r90x).detach()
+
+    r180x = tr.rot90(x, k=2, dims=(1, 2))
+    r180_expected = tr.rot90(out, k=2, dims=(1, 2))
+    r180out = model(r180x).detach()
+
+    f1x = tr.flip(x, dims=[1])
+    f1_expected = tr.flip(out, dims=[1])
+    f1out = model(f1x).detach()
+
+    f2x = tr.flip(x, dims=[2])
+    f2_expected = tr.flip(out, dims=[2])
+    f2out = model(f2x).detach()
+
+    px = -x
+    pout = model(px).detach()
+
+    print("g-Translation equivariance: ", (tr.norm(sout - sout_expected) / denom).item())
+    print("g-Rotation(90) equivariance: ", (tr.norm(r90out - r90_expected) / denom).item())
+    print("g-Rotation(180) equivariance: ", (tr.norm(r180out - r180_expected) / denom).item())
+    print("g-Flip(1) equivariance: ", (tr.norm(f1out - f1_expected) / denom).item())
+    print("g-Flip(2) equivariance: ", (tr.norm(f2out - f2_expected) / denom).item())
+    print("g-Parity oddness: ", (tr.norm(pout + out) / denom).item())
+    print("g-Parity evenness: ", (tr.norm(pout - out) / denom).item())
+
+
+def control_model_F_symmetry_checker(x, control_model, shift=(2, 3), n_colors=None):
     """Check discrete symmetries of the control variate F produced by a control model.
 
     This is meant for first-order control variates where the base network g0 is not
     itself symmetric, but the constructed F should inherit translation invariance.
     """
-    out     = control_model.F(x).detach()
-    sout    = control_model.F(tr.roll(x, shifts=shift, dims=(1, 2))).detach()
-    r90out  = control_model.F(tr.rot90(x, k=1, dims=(1, 2))).detach()
-    r180out = control_model.F(tr.rot90(x, k=2, dims=(1, 2))).detach()
-    f1out   = control_model.F(tr.flip(x, dims=[1])).detach()
-    f2out   = control_model.F(tr.flip(x, dims=[2])).detach()
-    pout    = control_model.F(-x).detach()
+    out     = control_model.F(x, n_colors=n_colors).detach()
+    sout    = control_model.F(tr.roll(x, shifts=shift, dims=(1, 2)), n_colors=n_colors).detach()
+    r90out  = control_model.F(tr.rot90(x, k=1, dims=(1, 2)), n_colors=n_colors).detach()
+    r180out = control_model.F(tr.rot90(x, k=2, dims=(1, 2)), n_colors=n_colors).detach()
+    f1out   = control_model.F(tr.flip(x, dims=[1]), n_colors=n_colors).detach()
+    f2out   = control_model.F(tr.flip(x, dims=[2]), n_colors=n_colors).detach()
+    pout    = control_model.F(-x, n_colors=n_colors).detach()
 
     denom = tr.norm(out).clamp_min(1.0e-12)
+    if n_colors is not None:
+        print("F n_colors: ", n_colors)
     print("F-Parity: ", (tr.norm(out - pout) / denom).item())
     print("F-Translation: ", (tr.norm(out - sout) / denom).item())
     print("F-Rotation(90): ", (tr.norm(out - r90out) / denom).item())
@@ -280,7 +322,7 @@ class Funct3(nn.Module):
         for p in range(self.Npool):           
             for l in conv_layers:
                 #print(k,in_dim,l)
-                layer = nn.Conv2d(in_dim,l, kernel_size=3, stride=1, padding=1, padding_mode='circular')
+                layer = nn.Conv2d(in_dim,l, kernel_size=3, stride=1, padding=1, padding_mode='circular', dtype=self.dtype)
                 initializer(layer.weight)
                 self.net.add_module('lin'+str(k),layer)
                 self.net.add_module('act'+str(k),activation)
@@ -336,7 +378,7 @@ class Funct3no(nn.Module):
         for p in range(self.Npool):           
             for l in conv_layers:
                 #print(k,in_dim,l)
-                layer = nn.Conv2d(in_dim,l, kernel_size=3, stride=1, padding=1, padding_mode='circular')
+                layer = nn.Conv2d(in_dim,l, kernel_size=3, stride=1, padding=1, padding_mode='circular', dtype=self.dtype)
                 initializer(layer.weight)
                 self.net.add_module('lin'+str(k),layer)
                 self.net.add_module('act'+str(k),activation)
@@ -392,7 +434,7 @@ class Funct3Tinv(nn.Module):
         k=0          
         for l in conv_layers:
             #print(k,in_dim,l)
-            layer = nn.Conv2d(in_dim,l, kernel_size=3, stride=1, padding=1, padding_mode='circular')
+            layer = nn.Conv2d(in_dim,l, kernel_size=3, stride=1, padding=1, padding_mode='circular', dtype=self.dtype)
             initializer(layer.weight)
             self.net.add_module('lin'+str(k),layer)
             self.net.add_module('act'+str(k),activation)
@@ -448,7 +490,7 @@ class Funct3T(nn.Module):
         k=0          
         for l in conv_layers:
             #print(k,in_dim,l)
-            layer = nn.Conv2d(in_dim,l, kernel_size=3, stride=1, padding=1, padding_mode='circular')
+            layer = nn.Conv2d(in_dim,l, kernel_size=3, stride=1, padding=1, padding_mode='circular', dtype=self.dtype)
             initializer(layer.weight)
             self.net.add_module('lin'+str(k),layer)
             self.net.add_module('act'+str(k),activation)
@@ -549,6 +591,270 @@ class gscalar(nn.Module):
         return tr.autograd.grad(y, x, tr.ones_like(y), create_graph=True)[0]
 
 
+class g_trans(nn.Module):
+    """Translation-covariant local vector field g_x(phi) from a circular CNN."""
+
+    def __init__(self, L, conv_layers=[4, 4, 4], dtype=tr.float32, y=0, dim=2,
+                 activation=tr.nn.Tanh(), initializer=tr.nn.init.xavier_uniform_):
+        super().__init__()
+
+        self.L = L
+        self.y = y
+        self.dim = dim
+        self.dtype = dtype
+
+        layers = []
+        in_channels = 1
+        for width in conv_layers:
+            layer = nn.Conv2d(
+                in_channels,
+                width,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+                padding_mode='circular',
+                bias=False,
+                dtype=dtype,
+            )
+            initializer(layer.weight)
+            layers.append(layer)
+            layers.append(activation)
+            in_channels = width
+
+        self.trunk = nn.Sequential(*layers)
+        self.local_readout = nn.Conv2d(in_channels, 1, kernel_size=1, bias=False, dtype=dtype)
+        tr.nn.init.zeros_(self.local_readout.weight)
+        self.equivariant_vector_g = True
+
+    def local_vector(self, x):
+        """Unprojected local vector field from the circular CNN."""
+        h = self.trunk(x.unsqueeze(1))
+        return self.local_readout(h).squeeze(1)
+
+    def forward(self, x):
+        """Forward pass: (batch, L, L) -> local vector field (batch, L, L)."""
+        return self.local_vector(x)
+
+    def scalar(self, x):
+        """Optional invariant scalar summary of the vector field."""
+        return self.forward(x).mean(dim=(1, 2))
+
+    def grad(self, x):
+        y = self.scalar(x)
+        return tr.autograd.grad(y, x, tr.ones_like(y), create_graph=True)[0]
+
+
+# Backward-compatible alias for older run configs/checkpoints.
+g_scalar_translational = g_trans
+
+
+class g_trans_rot(g_trans):
+    """Translation- and C4 rotation-equivariant local vector field.
+
+    Circular convolutions give translation equivariance. The group average
+    projects the local vector field onto the C4-rotation equivariant subspace:
+        g(phi) = 1/4 sum_k R^{-k} h(R^k phi), k=0,1,2,3.
+    """
+
+    def forward(self, x):
+        total = tr.zeros_like(x)
+        for k in range(4):
+            x_rot = tr.rot90(x, k=k, dims=(1, 2))
+            g_rot = self.local_vector(x_rot)
+            total = total + tr.rot90(g_rot, k=-k, dims=(1, 2))
+        return total / 4.0
+
+
+class g_escnn_c4(nn.Module):
+    """C4/D4 steerable CNN local vector field using escnn.
+
+    The input and output are scalar fields on the lattice. Hidden layers use
+    regular group representations, so the network is equivariant under the
+    selected lattice point group. Kernel-3 convolutions use explicit circular
+    padding to respect periodic boundary conditions.
+    """
+
+    def __init__(self, L, conv_layers=[4, 4, 4], dtype=tr.float64, y=0, dim=2,
+                 activation=tr.nn.Tanh(), initializer=tr.nn.init.xavier_uniform_,
+                 point_group='c4'):
+        super().__init__()
+
+        try:
+            from escnn import gspaces as escnn_gspaces
+            from escnn import nn as escnn_nn
+            self._configure_escnn_cache()
+        except ImportError as exc:
+            raise ImportError(
+                "g_escnn_c4 requires escnn. Install it with: pip install escnn"
+            ) from exc
+
+        self.L = L
+        self.y = y
+        self.dim = dim
+        self.dtype = dtype
+        self.equivariant_vector_g = True
+        self.escnn_nn = escnn_nn
+        self.point_group = point_group
+
+        if point_group == 'c4':
+            self.r2_act = escnn_gspaces.rot2dOnR2(N=4)
+        elif point_group == 'd4':
+            self.r2_act = escnn_gspaces.flipRot2dOnR2(N=4)
+        else:
+            raise ValueError(f"Unknown point_group={point_group}. Use 'c4' or 'd4'.")
+        self.in_type = escnn_nn.FieldType(self.r2_act, [self.r2_act.trivial_repr])
+
+        class CircularPadR2Conv(escnn_nn.EquivariantModule):
+            """R2Conv with circular padding on the raw tensor."""
+
+            def __init__(self, in_type, out_type, escnn_nn, kernel_size=3, bias=False):
+                super().__init__()
+                self.in_type = in_type
+                self.out_type = out_type
+                self.pad = kernel_size // 2
+                self.escnn_nn = escnn_nn
+                self.conv = escnn_nn.R2Conv(
+                    in_type,
+                    out_type,
+                    kernel_size=kernel_size,
+                    padding=0,
+                    bias=bias,
+                )
+
+            def forward(self, x):
+                tensor = F.pad(x.tensor, (self.pad, self.pad, self.pad, self.pad), mode='circular')
+                x_pad = self.escnn_nn.GeometricTensor(tensor, self.in_type)
+                return self.conv(x_pad)
+
+            def evaluate_output_shape(self, input_shape):
+                return (input_shape[0], self.out_type.size, *input_shape[2:])
+
+        modules = []
+        in_type = self.in_type
+        for width in conv_layers:
+            out_type = escnn_nn.FieldType(self.r2_act, width * [self.r2_act.regular_repr])
+            modules.append(CircularPadR2Conv(in_type, out_type, escnn_nn, kernel_size=3, bias=False))
+            modules.append(escnn_nn.ReLU(out_type, inplace=True))
+            in_type = out_type
+
+        self.out_type = escnn_nn.FieldType(self.r2_act, [self.r2_act.trivial_repr])
+        modules.append(escnn_nn.R2Conv(in_type, self.out_type, kernel_size=1, padding=0, bias=False))
+
+        self.net = escnn_nn.SequentialModule(*modules)
+        self.net.to(dtype=dtype)
+
+    def forward(self, x):
+        """Forward pass: (batch, L, L) -> local scalar field (batch, L, L)."""
+        geo_x = self.escnn_nn.GeometricTensor(x.unsqueeze(1), self.in_type)
+        geo_y = self.net(geo_x)
+        return geo_y.tensor.squeeze(1)
+
+    @staticmethod
+    def _configure_escnn_cache():
+        """Redirect escnn's joblib cache away from read-only site-packages."""
+        cache_dir = os.environ.get('ESCNN_CACHE_DIR', '/tmp/escnn_cache')
+        os.makedirs(cache_dir, exist_ok=True)
+
+        from joblib import Memory
+        import escnn.group as escnn_group
+        import escnn.group._clebsh_gordan as cg
+        import escnn.group.irrep as irrep
+
+        escnn_group.__cache_path__ = cache_dir
+        memory = Memory(cache_dir, verbose=0)
+
+        # These functions are decorated at import time, so rewrap their original
+        # callables with a writable cache location.
+        for module, names in (
+            (cg, ('_clebsh_gordan_tensor', '_find_tensor_decomposition')),
+            (irrep, ('_restrict_irrep',)),
+        ):
+            module.cache = memory
+            for name in names:
+                func = getattr(module, name)
+                original = getattr(func, 'func', func)
+                setattr(module, name, memory.cache(original))
+
+    def scalar(self, x):
+        """Optional invariant scalar summary of the vector field."""
+        return self.forward(x).mean(dim=(1, 2))
+
+    def grad(self, x):
+        y = self.scalar(x)
+        return tr.autograd.grad(y, x, tr.ones_like(y), create_graph=True)[0]
+
+
+class g_escnn_d4(g_escnn_c4):
+    """D4 steerable CNN: translations, 90-degree rotations, and flips."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs['point_group'] = 'd4'
+        super().__init__(*args, **kwargs)
+
+
+class gscalar_Unified(nn.Module):
+    """Unified version of gscalar with tau conditioning.
+
+    Keeps the same flattened-MLP structure as gscalar, but concatenates a
+    learnable tau embedding so one model can serve all tau in [0, L/2].
+    """
+
+    def __init__(self, L, hidden_dim=[4, 4, 4], dtype=tr.float32, y=0, dim=2,
+                 activation=tr.nn.Tanh(), initializer=tr.nn.init.xavier_uniform_,
+                 tau_embed_dim=8):
+        super().__init__()
+
+        self.L = L
+        self.y = y
+        self.dim = dim
+        self.dtype = dtype
+        self.tau_max = L // 2 + 1
+        self.tau_embed_dim = tau_embed_dim
+
+        vol = L * L
+        self.tau_embedding = nn.Embedding(self.tau_max, tau_embed_dim)
+
+        sizes = [vol + tau_embed_dim] + hidden_dim + [1]
+        layers = []
+
+        for i in range(len(sizes) - 1):
+            layer = nn.Linear(sizes[i], sizes[i + 1], bias=False, dtype=dtype)
+            if i < len(sizes) - 2:
+                initializer(layer.weight)
+            else:
+                tr.nn.init.zeros_(layer.weight)
+
+            layers.append(layer)
+            if i < len(sizes) - 2:
+                layers.append(activation)
+
+        self.net = nn.Sequential(*layers)
+
+    def _fold_tau(self, tau):
+        if tau > self.L // 2:
+            return self.L - tau
+        return tau
+
+    def set_tau(self, tau):
+        self.y = self._fold_tau(tau)
+
+    def forward(self, x, tau=None):
+        if tau is None:
+            tau = self.y
+        else:
+            tau = self._fold_tau(tau)
+
+        x_flat = x.reshape(x.shape[0], -1)
+        tau_tensor = tr.full((x.shape[0],), tau, dtype=tr.long, device=x.device)
+        tau_embed = self.tau_embedding(tau_tensor)
+        inp = tr.cat([x_flat, tau_embed], dim=1)
+        return self.net(inp).squeeze(-1)
+
+    def grad(self, x, tau=None):
+        y = self.forward(x, tau=tau)
+        return tr.autograd.grad(y, x, tr.ones_like(y), create_graph=True)[0]
+
+
 class Gfunc1(nn.Module):
     """Scalar g(phi) model with discrete symmetries except translation.
 
@@ -572,7 +878,7 @@ class Gfunc1(nn.Module):
         in_dim = 1
         k = 0
         for l in conv_layers:
-            layer = nn.Conv2d(in_dim, l, kernel_size=3, stride=1, padding=1, padding_mode='circular')
+            layer = nn.Conv2d(in_dim, l, kernel_size=3, stride=1, padding=1, padding_mode='circular', dtype=self.dtype)
             initializer(layer.weight)
             self.trunk.add_module('lin'+str(k), layer)
             self.trunk.add_module('act'+str(k), activation)
@@ -581,7 +887,7 @@ class Gfunc1(nn.Module):
 
         # Local readout (no global pooling): translation covariance is preserved.
         # We pick one anchor site after symmetrization to define scalar g0.
-        self.readout = nn.Conv2d(in_dim, 1, kernel_size=1, stride=1, padding=0)
+        self.readout = nn.Conv2d(in_dim, 1, kernel_size=1, stride=1, padding=0, dtype=self.dtype)
         initializer(self.readout.weight)
         if self.readout.bias is not None:
             nn.init.zeros_(self.readout.bias)
@@ -728,6 +1034,15 @@ class FunctSym(nn.Module):
         return grad,lapl 
 
 
+def _module_dtype_device(module):
+    """Return the dtype/device used by a module's tensors."""
+    for tensor in module.parameters():
+        return tensor.dtype, tensor.device
+    for tensor in module.buffers():
+        return tensor.dtype, tensor.device
+    return tr.get_default_dtype(), tr.device("cpu")
+
+
 class ControlModel(nn.Module):
     def __init__(self,muO=1.0,force=None,c2p_net=None):
         super(ControlModel, self).__init__()
@@ -739,7 +1054,8 @@ class ControlModel(nn.Module):
         
         self.force = force
         self.c2p_net = c2p_net
-        self.muO = nn.Parameter(tr.tensor([muO]),requires_grad=True)
+        dtype, device = _module_dtype_device(c2p_net)
+        self.muO = nn.Parameter(tr.tensor([muO], dtype=dtype, device=device),requires_grad=True)
         
     def computeO(self, x):
         """Connected wall-to-wall correlator.
@@ -813,7 +1129,8 @@ class ControlModel_g(nn.Module):
 
         self.force = force
         self.g_net = g_net
-        self.muO = nn.Parameter(tr.tensor([muO]), requires_grad=True)#activa parameter for minimization
+        dtype, device = _module_dtype_device(g_net)
+        self.muO = nn.Parameter(tr.tensor([muO], dtype=dtype, device=device), requires_grad=True)#activa parameter for minimization
 
     def computeO(self, x):
         """Connected wall-to-wall correlator."""
@@ -892,6 +1209,71 @@ class ControlModel_g(nn.Module):
         return ((self.Delta(x, n_colors=n_colors) - self.muO)**2).mean()
 
 
+class ControlModel_g_equiv(nn.Module):
+    """First-order CV wrapper for equivariant/local vector-field g models.
+
+    This class is intentionally independent from ControlModel_g. It assumes the
+    model itself handles any desired equivariance/symmetry and applies no extra
+    symmetrization.
+    """
+
+    def __init__(self, muO=1.0, force=None, g_net=None):
+        super(ControlModel_g_equiv, self).__init__()
+        self.y = g_net.y
+        if(g_net.dim == 1):
+            self.d = 2
+        else:
+            self.d = 1
+
+        self.force = force
+        self.g_net = g_net
+        dtype, device = _module_dtype_device(g_net)
+        self.muO = nn.Parameter(tr.tensor([muO], dtype=dtype, device=device), requires_grad=True)
+
+    def computeO(self, x):
+        """Connected wall-to-wall correlator."""
+        x0 = tr.mean(x, dim=self.d).squeeze()
+        mean_x0 = tr.mean(x0, dim=0, keepdim=True)
+        x0 = x0 - mean_x0
+        xx = (x0 * tr.roll(x0, dims=1, shifts=-self.y)).mean(dim=1)
+        return xx
+
+    def g_vector(self, x):
+        """Local vector-field output g_x(phi), expected shape (batch, L, L)."""
+        g_vec = self.g_net(x)
+        if g_vec.shape != x.shape:
+            raise ValueError(f"Equivariant g_net must return shape {tuple(x.shape)}, got {tuple(g_vec.shape)}")
+        return g_vec
+
+    def F(self, x, n_colors=None):
+        """First-order CV from a translation-covariant local vector field."""
+        force_x = self.force(x)
+        g_vec = self.g_vector(x)
+
+        n_probes = n_colors if n_colors is not None else 4
+        div_g = tr.zeros(x.shape[0], device=x.device, dtype=x.dtype)
+        for _ in range(n_probes):
+            z = 2 * tr.randint(0, 2, x.shape, device=x.device, dtype=x.dtype) - 1
+            grad_z = tr.autograd.grad(
+                outputs=(g_vec * z).sum(),
+                inputs=x,
+                create_graph=True,
+                retain_graph=True
+            )[0]
+            div_g = div_g + (grad_z * z).sum(dim=(1, 2))
+        div_g = div_g / n_probes
+
+        return div_g + (g_vec * force_x).sum(dim=(1, 2))
+
+    def Delta(self, x, n_colors=None):
+        """Improved estimator Delta = O - F_g."""
+        return self.computeO(x) - self.F(x, n_colors=n_colors)
+
+    def loss(self, x, n_colors=None):
+        """Loss = Var(Delta - muO)."""
+        return ((self.Delta(x, n_colors=n_colors) - self.muO)**2).mean()
+
+
 def train_control_model(CM,phi,learning_rate=1e-3,epochs=100,super_batch=1,update=lambda phi: tr.randn(phi.shape)):
     c=0
     for tt in CM.parameters():
@@ -935,6 +1317,10 @@ def train_control_model(CM,phi,learning_rate=1e-3,epochs=100,super_batch=1,updat
 # Factory Functions
 def activation_factory(name, **kwargs):
     """Factory function to create activation functions dynamically."""
+    class ArcSinh(nn.Module):
+        def forward(self, x):
+            return tr.asinh(x)
+
     activations = {
         "relu": nn.ReLU,
         "leaky_relu": nn.LeakyReLU,
@@ -942,7 +1328,8 @@ def activation_factory(name, **kwargs):
         "tanh": nn.Tanh,
         "gelu": nn.GELU,
         "elu": nn.ELU,
-        "softplus": nn.Softplus
+        "softplus": nn.Softplus,
+        "arcsinh": ArcSinh,
     }
     
     if name not in activations:
@@ -960,6 +1347,11 @@ def model_factory(class_name, sym_flag=False, **kwargs):
         'Funct3no'    : Funct3no,
         'Gfunc1'      : Gfunc1,
         'gscalar'     : gscalar,
+        'g_trans'      : g_trans,
+        'g_trans_rot'  : g_trans_rot,
+        'g_escnn_c4'   : g_escnn_c4,
+        'g_escnn_d4'   : g_escnn_d4,
+        'g_scalar_translational': g_trans,
         'LinScalar'   : gscalar,     # backward-compatible alias
     }
     
@@ -969,7 +1361,7 @@ def model_factory(class_name, sym_flag=False, **kwargs):
     foo=classes[class_name](**kwargs)  # Dynamically pass arguments
     if class_name == 'Gfunc1' and sym_flag:
         return Gfunc_sym(foo)
-    if class_name in ('gscalar', 'LinScalar') and sym_flag:
+    if class_name in ('gscalar', 'g_trans', 'g_trans_rot', 'g_escnn_c4', 'g_escnn_d4', 'g_scalar_translational', 'LinScalar') and sym_flag:
         return gscalar_sym(foo)
     if(sym_flag):
         return FunctSym(F=foo)
