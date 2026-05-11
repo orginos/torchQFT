@@ -1017,7 +1017,7 @@ def autocorr_time():
 #Fit function for pion triplet
 #TODO: N_T is hardcoded- way to pass in fitting process?
 def f_pi_triplet(x, m, A):
-    N_T = 48
+    N_T = 32
     return A* (np.exp(-m *x) + np.exp(-(N_T - x)*m))
 
 #Fit for analytical pion mass as a function of quark mass and coupling to fit critical mas
@@ -1075,8 +1075,8 @@ def quenched_Pion_Triplet_Fit():
     lam = np.sqrt(1.0/4.0)
     #Below is bare mass... Need critical mass offset for analytical comparison
     mass= 0.00*lam
-    L = 48
-    L2 = 16
+    L = 32
+    L2 = 32
     pn = 0.0
     p = 2*np.pi*pn/L2
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
@@ -1607,6 +1607,58 @@ def test_Singlet_Correlator():
     plt.show()
 
 
+#Testing gauge invariance on the pion correlator
+def gauge_invariance_check():
+    batch_size=1
+    #lam =np.sqrt(1.0/0.970)
+    lam = np.sqrt(1.0/4.0)
+    #Below is bare mass... Need critical mass offset for analytical comparison
+    mass= 0.00*lam
+    L = 32
+    L2 = 32
+    pn = 0.0
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+
+    u = sch.hotStart()
+
+    q =(u,)
+
+    #Tune integrator to desired step size
+    im2 = i.minnorm2(sch.force,sch.evolveQ,10, 2.0)
+    sim = h.hmc(sch, im2, False)
+    
+    #Equilibration - not needed but works with and without
+    #q = sim.evolve_f(q, 200)
+
+    u = q[0]
+
+    d_inv = tr.linalg.inv(sch.diracOperator(u).to_dense())
+
+    #Original measurement
+    cl = sch.exact_Pion_Correlator(d_inv, (0,), 0)
+
+    #Generate gauge transformation
+    alpha = tr.normal(0.0, 2*np.pi, [batch_size, L, L2], dtype=tr.float32)
+    omega = tr.exp(1.0j*alpha)
+
+
+    #Apply it
+    u2 = tr.zeros_like(u)
+
+    for mu in [0,1]:
+        omega_right = tr.conj(tr.roll(omega, -1, 1+mu))
+        u2[:, mu, :,:] = omega*u[:, mu, :,:] * omega_right
+
+    #Measure again
+    d_inv2 = tr.linalg.inv(sch.diracOperator(u2).to_dense())
+    cl2 = sch.exact_Pion_Correlator(d_inv2, (0,), 0)
+    #compare
+    assert tr.all(tr.abs(cl - cl2) < 1e-7), "Failed"
+    print("Passes")
+
+
+
 
 def main():
     #dH_eps2()
@@ -1626,7 +1678,7 @@ def main():
     #autograd_pi_plus_mass()
 
     #autocorr_time()
-    quenched_Pion_Triplet_Fit()
+    #quenched_Pion_Triplet_Fit()
     #compute_Quenched_Critical_Mass()
     #quenched_Pion_Mass_Stability_Check()
     #pion_triplet_fit()
@@ -1635,6 +1687,8 @@ def main():
     #FV_Fitting()
     #topological_Charge_Distribution()
     #test_Singlet_Correlator()
+
+    gauge_invariance_check()
     
     #force_speed_test()
 

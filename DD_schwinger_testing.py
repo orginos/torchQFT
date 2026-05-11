@@ -1131,7 +1131,7 @@ def test_Factorized_2pt_Measurement():
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     #Boundary cut timeslices
-    bw=8
+    bw=4
     xcut_1 = int(L/2) - bw
     xcut_2 = L-bw
     ov=bw
@@ -1151,7 +1151,7 @@ def test_Factorized_2pt_Measurement():
     #TODO: Needs work below
     #Lets try some different bases
     
-    if True:
+    if False:
         title1 = 'Full boundary probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
         title2 = 'Full boundary 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ 'p='+ str(p_n)+ \
                 r'$*2\pi/L$, ' + r'$m_\pi L = 5$'
@@ -1169,7 +1169,7 @@ def test_Factorized_2pt_Measurement():
                 projs[:,ct, x] = 1.0
                 ct += 1
 
-    elif False:
+    elif True:
         #Probing half the boundary
         #Need to include a multiplier for using fewer intermediates
         title1 = 'Half boundary probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
@@ -1361,12 +1361,12 @@ def test_Pion_Factorized_Measurement():
     mass= 0.10*lam
     L = 48
     L2 = 16
-    p_n = 1.0
+    p_n = 0.0
     p = p_n*2*np.pi/L2
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     #Boundary cut timeslices
-    bw=8
+    bw=4
     xcut_1 = int(L/2) - bw
     xcut_2 = L-bw
     ov=bw
@@ -1430,8 +1430,8 @@ def test_Pion_Factorized_Measurement():
     elif False:
         #Probing one quarter of the boundary
         #Need to include a multiplier for using fewer intermediates
-        title1 = 'Quarter boundary probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
-        title2 = 'Quarter boundary 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ \
+        title1 = '1/4 boundary probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$' + ', ' + 'boundary width:' +str(bw)
+        title2 = '1/4 boundary 2-pt signal to noise: '+ 'n='+ str(batch_size) +', '+ \
                 r'$m_\pi L = 5$'
         mult = 4.0
         projs = tr.zeros(batch_size, L2, 2*L*L2, dtype=tr.complex64)
@@ -1463,13 +1463,13 @@ def test_Pion_Factorized_Measurement():
     elif True:
         #Distillation technique
         #Seek distillation eigenvectors for a given batch of configurations
-        title1 = 'Laplacian probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$'
+        title1 = 'Laplacian probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$' + ', ' + 'boundary width:' +str(bw)
         title2 = 'Laplacian Pion signal to noise: '+ 'n='+ str(batch_size) +', '+ \
                 r'$m_\pi L = 5$'
         mult=1.0
-        n_eigen = 8
+        n_eigen = 4
         #Note - there will be 2 x N_eigen projectors due to spin dilution
-        projs = sch.boundary_Distillation_Eigenvectors(q, xcut_1, n_eigen, ov=ov)
+        projs = sch.boundary_Distillation_Eigenvectors(q, xcut_1, n_eigen, ov=ov, boost_n=0)
 
 
 
@@ -1544,7 +1544,7 @@ def test_Pion_Factorized_Measurement():
                 fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
     ax.plot(tr.arange(bw+1, int(L/2)+1), bias_err[bw:], label="Bias Error")
 
-    ax.legend(loc='lower right',bbox_to_anchor=(1.02, 1),borderaxespad=0)
+    ax.legend(loc='lower right',bbox_to_anchor=(1.3, 1),borderaxespad=0)
     ax.grid(which='major', linestyle='--', alpha=0.6)
     ax.set_title(title1)
     ax.set_ylabel('Magnitude')
@@ -1591,9 +1591,109 @@ def test_Pion_Factorized_Measurement():
 
     
 
+def test_Pion_Factorized_Measurement_BW_Comparison():
+    batch_size= 100
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= 0.10*lam
+    L = 48
+    L2 = 16
+    p_n = 1.0
+    p = p_n*2*np.pi/L2
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
-def two_Level_Pion_Bias_Correction():
-    batch_size= 20
+    #Compare the same level-0 batch with different boundary widths
+    bw_list = [1, 2, 4, 8]
+
+    u = sch.hotStart()
+
+    q = (u,)
+
+    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
+    sim = h.hmc(sch, im2, False)
+
+    #Typical equilibration
+    q = sim.evolve_f(q, 200)
+
+
+    fig, ax = plt.subplots(1,1, constrained_layout=True)
+
+    for bw in bw_list:
+        #Boundary cut timeslices
+        xcut_1 = int(L/2) - bw
+        xcut_2 = L-bw
+        ov=bw
+
+        if False:
+            #Probing one quarter of the boundary
+            #Need to include a multiplier for using fewer intermediates
+            title1 = '1/4 boundary probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$, $n_p=$' + str(p_n)
+            mult = 4.0
+            projs = tr.zeros(batch_size, L2, 2*L*L2, dtype=tr.complex64)
+            ct=0
+
+            for x in tr.arange(0, (1)*L2*2, 8):
+                    projs[:,ct, x] = 1.0
+                    ct += 1
+                    projs[:, ct, x+1] = 1.0
+                    ct += 1
+
+
+            for x in tr.arange((xcut_1-1)*2*L2, (xcut_1)*L2*2, 8):
+                    projs[:,ct, x] = 1.0
+                    ct += 1
+                    projs[:, ct, x+1] = 1.0
+                    ct += 1
+        
+        elif True:
+            #Distillation technique
+            #Seek distillation eigenvectors for a given batch of configurations
+            title1 = 'Laplacian probe, n='+ str(batch_size) +', ' r'$m_\pi L = 5$, $n_p=$' + str(p_n)
+            mult = 1.0
+            n_eigen = 4
+            #Note - there will be 2 x N_eigen projectors due to spin dilution
+            projs = sch.boundary_Distillation_Eigenvectors(q, xcut_1, n_eigen, ov=ov, boost_n=1)
+
+
+        tensor_l, tensor_r = sch.factorized_Propagator(q, xcut_1, xcut_2, projs, ov=ov)
+
+        contraction  = tr.einsum('bijy, bjix -> byx', tensor_l, tensor_r)
+
+        factorized_corr, corr = sch.measure_Factorized_Pion_Correlator(q, contraction, xcut_1, xcut_2,
+                                                                            bw, p=p, ov=ov)
+
+
+
+        correlation = tr.zeros(len(factorized_corr))
+        correlation_err = tr.zeros(len(factorized_corr))
+
+        for x in tr.arange(bw, len(factorized_corr)):
+            factorized_corr[x] = mult * factorized_corr[x]
+            c_corr_avg = tr.real(tr.mean(corr[x], dim=0))
+            fc_corr_avg = tr.real(tr.mean(factorized_corr[x], dim=0))
+            fcr, correlation[x], correlation_err[x] = jackknife_Correlation(c_corr_avg, fc_corr_avg)
+
+        ax.errorbar(tr.arange(bw+1, int(L/2)+1), correlation[bw:], correlation_err[bw:],
+                    label='bw=' + str(bw), fmt='o-', linewidth=1.5, elinewidth=1.2, capsize=3, markersize=4)
+
+    ax.set_ylabel('Correlation')
+    ax.set_ylim(0,1)
+    ax.grid(which='major', linestyle='--', alpha=0.6)
+    ax.grid(which='minor', linestyle=':', alpha=0.6)
+    ax.set_xlabel(r'$|x_0 - y_0|$')
+    ax.set_title(title1 + ', boundary width comparison')
+    ax.legend(loc='lower right')
+
+    plt.savefig(
+    "figure.pdf",
+    bbox_inches="tight"
+    )
+
+    plt.show()
+
+
+def two_Level_Pion_Bias_Correction_n1_Scan():
+    batch_size= 100
     lam = np.sqrt(1.0/10.0)
     #Below is bare mass
     mass= 0.10*lam
@@ -1604,13 +1704,197 @@ def two_Level_Pion_Bias_Correction():
     sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
 
     #Boundary cut timeslices
-    bw=8
+    bw=4
+    xcut_1 = int(L/2) - bw
+    xcut_2 = L-bw
+    ov=bw
+
+    #Maximum possible length of cross-subdomain correlator
+    max_length = int((L)/2)
+
+    n1_list = [1, 10, 20, 40, 80, 100]
+
+    # n1_list = [int(n) for n in n1_list]
+    # if len(n1_list) == 0:
+    #     raise ValueError("n1_list must not be empty")
+    # if any(n <= 0 for n in n1_list):
+    #     raise ValueError("All n1 values must be positive")
+    # if any(n1_list[n] >= n1_list[n+1] for n in np.arange(len(n1_list)-1)):
+    #     raise ValueError("n1_list must be in strictly ascending order")
+
+    max_n1 = n1_list[-1]
+
+    u = sch.hotStart()
+
+    q = (u,)
+
+    im2 = i.minnorm2(sch.force,sch.evolveQ,20, 1.0)
+    sim = h.hmc(sch, im2, False)
+    lvl2_im2 = i.minnorm2(sch.dd_Force,sch.evolveQ,20, 1.0)
+    lvl2_sim = h.hmc(sch, lvl2_im2, False)
+
+    #Typical equilibration
+    q = sim.evolve_f(q, 200)
+
+    #Generate projectors
+    title1 = 'Laplacian probe,' + r'$m_\pi L = 5$, ' + r'p=' + str(p_n) + r'$\times \frac{2\pi}{L}$'
+    title2 = 'Bias corrected two-level pion signal to noise'
+    n_eigen = 4
+    #Note - there will be 2 x N_eigen projectors due to spin dilution
+    projs = sch.boundary_Distillation_Eigenvectors(q, xcut_1, n_eigen, ov=ov)
+
+    print("Measuring first level configs")
+
+    #Measure the level-0 config using true and factorized propagator
+    tensor_l, tensor_r = sch.factorized_Propagator(q, xcut_1, xcut_2, projs, ov=ov)
+
+    contraction  = tr.einsum('bijy, bjix -> byx', tensor_l, tensor_r)
+
+    factorized_corr0, corr0 = sch.measure_Factorized_Pion_Correlator(q, contraction, xcut_1, xcut_2,
+                                                                        bw, p=p, ov=ov)
+
+    #Take statistics on each configuration in the batch individually and as a whole
+    c_config_avg0 = tr.zeros(batch_size, len(corr0))
+
+    c_avg0 = tr.zeros(len(corr0))
+    c_err0 = tr.zeros(len(corr0))
+
+    fc_config_avg0 = tr.zeros(batch_size, len(factorized_corr0))
+
+    fc_avg0 = tr.zeros(len(corr0))
+    fc_err0 = tr.zeros(len(corr0))
+
+    bias = tr.zeros(len(corr0))
+    bias_err = tr.zeros(len(corr0))
+
+    stn0 = tr.zeros(len(corr0))
+
+    for x in np.arange(bw, max_length):
+        #average by config
+        c_config_avg0[:, x] = tr.real(tr.mean(corr0[x], dim=0))
+        fc_config_avg0[:, x] = tr.real(tr.mean(factorized_corr0[x], dim=0))
+
+        #And take global averages
+        c_avg0[x] = tr.mean(c_config_avg0[:,x])
+        c_err0[x] = tr.std(c_config_avg0[:,x]) / np.sqrt(batch_size -1)
+        fc_avg0[x] = tr.mean(fc_config_avg0[:,x])
+        fc_err0[x] = tr.std(fc_config_avg0[:,x]) / np.sqrt(batch_size-1)
+
+        bias[x] = c_avg0[x] - fc_avg0[x]
+        bias_err[x] = tr.std(c_config_avg0[:,x] - fc_config_avg0[:,x]) / np.sqrt(batch_size -1)
+
+        stn0[x] = tr.abs(c_avg0[x]) / c_err0[x]
+
+    print("Beginning 2-level integration")
+
+    #Running sums are enough here; no need to store the full ensemble for every n1
+    tensor_l_sum = tr.zeros_like(tensor_l)
+    tensor_r_sum = tr.zeros_like(tensor_r)
+
+    fc_avg1 = tr.zeros(len(n1_list), len(corr0))
+    fc_err1 = tr.zeros(len(n1_list), len(corr0))
+
+    corrected_fc_avg1 = tr.zeros(len(n1_list), len(corr0))
+    corrected_fc_err1 = tr.zeros(len(n1_list), len(corr0))
+
+    corrected_stn1 = tr.zeros(len(n1_list), len(corr0))
+
+    n_ct = 0
+    next_n1 = n1_list[n_ct]
+
+    for m in np.arange(max_n1):
+        #2nd level integration
+        q = lvl2_sim.second_Level_Evolve(q, 50, xcut_1, xcut_2, bw)
+
+        tensor_l_step, tensor_r_step = sch.factorized_Propagator(q, xcut_1, xcut_2, projs, ov)
+
+        tensor_l_sum = tensor_l_sum + tensor_l_step
+        tensor_r_sum = tensor_r_sum + tensor_r_step
+
+        if m + 1 == next_n1:
+            print("Contracting n1 =", next_n1)
+
+            two_lvl_tensor_l = tensor_l_sum / (m + 1)
+            two_lvl_tensor_r = tensor_r_sum / (m + 1)
+
+            contraction = tr.einsum('bijy, bjix -> byx', two_lvl_tensor_l, two_lvl_tensor_r)
+
+            #No need to remeasure the exact correlator here
+            factorized_corr = sch.measure_Factorized_Pion_Correlator(q, contraction, xcut_1, xcut_2,
+                                                                     bw, p=p, ov=ov, factorized_only=True)
+
+            for x in tr.arange(bw, len(factorized_corr)):
+                fc_corr_avg = tr.real(tr.mean(factorized_corr[x], dim=0))
+                fc_avg1[n_ct, x] = tr.real(tr.mean(fc_corr_avg))
+                fc_err1[n_ct, x] = tr.std(tr.real(fc_corr_avg))/np.sqrt(tr.numel(fc_corr_avg)-1)
+
+            corrected_fc_avg1[n_ct, :] = fc_avg1[n_ct, :] + bias
+            corrected_fc_err1[n_ct, :] = tr.sqrt(tr.square(fc_err1[n_ct, :]) + tr.square(bias_err))
+
+            for x in np.arange(bw, max_length):
+                corrected_stn1[n_ct, x] = tr.abs(corrected_fc_avg1[n_ct, x]) / corrected_fc_err1[n_ct, x]
+
+            n_ct += 1
+            if n_ct == len(n1_list):
+                break
+            next_n1 = n1_list[n_ct]
+        print(m)
+
+    #Save just the StN comparison data
+    data_write = tr.cat((tr.arange(1, int(L/2)+1, dtype=tr.float32).unsqueeze(0),
+                         stn0.unsqueeze(0),
+                         corrected_stn1), dim=0).numpy()
+    np.savetxt('2_level_n1_scan_stn.csv', data_write, delimiter=',')
+
+    fig, ax = plt.subplots(1,1, constrained_layout=True)
+    ax.set_yscale('log', nonpositive='clip')
+
+    ax.plot(tr.arange(bw+1, int(L/2)+1), stn0[bw:], label="1-level")
+
+    for n in np.arange(len(n1_list)):
+        ax.plot(tr.arange(bw+1, int(L/2)+1), corrected_stn1[n, bw:],
+                label='2-level, n1=' + str(n1_list[n]))
+
+    ax.legend(
+    loc="upper left",bbox_to_anchor=(1.02, 1),borderaxespad=0)
+
+    ax.set_title(title1)
+    ax.set_ylabel('StN')
+    ax.grid(which='major', linestyle='--', alpha=0.6)
+    ax.grid(which='minor', linestyle=':', alpha=0.6)
+    ax.set_xlabel(r'$|x_0 - y_0|$')
+
+    plt.savefig(
+    "figure.pdf",
+    bbox_inches="tight"
+    )
+
+    plt.show()
+
+    return c_avg0, c_err0, bias, bias_err, corrected_fc_avg1, corrected_fc_err1, corrected_stn1
+
+
+
+
+def two_Level_Pion_Bias_Correction():
+    batch_size= 100
+    lam = np.sqrt(1.0/10.0)
+    #Below is bare mass
+    mass= 0.10*lam
+    L = 48
+    L2 = 16
+    p_n = 0.0
+    p = p_n*2*np.pi/L2
+    sch = s.schwinger([L,L2],lam,mass,batch_size=batch_size)
+
+    #Boundary cut timeslices
+    bw=4
     xcut_1 = int(L/2) - bw
     xcut_2 = L-bw
     ov=bw
 
     #Number of level 1 configurations per level 0 config
-    n1=40
+    n1=200
 
     u = sch.hotStart()
 
@@ -2742,7 +3026,9 @@ def main():
     #Factorized measurement
     #test_Factorized_2pt_Measurement()
     #test_Pion_Factorized_Measurement()
-    two_Level_Pion_Bias_Correction()
+    #test_Pion_Factorized_Measurement_BW_Comparison()
+    #two_Level_Pion_Bias_Correction()
+    two_Level_Pion_Bias_Correction_n1_Scan()
     #two_Level_Quenched_Pion_Mass()
     
 

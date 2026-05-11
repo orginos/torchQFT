@@ -338,10 +338,9 @@ class schwinger():
                     n = 2*(self.V[1] * nt + nx)
 
                     s1 = d_inv[:, n:n+2, 2*sx:2*sx+2]
-                    s2 = tr.einsum('bxy, byz -> bxz', s1, s1.conj().transpose(1,2))
 
                     #B length vector
-                    c = c - np.exp(-1.0j*nx*p)*tr.sum(s2, dim=(1,2))
+                    c = c - np.exp(-1.0j*nx*p)*tr.sum(tr.abs(s1)**2, dim=(1,2))
                 #BxL tensor
                 # values of c are verified as real- cast them to real to avoid error message        
                 ev[:, nt] = ev[:, nt] +  tr.real(c)
@@ -403,10 +402,9 @@ class schwinger():
                 #Each spatial index on a timeslice
                 for nx in np.arange(self.V[1]):
                     s1 = fp[:, n:n+2, 0:2]
-                    s2 = tr.einsum('bxy, bzy -> bxz', s1, s1.conj())
 
                     #B length vector
-                    c = c - tr.sum(s2, dim=(1,2))
+                    c = c - tr.sum(tr.abs(s1)**2, dim=(1,2))
                     #Iterate to next spatial site
                     n += 2
 
@@ -591,9 +589,11 @@ class schwinger():
     #Input:Lattice configuration, timeslices of boundaries, boundary width, num. of subspace
     #eigenvectors sought after
     #Output: Most significant k distillation
-    def boundary_Distillation_Eigenvectors(self, q, xcut_1, k, ov = 1):
+    def boundary_Distillation_Eigenvectors(self, q, xcut_1, k, ov = 1, boost_n = 0):
 
-        #Second try
+        # Type-1 phased distillation:
+        # multiply each boundary eigenvector by exp(i zeta x), with
+        # zeta = boost_n * (2 pi / Lx), to improve overlap with boosted states.
         u = q[0]
 
         bc = tr.zeros([self.Bs, 2, self.V[0], self.V[1]], dtype=tr.complex64)
@@ -643,6 +643,16 @@ class schwinger():
 
         projs = tr.zeros((self.Bs, 2*k, 2*self.V[0]*self.V[1]), dtype=tr.complex64)
 
+        if boost_n != 0:
+            x_coords = tr.arange(self.V[1], dtype=u.real.dtype, device=u.device)
+            zeta = (2.0 * np.pi * boost_n) / self.V[1]
+            phase = tr.exp(tr.complex(tr.zeros_like(x_coords), zeta * x_coords))
+            # The boundary basis contains two spatial timeslices; apply the same
+            # spatial phase profile to both.
+            boundary_phase = tr.cat((phase, phase), dim=0).to(dtype=tr.complex64)
+        else:
+            boundary_phase = None
+
         dirac_space = tr.tensor([1/np.sqrt(2.0), 1/np.sqrt(2.0)])
         d_space_1 = tr.tensor([1.0, 0.0])
         d_space_2 = tr.tensor([0.0,1.0])
@@ -651,13 +661,17 @@ class schwinger():
 
         for b in np.arange(self.Bs):
             for x in np.arange(k):
+                phased_vec = V[b,:,x]
+                if boundary_phase is not None:
+                    phased_vec = phased_vec * boundary_phase
+
                 # vec = (V[b,:,x].unsqueeze(-1) * dirac_space).reshape(-1)
                 #Spin dilution of the laplacian eigenvectors
-                vec = (V[b,:,x].unsqueeze(-1) * d_space_1).reshape(-1)
+                vec = (phased_vec.unsqueeze(-1) * d_space_1).reshape(-1)
                 projs[b,2*x, 0:self.V[1]*2] = vec[0:self.V[1]*2]
                 projs[b,2*x, (xcut_1-1)*self.V[1]*2:xcut_1*self.V[1]*2] = vec[self.V[1]*2:]
 
-                vec = (V[b,:,x].unsqueeze(-1) * d_space_2).reshape(-1)
+                vec = (phased_vec.unsqueeze(-1) * d_space_2).reshape(-1)
                 projs[b,2*x + 1, 0:self.V[1]*2] = vec[0:self.V[1]*2]
                 projs[b,2*x + 1, (xcut_1-1)*self.V[1]*2:xcut_1*self.V[1]*2] = vec[self.V[1]*2:]
 
@@ -1012,7 +1026,7 @@ class schwinger():
                 #Take an unfactorized measurement as well
                 sink_x = sink_x - sink_adj
                 prop = d_inv[:, sink_x:sink_x+2, source_x:source_x+2]
-                corr = -1.0*tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2))*np.exp(-1.0j*p*mid_x*0.5)
+                corr = -1.0*tr.sum(tr.abs(prop)**2, dim=(1,2))*np.exp(-1.0j*p*mid_x*0.5)
 
                 #Save correlator measurements to matrix
                 #First record distance between timeslices
@@ -1077,7 +1091,7 @@ class schwinger():
                     if factorized_only == False:
                         sink_ind = sink_ind - sink_adj
                         prop = d_inv[:, sink_ind:sink_ind+2, source_ind:source_ind+2]
-                        corr = tr.sum(tr.einsum('bij, bkj-> bik', prop, prop.conj()), dim=(1,2))
+                        corr = tr.sum(tr.abs(prop)**2, dim=(1,2))
                         c = c - np.exp(-1.0j*p*sink_x)*corr
 
                 #Save correlator measurements to matrix
@@ -1153,10 +1167,9 @@ class schwinger():
                     #Each spatial index on a timeslice
                     for nx in np.arange(self.V[1]):
                         s1 = s_inv[:, n:n+2, 2*sx:2*sx+2]
-                        s2 = tr.einsum('bxy, bzy -> bxz', s1, s1.conj())
 
                         #B length vector
-                        c = c - np.exp(-1.0j*nx*p)*tr.sum(s2, dim=(1,2))
+                        c = c - np.exp(-1.0j*nx*p)*tr.sum(tr.abs(s1)**2, dim=(1,2))
                         #Iterate to next spatial site
                         n += 2
 
@@ -1247,10 +1260,9 @@ class schwinger():
                     #Each spatial index on a timeslice
                     for nx in np.arange(self.V[1]):
                         s1 = fp[:, n:n+2, 0:2]
-                        s2 = tr.einsum('bxy, bzy -> bxz', s1, s1.conj())
 
                         #B length vector
-                        c = c - tr.sum(s2, dim=(1,2))
+                        c = c - tr.sum(tr.abs(s1)**2, dim=(1,2))
                         #Iterate to next spatial site
                         n += 2
 
@@ -1634,17 +1646,44 @@ class schwinger():
 
  # 3 point measurement development #################################################
 
-    def pion_Three_Point(self, q, pi=0.0, pf=0.0):
-        #"Three" momentum - scalar in 1+1D
-        q = pf - pi
+    def pion_Three_Point(self, q, pi=0.0, pf=0.0, t_src = 0):
+        #"Three" momentum transfer - scalar in 1+1D
+        q_k = pf - pi
+
+        #Write this first using the dense inverse
+        d_inv = tr.inv(self.diracOperator(q[0]).to_dense())
+
+        #Vectorize spatial points
+        spatial_vec = tr.arange(self.V[1])
+
+
+
+        #Compute 'sequential prop' first
+        seq_prop = tr.zeros(self.Bs, 2*self.Vol, 2, dtype=d_inv.dtype, device=d_inv.device)
 
         #May want to reduce the number of time sources
-        for t_src in np.arange(self.V[0]):
+        #Take as input possibly?
+        #Start as single point source
+        src_idx = 2*t_src*self.V[1]
 
-            for t_snk in np.arange(t_src+1, self.V[0]):
+        for t_snk in np.arange(t_src+2, self.V[0]):
 
-                for t_ins in np.arange(t_src + 1, t_snk):
-                    4
+            for t_ins in np.arange(t_src+1, t_snk):
+                for x in np.arange(self.V[1]):
+                    phase = np.exp(-1.0j*pf*x)
+
+                    n_snk = 2*(self.V[1]*t_snk + x)
+
+                    s1 = d_inv[:, n_snk:n_snk+2, src_idx:src_idx+2]
+                    # s1_eye = tr.eye(tr.numel(s1[0,:,0]))
+                    # g5_s1 = tr.einsum('xy, byz->bxz', tr.kron(s1_eye, g5), s1)
+                    g5_s1 = g5 @ s1
+
+                    n = 2*(t_ins*self.V[1] + spatial_vec)
+                    n_ins = n[:, None] + tr.arange(2)
+                    s2 = d_inv[:, n_ins, src_idx:src_idx+2]
+
+
 
 
 
